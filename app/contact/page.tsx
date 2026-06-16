@@ -1,9 +1,10 @@
 import type { Metadata } from "next"
-import { CheckCircle2, MessageCircle, Mail, MapPin, Clock, Users } from "lucide-react"
+import Link from "next/link"
+import { ArrowRight, CheckCircle2, Mail, Clock } from "lucide-react"
 
 import { PublicShell } from "@/components/layout/public-shell"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { ContactForm } from "@/components/marketing/contact-form"
 import { BreadcrumbListSchema } from "@/components/seo/structured-data"
 
 export const metadata: Metadata = {
@@ -44,21 +45,6 @@ export const metadata: Metadata = {
   },
 }
 
-const contactHighlights = [
-  {
-    title: "Human onboarding",
-    desc: "We migrate clients, services and inventory data for free within 48 hours.",
-  },
-  {
-    title: "WhatsApp-first support",
-    desc: "Concierge team is available 10am–10pm IST for Professional and above.",
-  },
-  {
-    title: "All-India coverage",
-    desc: "Trainers and success managers across Mumbai, Bengaluru, Delhi, Pune and beyond.",
-  },
-]
-
 export default function ContactPage() {
   return (
     <PublicShell>
@@ -73,68 +59,21 @@ export default function ContactPage() {
           <div className="absolute top-0 right-0 w-96 h-96 bg-white rounded-full blur-3xl" />
           <div className="absolute bottom-0 left-0 w-80 h-80 bg-white rounded-full blur-3xl" />
         </div>
-        <div className="container relative mx-auto px-4 sm:px-6 lg:px-8 text-center max-w-4xl space-y-6">
+        <div className="container relative mx-auto px-4 sm:px-6 lg:px-8 text-center max-w-4xl">
           <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold leading-tight">
-            Let&apos;s Talk About Your Salon
+            Contact us
           </h1>
-          <p className="text-xl sm:text-2xl text-purple-100 leading-relaxed">
-            Share your priorities and we'll curate a <span className="font-semibold text-white">live demo</span> with POS, appointments, staff management and analytics tailored to your business.
-          </p>
-          <div className="flex flex-wrap justify-center gap-4 pt-4 text-sm text-purple-100">
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-5 w-5 text-emerald-300" />
-              <span>Free 30-minute demo</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-5 w-5 text-emerald-300" />
-              <span>No commitment required</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-5 w-5 text-emerald-300" />
-              <span>See it live in action</span>
-            </div>
-          </div>
         </div>
       </section>
 
       <section className="py-20 bg-white" id="get-in-touch">
         <div className="container mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center mb-12 space-y-4">
-            <h2 className="text-3xl sm:text-4xl font-bold text-slate-900 scroll-mt-[7.5rem]">Get in Touch</h2>
-            <p className="text-lg text-slate-600 max-w-2xl mx-auto">Fill out the form below and we'll get back to you within 1 business day with a personalized demo.</p>
-          </div>
-          
-          <div className="grid gap-8 lg:grid-cols-3">
-            <Card className="lg:col-span-2 border-2 border-slate-100 shadow-xl">
-              <CardHeader className="space-y-2">
-                <CardTitle className="text-2xl font-bold">Tell Us About Your Salon</CardTitle>
-                <CardDescription className="text-base">We'll reply within 1 business day with a calendar invite.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ContactForm />
-              </CardContent>
-            </Card>
-
-            <div className="space-y-6">
-              {contactHighlights.map((item, idx) => (
-                <Card key={item.title} className="border-2 border-slate-100 shadow-lg hover:shadow-xl transition-all hover:border-[#7C3AED]/30">
-                  <CardHeader>
-                    <div className="flex items-center gap-3 mb-2">
-                      <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-purple-50 to-indigo-50 text-[#7C3AED] flex items-center justify-center">
-                        {idx === 0 && <Users className="h-5 w-5" />}
-                        {idx === 1 && <MessageCircle className="h-5 w-5" />}
-                        {idx === 2 && <MapPin className="h-5 w-5" />}
-                      </div>
-                      <CardTitle className="text-lg font-bold">{item.title}</CardTitle>
-                    </div>
-                    <CardDescription className="text-sm">{item.desc}</CardDescription>
-                  </CardHeader>
-                </Card>
-              ))}
-              
+          <div className="mx-auto max-w-5xl">
+            <div className="grid gap-6 lg:grid-cols-2">
               <Card className="border-2 border-slate-100 shadow-lg">
                 <CardHeader>
                   <CardTitle className="text-lg font-bold">Other Ways to Reach Us</CardTitle>
+                  <CardDescription>Pick the channel that suits you best.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="flex items-start gap-3">
@@ -151,6 +90,38 @@ export default function ContactPage() {
                       <p className="text-sm text-slate-600">Within 1 business day</p>
                     </div>
                   </div>
+                </CardContent>
+              </Card>
+
+              <Card className="relative overflow-hidden border-2 border-[#7C3AED]/20 bg-gradient-to-br from-purple-50 via-white to-indigo-50 shadow-lg">
+                <div className="pointer-events-none absolute -right-12 -top-12 h-48 w-48 rounded-full bg-purple-200/40 blur-3xl" aria-hidden />
+                <CardHeader className="relative">
+                  <CardTitle className="text-lg font-bold text-slate-900">Prefer a guided walkthrough?</CardTitle>
+                  <CardDescription>
+                    Pick a slot that suits you — we&apos;ll tailor the demo to your services, branches and team size.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="relative space-y-4">
+                  <ul className="space-y-2 text-sm text-slate-600">
+                    <li className="flex items-center gap-2">
+                      <CheckCircle2 className="h-4 w-4 text-[#7C3AED]" />
+                      Live 30-minute walkthrough
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <CheckCircle2 className="h-4 w-4 text-[#7C3AED]" />
+                      Real questions, real answers
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <CheckCircle2 className="h-4 w-4 text-[#7C3AED]" />
+                      No card, no commitment
+                    </li>
+                  </ul>
+                  <Button asChild className="w-full bg-[#7C3AED] hover:bg-[#6D28D9]">
+                    <Link href="/demo">
+                      Book Free Demo
+                      <ArrowRight className="ml-2 h-4 w-4" />
+                    </Link>
+                  </Button>
                 </CardContent>
               </Card>
             </div>

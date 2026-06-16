@@ -160,7 +160,7 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
     <aside className={cn(
       "hidden border-r bg-gradient-to-b from-slate-50 to-gray-100 md:block shadow-xl transition-all duration-300 fixed left-0 z-50 shrink-0",
       isImpersonation ? "top-10 h-[calc(100vh-2.5rem)]" : "top-0 h-screen",
-      isCollapsed ? "w-24" : "w-56"
+      isCollapsed ? "w-24" : "w-72"
     )}>
       <div className="flex h-full flex-col gap-4 p-5">
         <Button
@@ -274,7 +274,7 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
                             </div>
                             <span
                               className={cn(
-                                "font-medium flex-1",
+                                "font-medium flex-1 min-w-0 truncate",
                                 isActive ? "text-white" : "text-gray-700"
                               )}
                             >
@@ -382,7 +382,7 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
                       >
                         <GroupIcon className="h-5 w-5" />
                       </div>
-                      <span className="font-medium flex-1 text-left">Marketing</span>
+                      <span className="font-medium flex-1 min-w-0 truncate text-left">Marketing</span>
                       <ChevronDown
                         className={cn(
                           "h-4 w-4 shrink-0 transition-transform opacity-70",

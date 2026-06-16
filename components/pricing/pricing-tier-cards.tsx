@@ -89,7 +89,7 @@ function TierCard({ plan, billingCycle }: { plan: PricingPlan; billingCycle: Bil
         <p className="mt-4 min-h-[4.5rem] text-sm leading-relaxed text-slate-600">{plan.description}</p>
 
         <Link
-          href="/contact"
+          href="/demo"
           className={cn(
             "mt-6 inline-flex h-11 w-full items-center justify-center gap-1.5 rounded-lg text-sm font-semibold transition-colors",
             plan.ctaStyle === "primary-blue"

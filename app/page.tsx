@@ -201,7 +201,7 @@ export default function MarketingHome() {
               {/* CTAs */}
               <div className="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start">
                 <Button size="lg" asChild className="bg-white text-[#7C3AED] hover:bg-gray-100 px-8 py-6 h-auto text-lg font-semibold shadow-2xl hover:shadow-3xl transform hover:scale-105 transition-all">
-                  <Link href="/contact" aria-label="Book a free EaseMySalon salon software demo">
+                  <Link href="/demo" aria-label="Book a free EaseMySalon salon software demo">
                     Book a Free Demo
                     <ArrowRight className="ml-2 h-5 w-5" aria-hidden />
                   </Link>
@@ -356,7 +356,7 @@ export default function MarketingHome() {
             {/* CTA in Why Choose section */}
             <div className="pt-6">
               <Button size="lg" asChild className="bg-white text-[#7C3AED] hover:bg-gray-100 px-8">
-                <Link href="/contact" aria-label="Book a free EaseMySalon demo">
+                <Link href="/demo" aria-label="Book a free EaseMySalon demo">
                   Book a Free Demo
                   <ArrowRight className="ml-2 h-4 w-4" aria-hidden />
                 </Link>
@@ -440,7 +440,7 @@ export default function MarketingHome() {
           </p>
           <div className="mt-8 flex flex-col items-stretch justify-center gap-3 sm:flex-row sm:items-center sm:justify-center">
             <Button size="lg" asChild className="bg-white text-[#7C3AED] hover:bg-gray-100">
-              <Link href="/contact" aria-label="Book a free salon management software demo">
+              <Link href="/demo" aria-label="Book a free salon management software demo">
                 Book a Free Demo
                 <ArrowRight className="ml-2 h-4 w-4" aria-hidden />
               </Link>

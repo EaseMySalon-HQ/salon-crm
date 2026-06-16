@@ -16,7 +16,7 @@ const footerLinks = [
   {
     title: "Company",
     links: [
-      { label: "About us", href: "/about" },
+      { label: "Why EaseMySalon", href: "/about" },
       { label: "Partners", href: "/solutions" },
       { label: "Careers (coming soon)", href: "#" },
       { label: "Contact", href: "/contact" },
@@ -46,10 +46,6 @@ export function PublicFooter() {
               <div className="flex items-center gap-2 text-sm text-slate-300">
                 <div className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
                 <span>98% Customer Satisfaction</span>
-              </div>
-              <div className="flex items-center gap-2 text-sm text-slate-300">
-                <div className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-                <span>24/7 Support Available</span>
               </div>
               <div className="flex items-center gap-2 text-sm text-slate-300">
                 <div className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
