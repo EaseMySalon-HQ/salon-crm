@@ -26,6 +26,7 @@ interface StaffMember {
     preferences?: {
       dailySummary?: boolean
       weeklySummary?: boolean
+      staffIncentiveSummary?: boolean
       appointmentAlerts?: boolean
       receiptAlerts?: boolean
       exportAlerts?: boolean
@@ -68,6 +69,11 @@ export function NotificationSettings() {
       enabled: false,
       day: "sunday",
       time: "20:00",
+      recipientStaffIds: [] as string[]
+    },
+    staffIncentiveSummary: {
+      enabled: false,
+      time: "08:00",
       recipientStaffIds: [] as string[]
     },
     appointmentNotifications: {
@@ -140,11 +146,21 @@ export function NotificationSettings() {
           )
           .map((staff) => staff._id)
 
+        const staffIncentiveRecipients = staffMembers
+          .filter(
+            (staff) =>
+              staff.emailNotifications?.enabled === true &&
+              staff.emailNotifications?.preferences?.staffIncentiveSummary === true &&
+              !(staff.role === "admin" && staff.isOwner)
+          )
+          .map((staff) => staff._id)
+
         const generalRecipients = staffMembers.filter(isRealStaffForRecipients).map((staff) => staff._id)
 
         newSettings.recipientStaffIds = generalRecipients
         newSettings.dailySummary.recipientStaffIds = dailySummaryRecipients
         newSettings.weeklySummary.recipientStaffIds = weeklySummaryRecipients
+        newSettings.staffIncentiveSummary.recipientStaffIds = staffIncentiveRecipients
 
         return newSettings
       })
@@ -169,6 +185,11 @@ export function NotificationSettings() {
             day: response.data.weeklySummary?.day || "sunday",
             time: response.data.weeklySummary?.time || "20:00",
             recipientStaffIds: response.data.weeklySummary?.recipientStaffIds || []
+          },
+          staffIncentiveSummary: {
+            enabled: response.data.staffIncentiveSummary?.enabled || false,
+            time: response.data.staffIncentiveSummary?.time || "08:00",
+            recipientStaffIds: response.data.staffIncentiveSummary?.recipientStaffIds || []
           },
           appointmentNotifications: {
             enabled: response.data.appointmentNotifications?.enabled || false,

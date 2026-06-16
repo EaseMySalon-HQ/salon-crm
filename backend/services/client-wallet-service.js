@@ -1211,6 +1211,106 @@ async function reverseWalletRedemptionsForDeletedSale({
 }
 
 /**
+ * Credit a product-return refund to the customer's prepaid wallet.
+ * Opens a balance wallet when the client has none.
+ */
+async function creditProductReturnRefundToWallet({
+  branchId,
+  businessModels,
+  staffUser,
+  clientId,
+  amount,
+  saleId,
+  billNo,
+}) {
+  const { ClientWallet, ClientWalletTransaction } = businessModels;
+  const amt = Math.round(Number(amount) * 100) / 100;
+  if (!Number.isFinite(amt) || amt <= 0) {
+    const err = new Error('Refund amount must be positive');
+    err.status = 400;
+    throw err;
+  }
+  if (!mongoose.Types.ObjectId.isValid(String(clientId))) {
+    const err = new Error('Invalid client id');
+    err.status = 400;
+    throw err;
+  }
+
+  const clientOid = new mongoose.Types.ObjectId(String(clientId));
+  const bill = billNo != null && String(billNo).trim() ? String(billNo).trim() : '';
+  const description = bill
+    ? `Product return refund · Bill ${bill}`
+    : 'Product return refund';
+
+  const saleOid =
+    saleId && mongoose.Types.ObjectId.isValid(String(saleId))
+      ? new mongoose.Types.ObjectId(String(saleId))
+      : null;
+
+  let wallet = await ClientWallet.findOne({
+    branchId,
+    clientId: clientOid,
+    status: { $nin: ['cancelled'] },
+  }).sort({ remainingBalance: -1, purchasedAt: -1 });
+
+  if (!wallet) {
+    const opened = await openBalanceWalletForClient({
+      branchId,
+      businessModels,
+      staffUser,
+      clientId,
+      amount: amt,
+      reason: description,
+    });
+    return { wallet: opened.wallet, transaction: null };
+  }
+
+  const dupRefund = await ClientWalletTransaction.exists({
+    branchId,
+    saleId: saleOid,
+    walletId: wallet._id,
+    type: 'refund_credit',
+    amount: amt,
+    description,
+  });
+  if (dupRefund) {
+    const err = new Error('This refund was already credited to the wallet');
+    err.status = 409;
+    throw err;
+  }
+
+  const newBal = Math.round((wallet.remainingBalance + amt) * 100) / 100;
+  wallet.remainingBalance = newBal;
+  if (newBal > 0.009 && wallet.status === 'exhausted') {
+    wallet.status = 'active';
+  }
+  await wallet.save();
+
+  let performedBy = staffUser?._id || staffUser?.id || null;
+  if (performedBy != null && !mongoose.Types.ObjectId.isValid(String(performedBy))) {
+    performedBy = null;
+  }
+  const performedByOid =
+    performedBy != null ? new mongoose.Types.ObjectId(String(performedBy)) : null;
+
+  const refundTx = await ClientWalletTransaction.create({
+    branchId,
+    walletId: wallet._id,
+    clientId: wallet.clientId,
+    type: 'refund_credit',
+    amount: amt,
+    balanceAfter: newBal,
+    description,
+    performedBy: performedByOid,
+    saleId: saleOid,
+    serviceNames: [],
+  });
+  queueWalletTxnWhatsApp(branchId, businessModels, wallet, refundTx);
+
+  return { wallet, transaction: refundTx };
+}
+
+/**
  * Legacy / mistaken indexes used `client_id` while the schema field is `clientId`.
  * MongoDB then indexed every document as client_id: null → unique (branchId, client_id) broke second wallet.
  * Drops any index whose key includes `client_id`, then re-syncs schema indexes.
@@ -1348,6 +1448,7 @@ module.exports = {
   manualAdjust,
   creditChangeReturnFromPos,
   creditChangeOpenWalletFromPos,
+  creditProductReturnRefundToWallet,
   openBalanceWalletForClient,
   reverseWalletRedemptionsForDeletedSale,
   getLiabilitySummary,

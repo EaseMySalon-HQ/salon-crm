@@ -781,9 +781,126 @@ This is an automated email from EaseMySalon CRM
   return { html, text };
 }
 
+function staffIncentiveSummary({
+  businessName,
+  periodLabel,
+  periodStart,
+  periodEnd,
+  logoUrl,
+  rows = [],
+  totals = {},
+}) {
+  const fmt = (n) =>
+    n != null && Number.isFinite(Number(n))
+      ? Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      : '0.00';
+  const fmtInt = (n) => (n != null && Number.isFinite(Number(n)) ? String(Math.round(Number(n))) : '0');
+
+  const tableRows = (rows || [])
+    .map(
+      (row) => `
+          <tr>
+            <td style="padding: 10px 8px; border-bottom: 1px solid #e2e8f0;">${row.staffName || '—'}</td>
+            <td style="padding: 10px 8px; border-bottom: 1px solid #e2e8f0; text-align: right;">₹${fmt(row.totalRevenue)}</td>
+            <td style="padding: 10px 8px; border-bottom: 1px solid #e2e8f0; text-align: right;">₹${fmt(row.serviceCommission)}</td>
+            <td style="padding: 10px 8px; border-bottom: 1px solid #e2e8f0; text-align: right;">₹${fmt(row.productCommission)}</td>
+            <td style="padding: 10px 8px; border-bottom: 1px solid #e2e8f0; text-align: right; font-weight: 700;">₹${fmt(row.totalCommission)}</td>
+          </tr>`
+    )
+    .join('');
+
+  const emptyRow =
+    rows && rows.length > 0
+      ? ''
+      : `<tr><td colspan="5" style="padding: 16px; text-align: center; color: #64748b;">No incentive data for this period.</td></tr>`;
+
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; }
+        .container { max-width: 720px; margin: 0 auto; padding: 24px; }
+        .logo { max-height: 48px; max-width: 180px; display: block; margin-bottom: 16px; }
+        .branch-name { font-size: 18px; font-weight: 600; color: #1e293b; margin-bottom: 8px; }
+        .report-title { font-size: 20px; font-weight: 700; color: #334155; margin-bottom: 8px; }
+        .period { color: #64748b; margin-bottom: 20px; }
+        .summary { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+        .pill { background: #f1f5f9; border-radius: 8px; padding: 12px 16px; min-width: 140px; }
+        .pill-label { font-size: 12px; color: #64748b; }
+        .pill-value { font-size: 18px; font-weight: 700; color: #0f172a; }
+        table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; }
+        th { background: #f8fafc; text-align: left; padding: 10px 8px; font-size: 12px; color: #475569; border-bottom: 2px solid #e2e8f0; }
+        th.num { text-align: right; }
+        .footer { text-align: center; margin-top: 24px; color: #94a3b8; font-size: 12px; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        ${logoUrl ? `<img src="${logoUrl}" alt="EaseMySalon" class="logo" />` : ''}
+        <div class="branch-name">${businessName || 'Branch'}</div>
+        <div class="report-title">Staff Incentive Summary</div>
+        <div class="period">${periodLabel || ''}${periodStart && periodEnd ? ` (${periodStart} to ${periodEnd})` : ''}</div>
+        <div class="summary">
+          <div class="pill"><div class="pill-label">Staff with incentive</div><div class="pill-value">${fmtInt(totals.staffCount)}</div></div>
+          <div class="pill"><div class="pill-label">Total attributed revenue</div><div class="pill-value">₹${fmt(totals.totalRevenue)}</div></div>
+          <div class="pill"><div class="pill-label">Total incentive</div><div class="pill-value">₹${fmt(totals.totalCommission)}</div></div>
+          <div class="pill"><div class="pill-label">Bills in period</div><div class="pill-value">${fmtInt(totals.billCount)}</div></div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Staff</th>
+              <th class="num">Revenue</th>
+              <th class="num">Service incentive</th>
+              <th class="num">Product incentive</th>
+              <th class="num">Total incentive</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tableRows}${emptyRow}
+          </tbody>
+        </table>
+        <div class="footer">
+          <p>This is an automated email from EaseMySalon</p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  const textLines = [
+    `${businessName || 'Branch'}`,
+    `Staff Incentive Summary — ${periodLabel || ''}`,
+    periodStart && periodEnd ? `Period: ${periodStart} to ${periodEnd}` : '',
+    '',
+    `Staff with incentive: ${fmtInt(totals.staffCount)}`,
+    `Total attributed revenue: ₹${fmt(totals.totalRevenue)}`,
+    `Total incentive: ₹${fmt(totals.totalCommission)}`,
+    `Bills in period: ${fmtInt(totals.billCount)}`,
+    '',
+  ];
+
+  for (const row of rows || []) {
+    textLines.push(
+      `${row.staffName || 'Staff'} — Revenue ₹${fmt(row.totalRevenue)}, Service ₹${fmt(row.serviceCommission)}, Product ₹${fmt(row.productCommission)}, Total ₹${fmt(row.totalCommission)}`
+    );
+  }
+
+  if (!rows || rows.length === 0) {
+    textLines.push('No incentive data for this period.');
+  }
+
+  textLines.push('', 'This is an automated email from EaseMySalon');
+
+  return { html, text: textLines.filter(Boolean).join('\n') };
+}
+
 module.exports = {
   dailySummary,
   weeklySummary,
+  staffIncentiveSummary,
   receipt,
   appointmentConfirmation,
   appointmentReminder,

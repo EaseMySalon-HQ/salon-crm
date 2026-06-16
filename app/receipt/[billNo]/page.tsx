@@ -62,6 +62,18 @@ interface ReceiptData {
   shareToken?: string
   /** Excess cash credited to prepaid wallet (POS); amount in ₹ */
   billChangeCreditedToWallet?: number
+  walletRefundCredited?: number
+  refundHistory?: Array<{
+    amount?: number
+    mode?: string
+    date?: string
+    editReason?: string
+  }>
+  paymentStatus?: {
+    paidAmount?: number
+    totalAmount?: number
+    remainingAmount?: number
+  }
   discount?: number
   discountType?: string
   loyaltyDiscountAmount?: number
@@ -191,6 +203,15 @@ export default function ReceiptPage() {
                 frontendData.billChangeCreditedToWallet > 0.005
                   ? frontendData.billChangeCreditedToWallet
                   : undefined,
+              walletRefundCredited:
+                typeof frontendData.walletRefundCredited === "number" &&
+                frontendData.walletRefundCredited > 0.005
+                  ? frontendData.walletRefundCredited
+                  : undefined,
+              refundHistory: Array.isArray(frontendData.refundHistory)
+                ? frontendData.refundHistory
+                : undefined,
+              paymentStatus: frontendData.paymentStatus,
             }
             
             console.log('🔍 Frontend receipt data:', receiptData)
@@ -285,6 +306,13 @@ export default function ReceiptPage() {
                 Number(saleData.billChangeCreditedToWallet) > 0.005
                   ? Number(saleData.billChangeCreditedToWallet)
                   : undefined,
+              walletRefundCredited:
+                saleData.walletRefundCredited != null &&
+                Number(saleData.walletRefundCredited) > 0.005
+                  ? Number(saleData.walletRefundCredited)
+                  : undefined,
+              refundHistory: Array.isArray(saleData.refundHistory) ? saleData.refundHistory : undefined,
+              paymentStatus: saleData.paymentStatus,
               discount: Math.max(0, Number(saleData.discount) || 0),
               discountType: saleData.discountType,
               loyaltyDiscountAmount: Math.max(0, Number(saleData.loyaltyDiscountAmount) || 0),

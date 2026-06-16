@@ -14053,6 +14053,46 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requirePermi
           : Number(existingSale.loyaltyDiscountAmount) || 0,
     };
 
+    let billEditRefundResult = null;
+    if (updateData.refundProcessing) {
+      const billRefundSvc = require('./services/bill-refund-service');
+      const tipAmount = Number(existingSale.tip) || 0;
+      const newTotalAmount =
+        Number(updateData.grossTotal ?? existingSale.grossTotal ?? 0) + tipAmount;
+      const overpaidAmount = Math.max(
+        0,
+        Math.round((oldPaidAmount - newTotalAmount) * 100) / 100,
+      );
+      if (
+        !Number.isFinite(Number(updateData.refundProcessing.amount)) ||
+        Number(updateData.refundProcessing.amount) <= 0
+      ) {
+        updateData.refundProcessing.amount = overpaidAmount;
+      }
+      try {
+        billEditRefundResult = await billRefundSvc.processBillEditRefund({
+          sale: existingSale,
+          refundProcessing: updateData.refundProcessing,
+          newTotalAmount,
+          previousPaidAmount: oldPaidAmount,
+          branchId: req.user.branchId,
+          businessModels: req.businessModels,
+          staffUser: req.user,
+        });
+      } catch (refundErr) {
+        logger.warn('[bill-refund] Failed:', refundErr?.message || refundErr);
+        if (useTransactions && session) {
+          try {
+            await session.abortTransaction();
+          } catch {
+            /* ignore */
+          }
+        }
+        if (session) session.endSession();
+        return res.status(refundErr.status || 400).json({ success: false, error: refundErr.message });
+      }
+    }
+
     const {
       mergePaymentConfiguration: mergePayCfgPut,
       eligibleRedemptionSubtotal: eligibleRedemptionSubtotalPut,
@@ -14060,7 +14100,7 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requirePermi
     } = require('./lib/payment-redemption-eligibility');
     const { BusinessSettings: BizSettingsRedeemPut } = req.businessModels;
     let eligibleRewardPut = null;
-    if (BizSettingsRedeemPut) {
+    if (BizSettingsRedeemPut && !updateData.refundProcessing) {
       const payDocPut = await BizSettingsRedeemPut.findOne().select('paymentConfiguration').lean();
       const payCfgPut = mergePayCfgPut(payDocPut?.paymentConfiguration);
       const itemsForRedeemPut = Array.isArray(existingSale.items) ? existingSale.items : [];
@@ -14090,7 +14130,9 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requirePermi
     }
 
     try {
-      rewardPointsSvcPut.validateSaleLoyaltyBeforeSave(mergedLoyaltyBody, rpSettingsPut, eligibleRewardPut);
+      if (!updateData.refundProcessing) {
+        rewardPointsSvcPut.validateSaleLoyaltyBeforeSave(mergedLoyaltyBody, rpSettingsPut, eligibleRewardPut);
+      }
     } catch (loyErr) {
       return res.status(loyErr.status || 400).json({ success: false, error: loyErr.message });
     }
@@ -14187,9 +14229,9 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requirePermi
               },
               inventoryChanges: inventoryChangesForHistory,
               paymentAdjustments: {
-                refundAmount: 0,
+                refundAmount: billEditRefundResult?.refundAmount ?? 0,
                 additionalAmount: 0,
-                refundMethods: [],
+                refundMethods: billEditRefundResult?.refundMethods ?? [],
               },
             },
           ],

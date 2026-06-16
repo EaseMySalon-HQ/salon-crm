@@ -3,6 +3,7 @@
 import { useEffect } from "react"
 import type { Receipt } from "@/lib/data"
 import { getReceiptSettlementSummary } from "@/lib/receipt-settlement-summary"
+import { formatReceiptRefundModeLabel } from "@/lib/receipt-refunds"
 import { formatPaymentRecordedDateLabelFromIso } from "@/lib/sale-payment-lines"
 import { receiptPaymentTypeDisplayName } from "@/lib/sale-payment-lines"
 import { getReceiptPaymentStamp } from "@/lib/receipt-payment-stamp"
@@ -257,7 +258,7 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
           )}
           <div className="flex justify-between text-sm mt-3 font-semibold pt-2 border-t border-black/20">
             <span>Total Paid (Bill):</span>
-            <span className="tabular-nums">{formatAmount(settlement.paidTowardBill)}</span>
+            <span className="tabular-nums">{formatAmount(settlement.effectivePaidTowardBill)}</span>
           </div>
         </div>
 
@@ -289,6 +290,24 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
             )
           })}
         </div>
+
+        {settlement.showRefundsSection && (
+          <div className="mb-4">
+            <div className="font-semibold mb-2">Refund(s):</div>
+            {settlement.refundLines.map((refund, index) => {
+              const mode = formatReceiptRefundModeLabel(refund.mode)
+              const dateSuffix = refund.dateLabel ? ` (${refund.dateLabel})` : ""
+              return (
+                <div key={index} className="flex justify-between text-amber-800 font-medium">
+                  <span>
+                    Refund ({mode}){dateSuffix}:
+                  </span>
+                  <span className="tabular-nums">{formatAmount(refund.amount)}</span>
+                </div>
+              )
+            })}
+          </div>
+        )}
 
         {/* Footer */}
         <div className="text-center border-t border-dashed border-black pt-3 text-xs">

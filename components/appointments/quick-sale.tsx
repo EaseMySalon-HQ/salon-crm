@@ -7147,7 +7147,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                                   onClick={() => {
                                     const bn = quickSaleBillNoForBillingRoute(bill)
                                     if (bn) {
-                                      router.push(`/billing/${encodeURIComponent(bn)}?mode=edit`)
+                                      router.push(
+                                        `/billing/${encodeURIComponent(bn)}?mode=edit&returnTo=${encodeURIComponent("/quick-sale")}`
+                                      )
                                     }
                                   }}
                                   title="Edit bill"

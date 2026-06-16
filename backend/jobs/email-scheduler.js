@@ -4,6 +4,7 @@ const databaseManager = require('../config/database-manager');
 const modelFactory = require('../models/model-factory');
 const { logger } = require('../utils/logger');
 const { billChangeCreditedToWalletCashAddition } = require('../utils/bill-change-wallet-cash');
+const { sendStaffIncentiveSummaries } = require('../utils/staff-incentive-summary-sender');
 const { isPlatformEmailDisabled } = require('../lib/business-email-policy');
 
 /**
@@ -546,6 +547,15 @@ function setupEmailScheduler() {
     scheduled: true,
     timezone: "Asia/Kolkata"
   });
+
+  // Staff incentive summary — 1st of each month at 8:00 AM IST (previous month)
+  cron.schedule('0 8 1 * *', async () => {
+    logger.info('Running monthly staff incentive summary email job');
+    await sendStaffIncentiveSummaries();
+  }, {
+    scheduled: true,
+    timezone: 'Asia/Kolkata',
+  });
   
   // Low inventory check - runs every day at 10 AM
   cron.schedule('0 10 * * *', async () => {
@@ -556,7 +566,7 @@ function setupEmailScheduler() {
     timezone: "Asia/Kolkata"
   });
   
-  logger.info('Email scheduler jobs configured: membership expiry 12:05 AM IST, daily summary 9:00 PM IST, weekly summary Sun 8:00 PM IST, low inventory 10:00 AM IST');
+  logger.info('Email scheduler jobs configured: membership expiry 12:05 AM IST, daily summary 9:00 PM IST, weekly summary Sun 8:00 PM IST, staff incentive 1st 8:00 AM IST, low inventory 10:00 AM IST');
 }
 
 /**
@@ -699,6 +709,7 @@ async function checkLowInventory() {
 module.exports = {
   sendDailySummaries,
   sendWeeklySummaries,
+  sendStaffIncentiveSummaries,
   checkLowInventory,
   expireMembershipSubscriptions,
   setupEmailScheduler

@@ -189,6 +189,34 @@ function parseSupplierPaymentDateInput(val) {
   return d && !Number.isNaN(d.getTime()) ? d : new Date();
 }
 
+/**
+ * Previous calendar month in IST (for monthly reports on the 1st).
+ * @param {Date} [referenceDate]
+ * @returns {{ start: Date, end: Date, startYmd: string, endYmd: string, periodLabel: string }}
+ */
+function getPreviousMonthRangeIST(referenceDate = new Date()) {
+  const refYmd = toDateStringIST(referenceDate);
+  const [yearStr, monthStr] = refYmd.split('-');
+  let year = Number(yearStr);
+  let month = Number(monthStr);
+  month -= 1;
+  if (month < 1) {
+    month = 12;
+    year -= 1;
+  }
+  const startYmd = `${year}-${String(month).padStart(2, '0')}-01`;
+  const lastDay = new Date(year, month, 0).getDate();
+  const endYmd = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+  const monthName = formatInIST(parseDateIST(startYmd), { month: 'long', year: 'numeric' });
+  return {
+    start: getStartOfDayIST(startYmd),
+    end: getEndOfDayIST(endYmd),
+    startYmd,
+    endYmd,
+    periodLabel: monthName,
+  };
+}
+
 module.exports = {
   parseDateIST,
   getStartOfDayIST,
@@ -196,6 +224,7 @@ module.exports = {
   formatInIST,
   toDateStringIST,
   getTodayIST,
+  getPreviousMonthRangeIST,
   parseTimeToMinutes,
   minutesToTimeString,
   toIsoStringIST,
