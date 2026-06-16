@@ -66,10 +66,10 @@ function ProtectedLayoutContent({
             secondaryNav
               ? sidebar?.isCollapsed
                 ? "md:ml-[18rem]"
-                : "md:ml-[26rem]"
+                : "md:ml-[30rem]"
               : sidebar?.isCollapsed
                 ? "md:ml-24"
-                : "md:ml-56"
+                : "md:ml-72"
           )}
         >
           <NavigationProgress />

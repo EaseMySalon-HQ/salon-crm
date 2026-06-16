@@ -30,6 +30,8 @@ const contactSchema = z.object({
   website: z.string().optional(),
 })
 
+const branchCountOptions = ["1", "2", "3", "4", "5+"] as const
+
 const timeSlots = Array.from({ length: 8 }, (_, index) => {
   const startHour = 10 + Math.floor(index / 2)
   const startMinutes = index % 2 === 0 ? "00" : "30"
@@ -88,6 +90,17 @@ export function ContactForm() {
 
       window.gtag?.("event", "conversion", {
         send_to: "AW-18203026415/JT4OCOmrwb0cEO_H8OdD",
+      })
+      window.gtag?.("event", "generate_lead", {
+        currency: "INR",
+        form: "contact",
+        content_name: "Contact Form",
+        branches: values.branches || undefined,
+      })
+      window.fbq?.("track", "Lead", {
+        content_name: "Contact Form",
+        content_category: "contact",
+        currency: "INR",
       })
 
       setSuccessSummary({
@@ -203,9 +216,20 @@ export function ContactForm() {
             render={({ field }) => (
               <FormItem>
                 <FormLabel>No. of branches</FormLabel>
-                <FormControl>
-                  <Input placeholder="e.g. 3" {...field} />
-                </FormControl>
+                <Select onValueChange={field.onChange} value={field.value || undefined}>
+                  <FormControl>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select" />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    {branchCountOptions.map((option) => (
+                      <SelectItem key={option} value={option}>
+                        {option}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <FormMessage />
               </FormItem>
             )}
@@ -240,7 +264,7 @@ export function ContactForm() {
           name="message"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>What should we prepare for the demo?</FormLabel>
+              <FormLabel>What are you hoping to fix?</FormLabel>
               <FormControl>
                 <Textarea rows={4} placeholder="Share top priorities or current challenges…" {...field} />
               </FormControl>

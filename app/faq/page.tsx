@@ -110,7 +110,7 @@ export default function FAQPage() {
             </p>
             <div className="flex justify-center">
               <Button size="lg" asChild className="bg-white text-[#7C3AED] hover:bg-gray-100 px-8 py-6 h-auto text-lg font-semibold shadow-2xl">
-                <Link href="/contact" aria-label="Book a free salon software demo">
+                <Link href="/demo" aria-label="Book a free salon software demo">
                   Book a Free Demo
                   <ArrowRight className="ml-2 h-5 w-5" aria-hidden />
                 </Link>

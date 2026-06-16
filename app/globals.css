@@ -303,6 +303,16 @@
   }
 }
 
+/* Toast auto-dismiss countdown bar — shrinks left-to-right via scaleX. */
+@keyframes toast-progress {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
 /* Outside working hours (per staff) — tint comes from inline layered backgrounds with 5-min guides */
 .calendar-outside-hours {
   color: rgb(148 163 184) !important;

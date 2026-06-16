@@ -12,6 +12,7 @@ const PUBLIC_EXACT = new Set([
   '/features',
   '/pricing',
   '/contact',
+  '/demo',
   '/about',
   '/faq',
   '/solutions',

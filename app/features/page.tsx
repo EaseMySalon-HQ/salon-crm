@@ -96,7 +96,7 @@ export default function FeaturesPage() {
               asChild
               className="h-11 bg-white px-7 text-base font-semibold text-[#7C3AED] shadow-xl hover:bg-gray-100 sm:h-12 sm:px-8"
             >
-              <Link href="/contact#get-in-touch" aria-label="Book a free salon software demo">
+              <Link href="/demo" aria-label="Book a free salon software demo">
                 Book a Free Demo
                 <ArrowRight className="ml-2 h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
               </Link>
@@ -208,7 +208,7 @@ export default function FeaturesPage() {
           </p>
           <div className="mt-6 flex flex-col items-stretch justify-center gap-3 sm:flex-row sm:items-center sm:justify-center">
             <Button asChild className="bg-[#7C3AED] hover:bg-[#6D28D9]">
-              <Link href="/contact#get-in-touch" aria-label="Book a free salon software demo">
+              <Link href="/demo" aria-label="Book a free salon software demo">
                 Book a Free Demo
                 <ArrowRight className="ml-2 h-4 w-4" aria-hidden />
               </Link>

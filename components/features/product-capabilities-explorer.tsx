@@ -143,7 +143,7 @@ export function ProductCapabilitiesExplorer() {
                     </div>
                   </div>
                   <Button asChild size="sm" className="shrink-0 bg-[#7C3AED] hover:bg-[#6D28D9]">
-                    <Link href="/contact#get-in-touch">
+                    <Link href="/demo">
                       Book demo
                       <ArrowRight className="ml-1.5 h-4 w-4" />
                     </Link>
