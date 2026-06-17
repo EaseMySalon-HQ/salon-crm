@@ -83,7 +83,7 @@ async function atomicDeduct({ businessId, costPaise, channel, messageCategory, d
       return { success: false, error: 'Insufficient wallet balance' };
     }
     const newBalancePaise = Number(updated?.wallet?.balancePaise || 0);
-    await WalletTransaction.create({
+    const txn = await WalletTransaction.create({
       businessId,
       type: 'debit',
       amountPaise: costPaise,
@@ -96,7 +96,7 @@ async function atomicDeduct({ businessId, costPaise, channel, messageCategory, d
       balanceAfterPaise: newBalancePaise,
       timestamp: new Date(),
     });
-    return { success: true, newBalancePaise };
+    return { success: true, newBalancePaise, walletTransactionId: txn._id };
   } catch (err) {
     logger.error('[wallet-deduction] atomic deduct failed:', err?.message || err);
     return { success: false, error: err?.message || String(err) };
@@ -144,6 +144,7 @@ module.exports = {
   canDeductWhatsApp,
   deductSms,
   deductWhatsApp,
+  atomicDeduct,
   whatsAppCostPaise,
   isWhatsAppChannelEnabled,
 };

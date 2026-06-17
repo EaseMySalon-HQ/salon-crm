@@ -42,6 +42,7 @@ import {
 import { PackagesAPI } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
+import { CardSkeletonGrid, ChartSkeleton, TableSkeleton } from "@/components/loading"
 
 export type PackageReportProps = {
   /** When true, omit back button and outer page padding (embedded in Reports tabs) */
@@ -110,35 +111,9 @@ export function PackageReport({ embedded }: PackageReportProps) {
   if (loading) {
     return (
       <div className={rootClass}>
-        {!embedded && (
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-md bg-slate-200 animate-pulse" />
-            <div className="h-7 w-48 bg-slate-200 rounded animate-pulse" />
-          </div>
-        )}
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-          <div className="p-6">
-            <div className="h-10 w-full max-w-md bg-slate-100 rounded-lg animate-pulse" />
-          </div>
-        </div>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {[1, 2, 3, 4].map(i => (
-            <Card key={i} className="border-slate-200/80">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <div className="h-4 w-24 bg-slate-200 rounded animate-pulse" />
-                <div className="h-9 w-9 bg-slate-100 rounded-lg animate-pulse" />
-              </CardHeader>
-              <CardContent>
-                <div className="h-8 w-20 bg-slate-200 rounded animate-pulse" />
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-        <Card className="border-slate-200/80">
-          <CardContent className="pt-6">
-            <div className="h-52 bg-slate-100 rounded-lg animate-pulse" />
-          </CardContent>
-        </Card>
+        <CardSkeletonGrid count={4} size="md" columns="sm:grid-cols-2 lg:grid-cols-4" />
+        <ChartSkeleton height={208} />
+        <TableSkeleton rows={6} columns={5} />
       </div>
     )
   }

@@ -934,37 +934,42 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
           </div>
 
           {settings.enabled && (
-            <>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="msg91ApiKey">MSG91 API Key</Label>
-                  <Input
-                    id="msg91ApiKey"
-                    type="password"
-                    value={settings.msg91ApiKey || ''}
-                    onChange={(e) => handleSettingChange('msg91ApiKey', e.target.value)}
-                    className="w-full"
-                    placeholder="Your MSG91 Auth Key"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="msg91SenderId">Sender ID</Label>
-                  <Input
-                    id="msg91SenderId"
-                    value={settings.msg91SenderId || ''}
-                    onChange={(e) => handleSettingChange('msg91SenderId', e.target.value)}
-                    className="w-full"
-                    placeholder="919876543210"
-                  />
-                  <p className="text-xs text-gray-500">
-                    Your WhatsApp phone number registered with MSG91 (found in Dashboard → WhatsApp → Sender ID). Format: 91XXXXXXXXXX
-                  </p>
-                </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="msg91ApiKey">MSG91 API Key</Label>
+                <Input
+                  id="msg91ApiKey"
+                  type="password"
+                  value={settings.msg91ApiKey || ''}
+                  onChange={(e) => handleSettingChange('msg91ApiKey', e.target.value)}
+                  className="w-full"
+                  placeholder="Your MSG91 Auth Key"
+                />
               </div>
 
-              {/* Template Configuration */}
-              <div className="space-y-4 pt-4 border-t">
+              <div className="space-y-2">
+                <Label htmlFor="msg91SenderId">Sender ID</Label>
+                <Input
+                  id="msg91SenderId"
+                  value={settings.msg91SenderId || ''}
+                  onChange={(e) => handleSettingChange('msg91SenderId', e.target.value)}
+                  className="w-full"
+                  placeholder="919876543210"
+                />
+                <p className="text-xs text-gray-500">
+                  Your WhatsApp phone number registered with MSG91 (found in Dashboard → WhatsApp → Sender ID). Format: 91XXXXXXXXXX
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Template Configuration — visible even when WhatsApp is disabled so IDs can be set up first */}
+          <div className="space-y-4 pt-4 border-t">
+            {!settings.enabled && (
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+                WhatsApp is off — you can still configure template IDs below. Turn on WhatsApp above when you are ready to send.
+              </p>
+            )}
                 <div className="space-y-1">
                   <Label className="text-sm font-medium">WhatsApp Templates Configuration</Label>
                 </div>
@@ -1212,10 +1217,11 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
                   </div>
                 )}
 
-              </div>
+          </div>
 
-
-              <div className="space-y-2">
+          {settings.enabled && (
+            <>
+              <div className="space-y-2 pt-4 border-t">
                 <Label>Test WhatsApp Configuration</Label>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                   <Select value={testTemplateType} onValueChange={setTestTemplateType}>

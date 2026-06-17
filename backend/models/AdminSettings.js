@@ -212,6 +212,21 @@ const adminSettingsSchema = new mongoose.Schema({
         },
         enabled: { type: Boolean, default: true },
       },
+      dailySummary: {
+        subject: { type: String, default: 'Daily Summary Report - {date}' },
+        body: { type: String, default: '' },
+        enabled: { type: Boolean, default: true },
+      },
+      weeklySummary: {
+        subject: { type: String, default: 'Weekly Business Summary - {weekStart} to {weekEnd}' },
+        body: { type: String, default: '' },
+        enabled: { type: Boolean, default: true },
+      },
+      staffIncentiveSummary: {
+        subject: { type: String, default: 'Staff Incentive Summary — {periodLabel}' },
+        body: { type: String, default: '' },
+        enabled: { type: Boolean, default: true },
+      },
     },
     alerts: {
       systemHealth: {
@@ -362,16 +377,56 @@ adminSettingsSchema.statics.getSettings = async function() {
   if (settings) {
     // Ensure new templates are added to existing settings
     const defaultTemplates = {
+      businessCreated: {
+        subject: 'Welcome to EaseMySalon - Business Account Created',
+        body: 'Your business account has been successfully created. Business Code: {businessCode}',
+        enabled: true,
+      },
+      businessInactive: {
+        subject: 'Business Account Inactive - Action Required',
+        body: 'Your business account has been marked as inactive due to no login activity for {days} days.',
+        enabled: true,
+      },
+      systemAlert: {
+        subject: 'System Alert - {alertType}',
+        body: 'System alert: {message}. Please check the admin panel for details.',
+        enabled: true,
+      },
+      userCreated: {
+        subject: 'Welcome to EaseMySalon - User Account Created',
+        body: 'Your user account has been created. Please log in to access the system.',
+        enabled: true,
+      },
+      platformLeadPending: {
+        subject: 'New platform lead — pending assignment',
+        body: 'A new lead was added to Lead Management and needs an assignee. Open the admin panel to assign.',
+        enabled: true,
+      },
       receiptNotification: {
         subject: 'Receipt {receiptNumber} - {businessName}',
         body: 'Dear {clientName},\n\nThank you for your visit!\n\n{receiptLink}\n\nThank you for choosing {businessName}!',
-        enabled: true
+        enabled: true,
       },
       appointmentNotification: {
         subject: 'Appointment Confirmation - {date}',
         body: 'Dear {clientName},\n\nYour appointment has been confirmed!\n\nAppointment Details:\nService: {serviceName}\nDate: {date}\nTime: {time}\nStaff: {staffName}\nBusiness: {businessName}\nPhone: {businessPhone}\n\n{notes}\n\nWe look forward to seeing you!',
-        enabled: true
-      }
+        enabled: true,
+      },
+      dailySummary: {
+        subject: 'Daily Summary Report - {date}',
+        body: '',
+        enabled: true,
+      },
+      weeklySummary: {
+        subject: 'Weekly Business Summary - {weekStart} to {weekEnd}',
+        body: '',
+        enabled: true,
+      },
+      staffIncentiveSummary: {
+        subject: 'Staff Incentive Summary — {periodLabel}',
+        body: '',
+        enabled: true,
+      },
     };
 
     // Merge missing templates
@@ -390,6 +445,10 @@ adminSettingsSchema.statics.getSettings = async function() {
         needsSave = true;
       }
     });
+
+    if (needsSave) {
+      settings.markModified('notifications.templates');
+    }
 
     // Merge missing MSG91 template *slots* under notifications.whatsapp.templates
     if (settings.notifications.whatsapp) {

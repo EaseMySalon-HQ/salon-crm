@@ -5,6 +5,7 @@ import { Calendar, X, RefreshCw } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 import { toast } from "@/hooks/use-toast"
 import { Button } from "@/components/ui/button"
+import { LoadingButton } from "@/components/loading"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
@@ -480,13 +481,15 @@ export function CashRegistryModal({ open, onOpenChange, onSaveSuccess, onlineSal
               >
                 Cancel
               </Button>
-              <Button 
+              <LoadingButton
                 onClick={handleSave}
-                disabled={isLoading || (shift === "closing" && cashCollectedOnline > 0 && cashInPosMachine === 0)}
+                loading={isLoading}
+                loadingText="Saving..."
+                disabled={shift === "closing" && cashCollectedOnline > 0 && cashInPosMachine === 0}
                 className="h-10 px-6 bg-primary hover:bg-primary/90"
               >
-                {isLoading ? "Saving..." : "Save"}
-              </Button>
+                Save
+              </LoadingButton>
             </div>
             {shift === "closing" && cashCollectedOnline > 0 && cashInPosMachine === 0 && (
               <p className="text-xs text-red-500 mt-2 text-center">

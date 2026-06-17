@@ -9,6 +9,8 @@ import { TopNav } from "@/components/top-nav"
 import { Button } from "@/components/ui/button"
 import { LogOut } from "lucide-react"
 import { SidebarProvider, useSidebar } from "@/lib/sidebar-context"
+import { NavigationProgress } from "@/components/loading/navigation-progress"
+import { LoadingSpinnerPage } from "@/components/loading"
 import { cn } from "@/lib/utils"
 interface ProtectedLayoutProps {
   children: React.ReactNode
@@ -60,16 +62,17 @@ function ProtectedLayoutContent({
         {secondaryNav}
         <div
           className={cn(
-            "flex-1 flex flex-col min-w-0 min-h-0 overflow-x-hidden",
+            "relative flex-1 flex flex-col min-w-0 min-h-0 overflow-x-hidden",
             secondaryNav
               ? sidebar?.isCollapsed
                 ? "md:ml-[18rem]"
-                : "md:ml-[26rem]"
+                : "md:ml-[30rem]"
               : sidebar?.isCollapsed
                 ? "md:ml-24"
-                : "md:ml-56"
+                : "md:ml-72"
           )}
         >
+          <NavigationProgress />
           <TopNav showQuickAdd={topNavQuickAdd} rightSlot={topNavRightSlot} />
           <main className="flex-1 min-h-0 overflow-auto p-6 min-w-0">
             {children}
@@ -95,39 +98,17 @@ export function ProtectedLayout({ children, requiredModule, requiredFeature = "v
     router.replace("/account-suspended")
   }, [user, isLoading, router])
 
-  // Show loading spinner while checking authentication
   if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading...</p>
-        </div>
-      </div>
-    )
+    return <LoadingSpinnerPage label="Loading" />
   }
 
   // Don't render layout if not authenticated - let the redirect happen
   if (!user) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Redirecting to login...</p>
-        </div>
-      </div>
-    )
+    return <LoadingSpinnerPage label="Redirecting to login…" />
   }
 
   if (user.businessSuspended) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Opening account status…</p>
-        </div>
-      </div>
-    )
+    return <LoadingSpinnerPage label="Opening account status…" />
   }
 
   // Check permission-based access

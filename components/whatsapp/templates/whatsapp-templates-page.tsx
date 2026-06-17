@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
+import { TableSkeleton } from "@/components/loading"
 import {
   Select,
   SelectContent,
@@ -401,9 +402,7 @@ export function WhatsAppTemplatesPage() {
         </CardHeader>
         <CardContent>
           {loading ? (
-            <div className="flex items-center gap-2 text-slate-500">
-              <Loader2 className="h-4 w-4 animate-spin" /> Loading templates…
-            </div>
+            <TableSkeleton rows={6} columns={5} />
           ) : addonDisabled ? (
             <div className="py-12 px-4 text-center">
               <div className="mx-auto max-w-lg rounded-xl border border-slate-200 bg-slate-50/60 p-6">

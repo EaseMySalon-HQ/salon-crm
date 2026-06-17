@@ -29,8 +29,29 @@ import { WhatsAppAdminSettings, EMPTY_WHATSAPP_TEMPLATE_SLOTS } from "./whatsapp
 const TEMPLATE_VARIABLES = [
   "{businessCode}", "{days}", "{alertType}", "{message}", "{clientName}", "{receiptNumber}",
   "{date}", "{time}", "{serviceName}", "{staffName}", "{businessName}", "{businessPhone}",
-  "{items}", "{subtotal}", "{tax}", "{discount}", "{total}", "{paymentMethod}", "{notes}"
+  "{items}", "{subtotal}", "{tax}", "{discount}", "{total}", "{paymentMethod}", "{notes}",
+  "{receiptLink}", "{periodLabel}", "{periodStart}", "{periodEnd}", "{weekStart}", "{weekEnd}"
 ]
+
+const EMAIL_TEMPLATE_LABELS: Record<string, string> = {
+  businessCreated: "Business account created",
+  businessInactive: "Business inactive alert",
+  systemAlert: "System alert",
+  userCreated: "User account created",
+  platformLeadPending: "Platform lead pending",
+  receiptNotification: "Receipt / invoice email",
+  appointmentNotification: "Appointment confirmation email",
+  dailySummary: "Daily business summary",
+  weeklySummary: "Weekly business summary",
+  staffIncentiveSummary: "Staff incentive summary (monthly)",
+}
+
+/** Report-style emails use a built-in HTML table; admin can customize the subject only. */
+const EMAIL_TEMPLATE_RICH_HTML = new Set(["dailySummary", "weeklySummary", "staffIncentiveSummary"])
+
+function emailTemplateLabel(key: string): string {
+  return EMAIL_TEMPLATE_LABELS[key] || key.replace(/([A-Z])/g, " $1").replace(/^./, (s) => s.toUpperCase())
+}
 
 const DEFAULT_NOTIFICATION_SETTINGS = {
     // Email Configuration
@@ -90,6 +111,31 @@ const DEFAULT_NOTIFICATION_SETTINGS = {
         subject: "New platform lead — pending assignment",
         body:
           "A new lead was added to Lead Management and needs an assignee. Open the admin panel to assign.",
+        enabled: true
+      },
+      receiptNotification: {
+        subject: "Receipt {receiptNumber} - {businessName}",
+        body: "Dear {clientName},\n\nThank you for your visit!\n\n{receiptLink}\n\nThank you for choosing {businessName}!",
+        enabled: true
+      },
+      appointmentNotification: {
+        subject: "Appointment Confirmation - {date}",
+        body: "Dear {clientName},\n\nYour appointment has been confirmed!\n\nAppointment Details:\nService: {serviceName}\nDate: {date}\nTime: {time}\nStaff: {staffName}\nBusiness: {businessName}\nPhone: {businessPhone}\n\n{notes}\n\nWe look forward to seeing you!",
+        enabled: true
+      },
+      dailySummary: {
+        subject: "Daily Summary Report - {date}",
+        body: "",
+        enabled: true
+      },
+      weeklySummary: {
+        subject: "Weekly Business Summary - {weekStart} to {weekEnd}",
+        body: "",
+        enabled: true
+      },
+      staffIncentiveSummary: {
+        subject: "Staff Incentive Summary — {periodLabel}",
+        body: "",
         enabled: true
       }
     },
@@ -461,6 +507,11 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
       </div>
 
       <TabsContent value="email" className="space-y-6 mt-6">
+      <p className="text-sm text-slate-600 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+        Configure SMTP under <strong>Email Configuration</strong>, then scroll to{" "}
+        <a href="#email-templates" className="text-indigo-600 underline underline-offset-2">Email Templates</a>{" "}
+        to customize messages. WhatsApp and SMS template IDs are on the other tabs.
+      </p>
       {/* Email Configuration */}
       <Card className="rounded-xl border-slate-200/80 shadow-sm">
         <CardContent className="space-y-6 pt-6">
@@ -724,10 +775,12 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
       </Card>
 
       {/* Email Templates - each as a card */}
-      <div className="space-y-6">
+      <div id="email-templates" className="space-y-6 scroll-mt-6">
         <div>
           <h3 className="text-lg font-semibold text-slate-900 mb-1">Email Templates</h3>
-          <p className="text-sm text-slate-500">Customize notification templates and messages</p>
+          <p className="text-sm text-slate-500">
+            Customize notification templates and messages. Toggle a template on to edit its content.
+          </p>
         </div>
 
         <Collapsible className="group mb-4">
@@ -745,30 +798,40 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
           </CollapsibleContent>
         </Collapsible>
 
-        {Object.entries(settings.templates).map(([key, template]) => {
+        {Object.entries(settings.templates || {}).map(([key, template]) => {
           const t = template as { enabled?: boolean; subject?: string; body?: string }
+          const isRichHtml = EMAIL_TEMPLATE_RICH_HTML.has(key)
+          const isEnabled = t.enabled ?? false
           return (
             <Card key={key} className="rounded-xl border-slate-200/80 shadow-sm">
               <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-base font-semibold capitalize">{key.replace(/([A-Z])/g, " $1")}</CardTitle>
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <CardTitle className="text-base font-semibold">{emailTemplateLabel(key)}</CardTitle>
+                    {isRichHtml && (
+                      <p className="text-xs text-slate-500 mt-1">
+                        Uses a built-in HTML report layout. You can customize the subject line; the table body is generated automatically.
+                      </p>
+                    )}
+                  </div>
                   <Switch
-                    checked={t.enabled ?? false}
+                    checked={isEnabled}
                     onCheckedChange={(checked) => handleSettingChange(`templates.${key}.enabled`, checked)}
                   />
                 </div>
               </CardHeader>
-              {t.enabled && (
-                <CardContent className="space-y-4 pt-0">
-                  <div className="space-y-2">
-                    <Label htmlFor={`${key}-subject`}>Subject</Label>
-                    <Input
-                      id={`${key}-subject`}
-                      value={t.subject ?? ""}
-                      onChange={(e) => handleSettingChange(`templates.${key}.subject`, e.target.value)}
-                      className="w-full"
-                    />
-                  </div>
+              <CardContent className={`space-y-4 pt-0 ${!isEnabled ? "opacity-60" : ""}`}>
+                <div className="space-y-2">
+                  <Label htmlFor={`${key}-subject`}>Subject</Label>
+                  <Input
+                    id={`${key}-subject`}
+                    value={t.subject ?? ""}
+                    onChange={(e) => handleSettingChange(`templates.${key}.subject`, e.target.value)}
+                    className="w-full"
+                    disabled={!isEnabled}
+                  />
+                </div>
+                {!isRichHtml && (
                   <div className="space-y-2">
                     <Label htmlFor={`${key}-body`}>Message body</Label>
                     <Textarea
@@ -777,18 +840,23 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
                       onChange={(e) => handleSettingChange(`templates.${key}.body`, e.target.value)}
                       className="w-full min-h-[100px]"
                       rows={4}
+                      disabled={!isEnabled}
                     />
                   </div>
+                )}
+                {isEnabled && (
                   <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-100">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="border-slate-200"
-                      onClick={() => toast({ title: "Preview", description: "Subject: " + (t.subject ?? "") + ". Body preview: " + (t.body ?? "").slice(0, 120) + "…" })}
-                    >
-                      Preview template
-                    </Button>
+                    {!isRichHtml && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="border-slate-200"
+                        onClick={() => toast({ title: "Preview", description: "Subject: " + (t.subject ?? "") + ". Body preview: " + (t.body ?? "").slice(0, 120) + "…" })}
+                      >
+                        Preview template
+                      </Button>
+                    )}
                     <Button
                       type="button"
                       variant="outline"
@@ -804,11 +872,16 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
                       {testingTemplateKey === key ? "Sending…" : "Send test"}
                     </Button>
                   </div>
-                </CardContent>
-              )}
+                )}
+              </CardContent>
             </Card>
           )
         })}
+        {Object.keys(settings.templates || {}).length === 0 && (
+          <p className="text-sm text-slate-500 border border-dashed border-slate-200 rounded-lg p-4">
+            No email templates loaded. Save settings once or reload the page to restore defaults.
+          </p>
+        )}
       </div>
 
       {/* Alert Rules */}
@@ -1128,12 +1201,14 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
         <WhatsAppAdminSettings 
           settings={settings?.whatsapp}
           onSettingsChange={(whatsappSettings) => {
-            // settings is already the notifications object, so just merge whatsapp into it
-            const newSettings = {
+            setSettings((prev) => ({
+              ...prev,
+              whatsapp: whatsappSettings,
+            }))
+            onSettingsChange({
               ...settings,
-              whatsapp: whatsappSettings
-            };
-            onSettingsChange(newSettings);
+              whatsapp: whatsappSettings,
+            })
           }}
         />
       </TabsContent>

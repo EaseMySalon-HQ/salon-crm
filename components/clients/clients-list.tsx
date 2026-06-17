@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input"
 import { ClientsTable } from "@/components/clients/clients-table"
 import { ClientStatsCards } from "@/components/clients/client-stats-cards"
 import { clientStore, type Client } from "@/lib/client-store"
+import { ClientsAPI } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
 import { useFeature } from "@/hooks/use-entitlements"
 import { useAuth } from "@/lib/auth-context"
@@ -16,7 +17,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
 import * as XLSX from "xlsx"
-import { format } from "date-fns"
+import { CardSkeletonGrid, TableSkeleton } from "@/components/loading"
 
 export function ClientsListPage() {
   const { toast } = useToast()
@@ -29,13 +30,15 @@ export function ClientsListPage() {
   const [statsFilter, setStatsFilter] = useState<"all" | "active" | "inactive">("all")
   const [whatsappFilter, setWhatsappFilter] = useState<boolean>(false)
   const [enrichedClientsForStats, setEnrichedClientsForStats] = useState<Client[]>([])
+  const [clientsLoading, setClientsLoading] = useState(() => clientStore.getIsLoading())
 
   // Subscribe to client store changes and force reload on mount
   useEffect(() => {
     // Force reload clients from API
-    clientStore.loadClients()
+    void clientStore.loadClients()
     
     const unsubscribe = clientStore.subscribe(() => {
+      setClientsLoading(clientStore.getIsLoading())
       const updatedClients = clientStore.getClients()
       setClients(updatedClients)
       setFilteredClients(updatedClients)
@@ -43,7 +46,62 @@ export function ClientsListPage() {
     return unsubscribe
   }, [])
 
-  // Stats are calculated by ClientStatsCards component from the clients array
+  // Enrich all clients with sale-derived visit stats (same source as the table's realLastVisit)
+  useEffect(() => {
+    if (clients.length === 0) {
+      setEnrichedClientsForStats([])
+      return
+    }
+
+    let cancelled = false
+    const clientIds = clients
+      .map((c) => c._id || c.id)
+      .filter((id): id is string => Boolean(id) && !String(id).startsWith("shared-preview:"))
+
+    if (clientIds.length === 0) {
+      setEnrichedClientsForStats(clients)
+      return
+    }
+
+    void (async () => {
+      try {
+        const response = await ClientsAPI.getBulkStats(clientIds)
+        if (cancelled) return
+
+        if (response.success && response.data) {
+          const statsMap = response.data
+          setEnrichedClientsForStats(
+            clients.map((c) => {
+              const cId = String(c._id || c.id || "")
+              const stats = statsMap[cId]
+              if (!stats) return c
+              return {
+                ...c,
+                realTotalVisits: stats.totalVisits,
+                realTotalSpent: stats.totalSpent,
+                realLastVisit: stats.lastVisit,
+              }
+            }),
+          )
+        } else {
+          setEnrichedClientsForStats(clients)
+        }
+      } catch {
+        if (!cancelled) setEnrichedClientsForStats(clients)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [clients])
+
+  const clientsForStats = useMemo(() => {
+    if (enrichedClientsForStats.length === clients.length && clients.length > 0) {
+      return enrichedClientsForStats
+    }
+    return clients
+  }, [clients, enrichedClientsForStats])
 
   // Calculate date 3 months ago for status calculation (same as table and stats cards)
   const threeMonthsAgo = useMemo(() => {
@@ -72,13 +130,13 @@ export function ClientsListPage() {
       return false // No last visit or invalid date = inactive
     }
 
-    let filtered = clients
+    let filtered = clientsForStats
 
     // Apply stats filter (all/active/inactive) using same logic as stats cards
     if (statsFilter === "active") {
-      filtered = clients.filter((client) => isClientActive(client))
+      filtered = clientsForStats.filter((client) => isClientActive(client))
     } else if (statsFilter === "inactive") {
-      filtered = clients.filter((client) => !isClientActive(client))
+      filtered = clientsForStats.filter((client) => !isClientActive(client))
     }
 
     // Apply WhatsApp opted-in filter
@@ -100,7 +158,7 @@ export function ClientsListPage() {
     }
 
     return filtered
-  }, [clients, enrichedClientsForStats, statsFilter, searchQuery, threeMonthsAgo, whatsappFilter])
+  }, [clients, clientsForStats, statsFilter, searchQuery, threeMonthsAgo, whatsappFilter])
 
   // Update filtered clients when displayClients changes
   useEffect(() => {
@@ -256,11 +314,15 @@ export function ClientsListPage() {
             </div>
 
             {/* Stats Cards with Filters */}
+            {clientsLoading && clients.length === 0 ? (
+              <CardSkeletonGrid count={4} size="sm" columns="grid-cols-2 md:grid-cols-4" />
+            ) : (
             <ClientStatsCards 
-              clients={clients}
+              clients={clientsForStats}
               activeFilter={statsFilter}
               onFilterChange={handleFilterChange}
             />
+            )}
 
             {/* Enhanced Search Section */}
             <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
@@ -311,7 +373,11 @@ export function ClientsListPage() {
                 </div>
               </div>
             </div>
+            {clientsLoading && clients.length === 0 ? (
+              <TableSkeleton rows={10} columns={6} showToolbar={false} />
+            ) : (
             <ClientsTable clients={filteredClients} />
+            )}
     </div>
   )
 }

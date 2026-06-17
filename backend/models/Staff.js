@@ -97,6 +97,7 @@ const staffSchema = new mongoose.Schema({
     preferences: {
       dailySummary: { type: Boolean, default: false },
       weeklySummary: { type: Boolean, default: false },
+      staffIncentiveSummary: { type: Boolean, default: false },
       appointmentAlerts: { type: Boolean, default: false },
       receiptAlerts: { type: Boolean, default: false },
       exportAlerts: { type: Boolean, default: false },

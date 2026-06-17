@@ -14,6 +14,7 @@ const {
 } = require('../lib/business-metrics');
 const databaseManager = require('../config/database-manager');
 const modelFactory = require('../models/model-factory');
+const { generateNextBusinessCode } = require('../lib/generate-business-code');
 const crypto = require('crypto');
 const emailService = require('../services/email-service');
 const {
@@ -632,31 +633,7 @@ router.post('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermi
       }
     }
 
-    // Generate unique business code
-    let businessCode;
-    let isUnique = false;
-    let attempts = 0;
-    
-    while (!isUnique && attempts < 10) {
-      // Count only non-deleted businesses
-      const count = await req.mainModels.Business.countDocuments({ 
-        status: { $ne: 'deleted' } 
-      });
-      businessCode = `BIZ${String(count + 1).padStart(4, '0')}`;
-      
-      // Check if this code already exists (including deleted - codes are never reused)
-      const existing = await req.mainModels.Business.findOne({ code: businessCode });
-      if (!existing) {
-        isUnique = true;
-      } else {
-        attempts++;
-      }
-    }
-    
-    // Fallback to timestamp-based code if count-based fails
-    if (!isUnique) {
-      businessCode = `BIZ${Date.now().toString().slice(-4)}`;
-    }
+    const businessCode = await generateNextBusinessCode(req.mainModels.Business);
 
     // Build address and contact from whatever the user filled (same as in Business Settings)
     const address = {
@@ -880,10 +857,15 @@ router.put('/businesses/:id', setupMainDatabase, authenticateAdmin, checkAdminPe
 
     // Handle owner info
     if (ownerInfo) {
+      const business = await Business.findById(req.params.id);
+      if (!business) {
+        return res.status(404).json({ success: false, error: 'Business not found' });
+      }
+
+      const { User } = req.mainModels;
       const ownerUpdate = {};
       if (ownerInfo.firstName) ownerUpdate.firstName = ownerInfo.firstName;
       if (ownerInfo.lastName) ownerUpdate.lastName = ownerInfo.lastName;
-      if (ownerInfo.email) ownerUpdate.email = ownerInfo.email;
       if (ownerInfo.phone) ownerUpdate.mobile = ownerInfo.phone;
       if (typeof ownerInfo.hasLoginAccess === 'boolean') ownerUpdate.hasLoginAccess = ownerInfo.hasLoginAccess;
 
@@ -891,23 +873,44 @@ router.put('/businesses/:id', setupMainDatabase, authenticateAdmin, checkAdminPe
         ownerUpdate.password = await bcrypt.hash(ownerInfo.password, 10);
         ownerUpdate.passwordUpdatedAt = new Date();
         ownerUpdate.updatedAt = new Date();
-        // Ensure owner retains login access when password is changed
         ownerUpdate.hasLoginAccess = true;
       }
 
-      if (Object.keys(ownerUpdate).length > 0) {
-        // Update owner document in the main database (where owners are stored)
-        const business = await Business.findById(req.params.id);
-        
-        if (business && business.owner) {
-          // Update owner in the main database
-          const { User } = req.mainModels;
-          await User.findByIdAndUpdate(
-            business.owner,
-            { $set: ownerUpdate },
-            { new: true }
-          );
+      let targetOwnerId = business.owner;
+
+      if (ownerInfo.email) {
+        const newEmail = String(ownerInfo.email).toLowerCase().trim();
+        const currentOwner = business.owner ? await User.findById(business.owner) : null;
+
+        if (!currentOwner) {
+          return res.status(400).json({ success: false, error: 'Business has no owner account to update' });
         }
+
+        if (newEmail !== currentOwner.email) {
+          const existingUser = await User.findOne({ email: newEmail });
+          if (existingUser && String(existingUser._id) !== String(currentOwner._id)) {
+            const ownsAny = await Business.exists({
+              owner: existingUser._id,
+              status: { $ne: 'deleted' },
+            });
+            if (!ownsAny) {
+              return res.status(409).json({
+                success: false,
+                error: 'This email already belongs to a non-owner account and cannot be assigned to this business.',
+              });
+            }
+            targetOwnerId = existingUser._id;
+            updateData.owner = existingUser._id;
+          } else {
+            ownerUpdate.email = newEmail;
+          }
+        }
+      }
+
+      if (Object.keys(ownerUpdate).length > 0 && targetOwnerId) {
+        await User.findByIdAndUpdate(targetOwnerId, { $set: ownerUpdate }, { new: true });
+      } else if (updateData.owner) {
+        // Owner re-linked to an existing account; no other user fields to patch.
       }
     }
 
@@ -936,6 +939,13 @@ router.put('/businesses/:id', setupMainDatabase, authenticateAdmin, checkAdminPe
     });
   } catch (error) {
     logger.error('Update business error:', error);
+    if (error?.code === 11000 && error?.keyPattern?.email) {
+      return res.status(409).json({
+        success: false,
+        error:
+          'That email is already registered to another account. Use an existing owner email to link this business to their account, or choose a different email.',
+      });
+    }
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });

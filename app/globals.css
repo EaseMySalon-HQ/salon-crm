@@ -294,6 +294,16 @@
   animation: appointmentCardEnter 0.14s ease-out forwards;
 }
 
+@keyframes navigation-progress {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+/* Toast auto-dismiss countdown bar — shrinks left-to-right via scaleX. */
 @keyframes toast-progress {
   from {
     transform: scaleX(1);

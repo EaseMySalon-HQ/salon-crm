@@ -110,7 +110,8 @@ import {
 } from "@/lib/client-communication-consent"
 import { ClientCommunicationConsentFields } from "@/components/clients/client-communication-consent-fields"
 import { ClientGenderRadioField, isClientGenderSelected } from "@/components/clients/client-gender-radio-field"
-import { customerDropdownList, findWalkInClient, formatClientPhoneForDisplay } from "@/lib/walk-in-client"
+import { customerDropdownList, findWalkInClient, formatClientPhoneForDisplay, isWalkInClient, WALK_IN_SYSTEM_PHONE, WALK_IN_UI_BADGE } from "@/lib/walk-in-client"
+import { CardSkeletonGrid, FormSkeleton, LoadingButton } from "@/components/loading"
 import { MultiStaffSelector, type StaffContribution } from "@/components/ui/multi-staff-selector"
 import { getLinePreTaxTotal } from "@/lib/staff-line-revenue"
 import { TaxCalculator, createTaxCalculator, type TaxSettings, type BillItem } from "@/lib/tax-calculator"
@@ -541,6 +542,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const [selectedCustomer, setSelectedCustomer] = useState<Client | null>(null)
   const [customerSearch, setCustomerSearch] = useState("")
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
+  const [walkInClient, setWalkInClient] = useState<Client | null>(null)
   const [selectedDate, setSelectedDate] = useState<Date>(new Date())
   const [serviceItems, setServiceItems] = useState<ServiceItem[]>([])
   /** Set after computeLineTotalAndTax each render; membership effect reads .current after paint. */
@@ -1142,6 +1144,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     fetchPaymentSettings()
     fetchTaxSettings()
     fetchClients()
+    void clientStore.fetchWalkInClient().then((w) => {
+      if (w) setWalkInClient(w)
+    })
   }, [catalogRetryKey])
 
   // Fetch appointments and block times for selected date (for staff availability)
@@ -1930,11 +1935,24 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     }
   }, [services])
 
-  // Filter customers based on search (matches from start); empty search shows Walk-in only
+  // Filter customers: empty search → Walk-in only; typing → real clients only (no Walk-in)
   const filteredCustomers = useMemo(
-    () => customerDropdownList(clients, customerSearch),
-    [clients, customerSearch],
+    () => customerDropdownList(clients, customerSearch, walkInClient),
+    [clients, customerSearch, walkInClient],
   )
+
+  const ensureWalkInLoaded = useCallback(async () => {
+    if (walkInClient) return walkInClient
+    const w = await clientStore.fetchWalkInClient()
+    if (w) setWalkInClient(w)
+    return w
+  }, [walkInClient])
+
+  const shouldShowCustomerDropdown =
+    showCustomerDropdown &&
+    (customerSearch.trim().length > 0
+      ? true
+      : !!(walkInClient ?? findWalkInClient(clients)))
 
   // Get the correct customer ID (handles both id and _id properties)
   const getCustomerId = (customer: Client | null): string | null => {
@@ -2016,7 +2034,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     setSelectedCustomer(resolved)
     setCustomerSearch(resolved.name)
 
-    await fetchCustomerStats(customerId)
+    await fetchCustomerStats(customerId, resolved)
   }
 
   // Handle customer search input
@@ -2384,7 +2402,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     !clientWalletSettings?.combineMultipleWallets && clientWalletsUsableFiltered.length > 1
 
   const showClientWalletBalanceCard =
-    Number.isFinite(totalClientWalletBalance) && totalClientWalletBalance > 0
+    !!selectedCustomer &&
+    !isWalkInClient(selectedCustomer) &&
+    Number.isFinite(totalClientWalletBalance) &&
+    totalClientWalletBalance > 0
 
   /** Invoices that have customer-visible sale notes (appointment + sale remarks only, not tip metadata). */
   const customerBillsWithNotes = useMemo(
@@ -2460,11 +2481,14 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   ])
 
   // Fetch customer statistics including visits, revenue, and last visit
-  const fetchCustomerStats = useCallback(async (customerId: string) => {
+  const fetchCustomerStats = useCallback(async (customerId: string, customerHint?: Client | null) => {
     console.log('🔍 Fetching customer stats for ID:', customerId)
     try {
-      // First get the customer object to get the name
-      const customer = clients.find(c => (c._id || c.id) === customerId)
+      const customer =
+        customerHint ??
+        clients.find((c) => (c._id || c.id) === customerId) ??
+        (walkInClient && (walkInClient._id || walkInClient.id) === customerId ? walkInClient : undefined)
+
       if (!customer) {
         console.error('❌ Customer not found in clients list:', customerId)
         return
@@ -2472,8 +2496,13 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       
       console.log('👤 Customer found:', customer.name)
       
+      // Walk-in uses sentinel phone on the profile; sales are keyed by that value server-side.
+      const phoneForSales = isWalkInClient(customer)
+        ? WALK_IN_SYSTEM_PHONE
+        : (customer.phone || '')
+      
       // Get sales data for this customer by phone (exact match)
-      const salesResponse = await SalesAPI.getByClient(customer.phone || '')
+      const salesResponse = await SalesAPI.getByClient(phoneForSales)
       console.log('📊 Sales API response:', salesResponse)
       
       if (salesResponse.success) {
@@ -2507,7 +2536,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     } catch (error) {
       console.error('❌ Error fetching customer statistics:', error)
     }
-  }, [clients])
+  }, [clients, walkInClient])
 
   // Open Quick Sale for client wallet / settle dues: ?clientId=...&prepaidWallet=1 | &collectDues=1 | &payRemainingSaleId=...
   useEffect(() => {
@@ -4096,6 +4125,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const showRewardPointsCustomerUI = useMemo(() => {
     if (!allowBillingRedemption) return false
     if (!rewardPointsSettings?.enabled || !selectedCustomer) return false
+    if (isWalkInClient(selectedCustomer)) return false
     if (loyaltyBalance <= 0) return false
     const cid = getCustomerId(selectedCustomer)
     return !!cid && isLikelyMongoObjectId(cid)
@@ -5145,8 +5175,8 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           billNo: receiptNumber,
           customerId: getCustomerId(customer),
           customerName: customer!.name,
-          customerPhone: customer!.phone,
-          customerEmail: customer?.email || '',
+          customerPhone: isWalkInClient(customer!) ? WALK_IN_SYSTEM_PHONE : customer!.phone,
+          customerEmail: isWalkInClient(customer!) ? "" : customer?.email || "",
           items: [
             ...validServiceItems.map((item: any) => {
               const service = services.find((s) => s._id === item.serviceId || s.id === item.serviceId)
@@ -6012,11 +6042,14 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         setSelectedCustomer(null)
                       }
                     }}
-                    onFocus={() => setShowCustomerDropdown(true)}
+                    onFocus={() => {
+                      setShowCustomerDropdown(true)
+                      void ensureWalkInLoaded()
+                    }}
                     className="pl-10"
                   />
 
-                  {showCustomerDropdown && (customerSearch.trim().length > 0 || findWalkInClient(clients)) && (
+                  {shouldShowCustomerDropdown && (
                     <div className="absolute top-full left-0 right-0 z-10 mt-1 bg-background border rounded-md shadow-lg max-h-60 overflow-auto">
                       {filteredCustomers.length > 0 ? (
                         filteredCustomers.map((customer, index) => (
@@ -6028,13 +6061,20 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                             <div className="flex items-center gap-2">
                               <User className="h-4 w-4 text-muted-foreground" />
                               <div>
-                                <div className="font-medium">{customer.name}</div>
+                                <div className="font-medium flex items-center gap-2">
+                                  {customer.name}
+                                  {isWalkInClient(customer) ? (
+                                    <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                                      {WALK_IN_UI_BADGE}
+                                    </span>
+                                  ) : null}
+                                </div>
                                 <div className="text-sm text-muted-foreground">📞 {formatClientPhoneForDisplay(customer)}</div>
                               </div>
                             </div>
                           </div>
                         ))
-                      ) : (
+                      ) : customerSearch.trim().length > 0 ? (
                         <div
                           className="p-3 hover:bg-muted cursor-pointer flex items-center gap-2"
                           onClick={handleCreateNewCustomer}
@@ -6042,7 +6082,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                           <User className="h-4 w-4 text-muted-foreground" />
                           <span>Create new customer: &quot;{customerSearch}&quot;</span>
                         </div>
-                      )}
+                      ) : null}
                     </div>
                   )}
                 </div>
@@ -6108,7 +6148,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                       <Phone className="h-3 w-3" />
                       {formatClientPhoneForDisplay(selectedCustomer)}
                     </div>
-                    {selectedCustomer.email && (
+                    {!isWalkInClient(selectedCustomer) && selectedCustomer.email && (
                       <div className="flex items-center gap-1">
                         <Mail className="h-3 w-3" />
                         {selectedCustomer.email}
@@ -6143,7 +6183,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         className="text-center cursor-pointer hover:bg-red-50 rounded-lg p-2 transition-all duration-200"
                         onClick={async () => {
                           if (selectedCustomer) {
-                            await fetchUnpaidBills(selectedCustomer.phone || '')
+                            const phone = isWalkInClient(selectedCustomer)
+                              ? WALK_IN_SYSTEM_PHONE
+                              : (selectedCustomer.phone || '')
+                            await fetchUnpaidBills(phone)
                             setShowDuesDialog(true)
                           }
                         }}
@@ -6529,7 +6572,12 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       {/* Main Content */}
       <div className="flex-1 overflow-y-auto bg-white/80 backdrop-blur-sm pr-96">
         <div className="p-8 space-y-8 max-h-screen overflow-y-auto">
-          {billLoading ? (
+          {loadingServices && loadingProducts && loadingStaff && loadingClients && mode === "create" && !isInitialized ? (
+            <div className="space-y-6">
+              <FormSkeleton fields={4} columns={2} />
+              <CardSkeletonGrid count={2} size="md" columns="grid-cols-1 md:grid-cols-2" />
+            </div>
+          ) : billLoading ? (
             <div className="flex items-center justify-center min-h-[60vh]">
               <div className="flex flex-col items-center gap-3 text-muted-foreground">
                 <Loader2 className="h-8 w-8 animate-spin text-indigo-600" />
@@ -6625,12 +6673,15 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                       }
                     }
                   }}
-                  onFocus={() => setShowCustomerDropdown(true)}
+                  onFocus={() => {
+                    setShowCustomerDropdown(true)
+                    void ensureWalkInLoaded()
+                  }}
                 />
               </div>
 
               {/* Customer Dropdown */}
-              {showCustomerDropdown && (customerSearch.trim().length > 0 || findWalkInClient(clients)) && (
+              {shouldShowCustomerDropdown && (
                 <div className="absolute top-full left-0 right-0 z-50 mt-2 bg-white border border-gray-200 rounded-xl shadow-xl max-h-60 overflow-auto backdrop-blur-sm">
                   {filteredCustomers.length > 0 ? (
                     filteredCustomers.map((customer, index) => (
@@ -6644,13 +6695,20 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                             <User className="h-4 w-4 text-indigo-600" />
                           </div>
                           <div className="flex-1">
-                            <div className="font-semibold text-gray-800 group-hover:text-indigo-800 transition-colors duration-200">{customer.name}</div>
+                            <div className="font-semibold text-gray-800 group-hover:text-indigo-800 transition-colors duration-200 flex items-center gap-2">
+                              {customer.name}
+                              {isWalkInClient(customer) ? (
+                                <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                                  {WALK_IN_UI_BADGE}
+                                </span>
+                              ) : null}
+                            </div>
                             <div className="text-sm text-muted-foreground flex items-center gap-4 mt-1">
                               <span className="flex items-center gap-1">
                                 <Phone className="h-3 w-3" />
                                 {formatClientPhoneForDisplay(customer)}
                               </span>
-                              {customer.email && (
+                              {!isWalkInClient(customer) && customer.email && (
                                 <span className="flex items-center gap-1">
                                   <Mail className="h-3 w-3" />
                                   {customer.email}
@@ -6661,7 +6719,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         </div>
                       </div>
                     ))
-                  ) : (
+                  ) : customerSearch.trim().length > 0 ? (
                     <div
                       className="p-4 text-center text-muted-foreground hover:bg-gradient-to-r hover:from-emerald-50 hover:to-green-50 cursor-pointer transition-all duration-200 group"
                       onClick={handleCreateNewCustomer}
@@ -6673,7 +6731,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                         <span className="font-medium">Create new customer: &quot;{customerSearch}&quot;</span>
                       </div>
                     </div>
-                  )}
+                  ) : null}
                 </div>
               )}
             </div>
@@ -6751,7 +6809,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                       {selectedCustomer.name}
                     </h4>
                     <p className="mt-0.5 text-sm text-slate-500 tabular-nums">{formatClientPhoneForDisplay(selectedCustomer)}</p>
-                    {selectedCustomer.email && (
+                    {!isWalkInClient(selectedCustomer) && selectedCustomer.email && (
                       <p className="mt-0.5 truncate text-sm text-slate-500">{selectedCustomer.email}</p>
                     )}
                   </div>
@@ -6855,7 +6913,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                       className="min-w-0 flex-1 overflow-hidden rounded-lg border border-red-100/90 bg-red-50/50 px-2 py-2 text-left shadow-sm ring-1 ring-red-900/[0.04] transition-colors hover:bg-red-50/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/30 sm:px-2.5 sm:py-2.5"
                       onClick={async () => {
                         if (selectedCustomer) {
-                          await fetchUnpaidBills(selectedCustomer.phone || "")
+                          const phone = isWalkInClient(selectedCustomer)
+                            ? WALK_IN_SYSTEM_PHONE
+                            : (selectedCustomer.phone || "")
+                          await fetchUnpaidBills(phone)
                           setShowDuesDialog(true)
                         }
                       }}
@@ -7086,7 +7147,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                                   onClick={() => {
                                     const bn = quickSaleBillNoForBillingRoute(bill)
                                     if (bn) {
-                                      router.push(`/billing/${encodeURIComponent(bn)}?mode=edit`)
+                                      router.push(
+                                        `/billing/${encodeURIComponent(bn)}?mode=edit&returnTo=${encodeURIComponent("/quick-sale")}`
+                                      )
                                     }
                                   }}
                                   title="Edit bill"
@@ -8571,7 +8634,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         {/* Action Buttons - Modern */}
         <div className="px-6 py-4 border-t border-gray-100 bg-white flex-shrink-0">
           <div className="flex gap-3">
-            <Button 
+            <LoadingButton
               onClick={() => {
                 console.log('🔍 Checkout button clicked!')
                 console.log('🔍 roundedTotal:', roundedTotal)
@@ -8614,28 +8677,21 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                   console.log('✅ Full payment, proceeding with checkout')
                   handleCheckout()
                 }
-              }} 
-              disabled={isProcessing || (roundedTotal <= 0 && !allowZeroTotalCheckout)} 
+              }}
+              loading={isProcessing}
+              loadingText="Processing..."
+              disabled={roundedTotal <= 0 && !allowZeroTotalCheckout}
               className="flex-1 h-10 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg shadow-sm hover:shadow-md transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {isProcessing ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Processing...
-                </>
-              ) : (
-                <>
-                  <Receipt className="h-4 w-4 mr-2" />
-                  {mode === "edit"
-                    ? "Save Changes"
-                    : mode === "exchange"
-                      ? "Complete Exchange"
-                      : allowZeroTotalCheckout
-                        ? `Complete — ${formatCurrency(totalPaid)}`
-                        : `Collect - ${formatCurrency(totalPaid)}`}
-                </>
-              )}
-            </Button>
+              <Receipt className="h-4 w-4 mr-2" />
+              {mode === "edit"
+                ? "Save Changes"
+                : mode === "exchange"
+                  ? "Complete Exchange"
+                  : allowZeroTotalCheckout
+                    ? `Complete — ${formatCurrency(totalPaid)}`
+                    : `Collect - ${formatCurrency(totalPaid)}`}
+            </LoadingButton>
             <Button 
               variant="outline" 
               onClick={resetForm} 
@@ -9340,7 +9396,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             >
               Cancel
             </Button>
-            <Button 
+            <LoadingButton
+              loading={isProcessing}
+              loadingText="Processing..."
+              disabled={!confirmUnpaid}
               onClick={() => {
                 console.log('🔍 Modal button clicked!')
                 console.log('🔍 confirmUnpaid:', confirmUnpaid)
@@ -9367,11 +9426,10 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                   })
                 }
               }}
-              disabled={!confirmUnpaid || isProcessing}
               className="bg-orange-600 hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Confirm & Collect
-            </Button>
+            </LoadingButton>
           </DialogFooter>
         </DialogContent>
       </Dialog>

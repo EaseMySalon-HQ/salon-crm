@@ -5,6 +5,14 @@ export interface PricingFaqItem {
 
 export const PRICING_FAQ: PricingFaqItem[] = [
   {
+    q: "What is the price of EaseMySalon salon management software?",
+    a: "EaseMySalon has three plans priced per outlet (GST exclusive): Starter at ₹199/month, Growth at ₹699/month, and Pro at ₹999/month. Annual billing saves up to two months. WhatsApp Business API is included on Pro; other plans can add WhatsApp as an optional add-on. Every plan includes a 7-day free trial with no credit card required.",
+  },
+  {
+    q: "Does EaseMySalon support multiple salon branches?",
+    a: "Yes. Owners can manage all branches from a single login with branch-level staff, services, pricing, and inventory. Pro includes multi-branch management, centralized reporting, and branch-wise analytics. Growth and Starter work for single outlets; upgrade to Pro as you expand to Mumbai, Delhi, Bangalore, or any city.",
+  },
+  {
     q: "What sets EaseMySalon apart as the ideal solution for beauty and wellness businesses?",
     a: "EaseMySalon is built specifically for Indian salons, spas, and clinics — not a generic POS retrofitted for beauty. You get appointments, billing, inventory, loyalty, feedback, WhatsApp marketing, and reports in one place, with workflows tuned for how Indian outlets actually run (memberships, packages, walk-ins, commissions, GST). Free onboarding, training, and data migration are included on every plan.",
   },

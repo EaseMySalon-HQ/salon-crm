@@ -50,6 +50,18 @@ interface ReceiptData {
     productTaxByRate: { [rate: string]: number }
   }
   billChangeCreditedToWallet?: number
+  walletRefundCredited?: number
+  refundHistory?: Array<{
+    amount?: number
+    mode?: string
+    date?: string
+    editReason?: string
+  }>
+  paymentStatus?: {
+    paidAmount?: number
+    totalAmount?: number
+    remainingAmount?: number
+  }
 }
 
 function mapSaleToReceiptData(saleData: any): ReceiptData {
@@ -111,6 +123,13 @@ function mapSaleToReceiptData(saleData: any): ReceiptData {
       Number(saleData.billChangeCreditedToWallet) > 0.005
         ? Number(saleData.billChangeCreditedToWallet)
         : undefined,
+    walletRefundCredited:
+      saleData.walletRefundCredited != null &&
+      Number(saleData.walletRefundCredited) > 0.005
+        ? Number(saleData.walletRefundCredited)
+        : undefined,
+    refundHistory: Array.isArray(saleData.refundHistory) ? saleData.refundHistory : undefined,
+    paymentStatus: saleData.paymentStatus,
     tip: saleData.tip || 0,
     discount: Math.max(0, Number(saleData.discount) || 0),
     discountType: saleData.discountType,

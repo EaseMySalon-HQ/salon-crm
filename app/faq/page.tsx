@@ -12,12 +12,13 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion"
-import { FAQSchema } from "@/components/seo/structured-data"
+import { BreadcrumbListSchema, FAQSchema } from "@/components/seo/structured-data"
 import { PRICING_FAQ } from "@/lib/pricing-faq"
 
 export const metadata: Metadata = {
-  title: "Salon Software FAQ | Common Questions Answered",
-  description: "Answers to common questions about EaseMySalon's salon management software platform, onboarding, pricing, features, and support. Get all your questions answered.",
+  title: "Salon Software FAQs | EaseMySalon",
+  description:
+    "Find answers to common questions about pricing, onboarding, billing, appointments, staff management and more.",
   keywords: [
     "salon software FAQ",
     "salon management questions",
@@ -26,14 +27,27 @@ export const metadata: Metadata = {
     "salon CRM questions",
     "salon software support",
     "salon management software FAQ",
-    "salon software answers"
+    "salon software answers",
   ],
-  openGraph: {
-    title: "Salon Software FAQ | EaseMySalon",
-    description: "Get answers to common questions about salon management software, pricing, features, and support.",
-  },
   alternates: {
-    canonical: '/faq',
+    canonical: "/faq",
+  },
+  robots: { index: true, follow: true },
+  openGraph: {
+    type: "website",
+    url: "/faq",
+    siteName: "EaseMySalon",
+    title: "Salon Software FAQs | EaseMySalon",
+    description:
+      "Find answers to common questions about pricing, onboarding, billing, appointments, staff management and more.",
+    images: [{ url: "/images/dashboard.png", width: 1200, height: 630, alt: "EaseMySalon FAQs" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Salon Software FAQs | EaseMySalon",
+    description:
+      "Find answers to common questions about pricing, onboarding, billing, appointments, staff management and more.",
+    images: ["/images/dashboard.png"],
   },
 }
 
@@ -41,6 +55,12 @@ export default function FAQPage() {
   return (
     <PublicShell>
       <FAQSchema faqs={PRICING_FAQ.map(({ q, a }) => ({ question: q, answer: a }))} />
+      <BreadcrumbListSchema
+        items={[
+          { name: "Home", url: "/" },
+          { name: "FAQ", url: "/faq" },
+        ]}
+      />
       <section className="relative overflow-hidden bg-gradient-to-br from-[#7C3AED] via-[#8B5CF6] to-[#A855F7] text-white py-20 lg:py-28">
         <div className="absolute inset-0 opacity-10">
           <div className="absolute top-0 right-0 w-96 h-96 bg-white rounded-full blur-3xl" />
@@ -49,7 +69,7 @@ export default function FAQPage() {
         <div className="container relative mx-auto px-4 sm:px-6 lg:px-8 text-center space-y-6 max-w-4xl">
           <Badge className="bg-white/20 text-white border-white/30 backdrop-blur-sm">Frequently Asked Questions</Badge>
           <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold leading-tight">
-            Everything You Need to Know
+            Frequently Asked Questions
           </h1>
           <p className="text-xl sm:text-2xl text-purple-100 leading-relaxed">
             Didn't find what you're looking for? <span className="font-semibold text-white">WhatsApp us anytime</span> and we'll respond within minutes.
@@ -90,9 +110,9 @@ export default function FAQPage() {
             </p>
             <div className="flex justify-center">
               <Button size="lg" asChild className="bg-white text-[#7C3AED] hover:bg-gray-100 px-8 py-6 h-auto text-lg font-semibold shadow-2xl">
-                <Link href="/contact">
+                <Link href="/demo" aria-label="Book a free salon software demo">
                   Book a Free Demo
-                  <ArrowRight className="ml-2 h-5 w-5" />
+                  <ArrowRight className="ml-2 h-5 w-5" aria-hidden />
                 </Link>
               </Button>
             </div>

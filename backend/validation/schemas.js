@@ -524,7 +524,7 @@ const publicDemoLeadSchema = z
   .object({
     name: z.string().trim().min(2).max(120),
     phone: z.string().trim().min(10).max(20),
-    email: emailSchema,
+    email: emailSchema.optional(),
     salon: z.string().trim().min(2).max(200),
     city: z.string().trim().min(2).max(120),
     branches: z.string().trim().max(32).optional(),

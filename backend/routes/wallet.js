@@ -92,8 +92,17 @@ router.get('/transactions', authenticateToken, setupMainDatabase, async (req, re
 
     const { WalletTransaction } = await getMainModels();
     const filter = { businessId };
-    if (req.query.type) filter.type = req.query.type;
-    if (req.query.channel) filter.channel = req.query.channel;
+    if (req.query.type === 'credit' || req.query.type === 'debit') {
+      filter.type = req.query.type;
+    }
+    if (req.query.channel === 'sms' || req.query.channel === 'whatsapp') {
+      filter.channel = req.query.channel;
+    }
+    if (req.query.dateFrom || req.query.dateTo) {
+      filter.timestamp = {};
+      if (req.query.dateFrom) filter.timestamp.$gte = new Date(req.query.dateFrom);
+      if (req.query.dateTo) filter.timestamp.$lte = new Date(req.query.dateTo);
+    }
 
     const [logs, total] = await Promise.all([
       WalletTransaction.find(filter).sort({ timestamp: -1 }).skip(skip).limit(limit).lean(),

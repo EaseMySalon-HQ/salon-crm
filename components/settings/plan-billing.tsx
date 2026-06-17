@@ -1,7 +1,6 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
-import Script from "next/script"
 import { useEntitlements } from "@/hooks/use-entitlements"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -10,7 +9,7 @@ import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 import { 
-  CreditCard, 
+  CreditCard,
   Calendar, 
   Building2, 
   MapPin, 
@@ -24,7 +23,8 @@ import {
   ArrowDown,
   Zap,
   Clock,
-  X
+  X,
+  Wallet,
 } from "lucide-react"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import Link from "next/link"
@@ -33,8 +33,8 @@ import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/lib/auth-context"
 import {
   PlanCheckoutAPI,
+  WalletAPI,
   type PlanBillingPeriod,
-  type PlanCheckoutOrder,
   type PlanSubscriptionId,
   type PlanTransaction,
 } from "@/lib/api"
@@ -50,16 +50,6 @@ import {
 import { Loader2, Download, History } from "lucide-react"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
-
-// Same rate as wallet recharge — server is the source of truth; this is
-// purely for display in the pre-checkout breakdown.
-const PLAN_GST_RATE = 0.18
-
-declare global {
-  interface Window {
-    Razorpay?: any
-  }
-}
 
 interface BusinessInfo {
   _id: string
@@ -107,9 +97,28 @@ export function PlanBilling() {
   const [isLoadingPlans, setIsLoadingPlans] = useState(true)
   const [selectedPlanId, setSelectedPlanId] = useState<string>('')
   const [showChangePlan, setShowChangePlan] = useState(false)
-  const [razorpayReady, setRazorpayReady] = useState(false)
+  const [walletBalanceRupees, setWalletBalanceRupees] = useState<number | null>(null)
+  const [walletBalanceLoading, setWalletBalanceLoading] = useState(true)
   // Bumped after a successful checkout so the Billing History card refetches.
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0)
+
+  const loadWalletBalance = useCallback(async () => {
+    setWalletBalanceLoading(true)
+    try {
+      const res = await WalletAPI.getBalance()
+      if (res?.success && res.data) {
+        setWalletBalanceRupees(res.data.balanceRupees)
+      }
+    } catch {
+      setWalletBalanceRupees(null)
+    } finally {
+      setWalletBalanceLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadWalletBalance()
+  }, [loadWalletBalance])
 
   useEffect(() => {
     fetchBusinessInfo()
@@ -171,92 +180,7 @@ export function PlanBilling() {
     }
   }
 
-  // ── Payment-gateway openers ──────────────────────────────────────────────
-  // These mirror the wallet-recharge flow (components/settings/recharge-settings.tsx).
-  // A successful verify call is what actually mutates the plan — the modals
-  // themselves can be cancelled without side effects.
-
-  const openRazorpayCheckout = useCallback(
-    (order: PlanCheckoutOrder) =>
-      new Promise<void>((resolve, reject) => {
-        if (!window.Razorpay) {
-          reject(new Error("Razorpay SDK is still loading. Please try again."))
-          return
-        }
-        const rzp = new window.Razorpay({
-          key: order.publicKey,
-          amount: order.amountPaise,
-          currency: order.currency || "INR",
-          order_id: order.orderId,
-          name: "Plan Subscription",
-          description: `${order.planId} plan · ${order.billingPeriod}`,
-          handler: async (resp: any) => {
-            try {
-              const verify = await PlanCheckoutAPI.verify({
-                provider: "razorpay",
-                orderId: resp.razorpay_order_id,
-                paymentId: resp.razorpay_payment_id,
-                signature: resp.razorpay_signature,
-                planId: order.planId,
-                billingPeriod: order.billingPeriod,
-              })
-              if (verify?.success) {
-                resolve()
-              } else {
-                reject(new Error(verify?.error || "Verification failed"))
-              }
-            } catch (err: any) {
-              reject(err)
-            }
-          },
-          modal: {
-            ondismiss: () => resolve(),
-          },
-          theme: { color: "#2563eb" },
-        })
-        rzp.on("payment.failed", (resp: any) => {
-          reject(new Error(resp?.error?.description || "Payment failed"))
-        })
-        rzp.open()
-      }),
-    []
-  )
-
-  const openStripeCheckout = useCallback(async (order: PlanCheckoutOrder) => {
-    if (!order.clientSecret) throw new Error("Missing Stripe client secret")
-    const { loadStripe } = await import("@stripe/stripe-js")
-    const stripe = await loadStripe(order.publicKey)
-    if (!stripe) throw new Error("Stripe failed to initialise")
-    const returnUrl =
-      typeof window !== "undefined"
-        ? `${window.location.origin}${window.location.pathname}?section=plan-billing&stripe_redirect=1`
-        : undefined
-    const { error, paymentIntent } = await stripe.confirmPayment({
-      clientSecret: order.clientSecret,
-      confirmParams: returnUrl ? { return_url: returnUrl } : undefined,
-      redirect: "if_required",
-    } as any)
-    if (error) throw new Error(error.message || "Stripe payment failed")
-    const verify = await PlanCheckoutAPI.verify({
-      provider: "stripe",
-      orderId: order.orderId,
-      paymentId: paymentIntent?.id || order.orderId,
-      planId: order.planId,
-      billingPeriod: order.billingPeriod,
-    })
-    if (!verify?.success) {
-      throw new Error(verify?.error || "Stripe verification failed")
-    }
-  }, [])
-
-  const openZohoCheckout = useCallback((order: PlanCheckoutOrder) => {
-    if (!order.sessionUrl) throw new Error("Missing Zoho session URL")
-    toast({
-      title: "Redirecting to Zoho Pay",
-      description: "Complete the payment on the Zoho page.",
-    })
-    window.location.href = order.sessionUrl
-  }, [toast])
+  // ── Checkout ─────────────────────────────────────────────────────────────
 
   const handleRenew = async () => {
     if (!planInfo) return
@@ -296,52 +220,29 @@ export function PlanBilling() {
       return
     }
 
-    // ── Branch 2: Renewal / upgrade → create order + open gateway modal ───
+    // ── Branch 2: Renewal / upgrade → debit messaging wallet ─────────────
     try {
       setIsRenewing(true)
-      const orderRes = await PlanCheckoutAPI.createOrder(planIdTyped, periodTyped)
-      if (!orderRes?.success || !orderRes.data) {
-        throw new Error(orderRes?.error || "Failed to create checkout order")
-      }
-      const order = orderRes.data
-
-      if (order.provider === "razorpay") {
-        await openRazorpayCheckout(order)
-      } else if (order.provider === "stripe") {
-        await openStripeCheckout(order)
-      } else if (order.provider === "zoho") {
-        openZohoCheckout(order)
-        return
-      } else {
-        throw new Error(`Unsupported provider: ${(order as any).provider}`)
+      const payRes = await PlanCheckoutAPI.payWithWallet(planIdTyped, periodTyped)
+      if (!payRes?.success) {
+        throw new Error(payRes?.error || "Failed to complete checkout")
       }
 
       toast({
         title: "Payment successful",
         description: isPlanChange
-          ? `You're now on the ${planName} plan (${selectedBillingPeriod}). A tax invoice has been emailed and is available below.`
-          : `${planName} subscription renewed. A tax invoice has been emailed and is available below.`,
+          ? `You're now on the ${planName} plan (${selectedBillingPeriod}). The amount was debited from your wallet. A tax invoice has been emailed and is available below.`
+          : `${planName} subscription renewed. The amount was debited from your wallet. A tax invoice has been emailed and is available below.`,
       })
       await refetchPlan()
+      await loadWalletBalance()
       setHistoryRefreshKey(k => k + 1)
     } catch (err: any) {
-      const msg = String(err?.message || "")
-      // User dismissed the Razorpay modal — treat as a quiet cancel.
-      if (!msg || /payment failed/i.test(msg) || /verification failed/i.test(msg) || /could not be verified/i.test(msg)) {
-        if (msg) {
-          toast({
-            variant: "destructive",
-            title: "Payment could not be completed",
-            description: msg,
-          })
-        }
-      } else {
-        toast({
-          variant: "destructive",
-          title: "Checkout failed",
-          description: msg || "Please try again",
-        })
-      }
+      toast({
+        variant: "destructive",
+        title: "Checkout failed",
+        description: err?.message || "Please try again",
+      })
     } finally {
       setIsRenewing(false)
     }
@@ -510,13 +411,12 @@ export function PlanBilling() {
     : (planInfo.monthlyPrice || 0)
   const newPrice = renewalAmount || 0
 
-  // Pre-checkout GST breakdown for the selected plan/period (server is the
-  // source of truth; this is just for the pricing block).
-  const renewalBasePaise = renewalAmount ? Math.round(renewalAmount * 100) : 0
-  const renewalGstPaise = Math.round(renewalBasePaise * PLAN_GST_RATE)
-  const renewalTotalPaise = renewalBasePaise + renewalGstPaise
-  const renewalGstRupees = renewalGstPaise / 100
-  const renewalTotalRupees = renewalTotalPaise / 100
+  const renewalChargePaise = renewalAmount ? Math.round(renewalAmount * 100) : 0
+  const walletBalanceInsufficient =
+    !isDowngrade &&
+    renewalChargePaise > 0 &&
+    walletBalanceRupees !== null &&
+    walletBalanceRupees * 100 < renewalChargePaise
 
   // Pending downgrade (scheduled, not yet applied) — only populated by the
   // /checkout/schedule-downgrade endpoint.
@@ -529,13 +429,6 @@ export function PlanBilling() {
 
   return (
     <div className="space-y-6">
-      <Script
-        src="https://checkout.razorpay.com/v1/checkout.js"
-        strategy="lazyOnload"
-        onReady={() => setRazorpayReady(true)}
-        onLoad={() => setRazorpayReady(true)}
-      />
-
       {/* Pending-downgrade banner */}
       {hasPendingDowngrade && (
         <Card className="border-orange-200 bg-orange-50">
@@ -1000,14 +893,6 @@ export function PlanBilling() {
                   )}
                 </>
               )}
-              {!isDowngrade && renewalBasePaise > 0 && (
-                <div className="flex items-center justify-between text-sm pt-2 border-t border-blue-200">
-                  <span className="text-gray-600">GST ({Math.round(PLAN_GST_RATE * 100)}%)</span>
-                  <span className="text-gray-700 font-medium">
-                    {formatPrice(renewalGstRupees)}
-                  </span>
-                </div>
-              )}
               <div className="flex items-center gap-2 text-xs text-gray-600 pt-2 border-t border-blue-200">
                 <CheckCircle2 className="h-3 w-3 text-green-600" />
                 <span>
@@ -1022,15 +907,35 @@ export function PlanBilling() {
             </div>
 
             <div className="space-y-3">
+              {!isDowngrade && renewalChargePaise > 0 && (
+                <div className="flex items-center justify-between rounded-lg border bg-slate-50 px-3 py-2 text-sm">
+                  <span className="text-gray-600 flex items-center gap-2">
+                    <Wallet className="h-4 w-4" />
+                    Wallet balance
+                  </span>
+                  <span className="font-medium tabular-nums text-gray-900">
+                    {walletBalanceLoading ? (
+                      <Loader2 className="h-4 w-4 animate-spin inline" />
+                    ) : walletBalanceRupees !== null ? (
+                      `₹${walletBalanceRupees.toLocaleString("en-IN", {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}`
+                    ) : (
+                      "—"
+                    )}
+                  </span>
+                </div>
+              )}
               <div className="flex items-center justify-between bg-gray-50 rounded-lg p-3">
                 <span className="text-base font-semibold text-gray-900">
-                  {isDowngrade ? 'Amount Due Now' : 'Total Amount (incl. GST)'}
+                  {isDowngrade ? 'Amount Due Now' : 'Total Amount'}
                 </span>
                 <span className="text-2xl font-bold text-blue-600">
                   {isDowngrade
                     ? formatPrice(0)
                     : renewalAmount
-                    ? formatPrice(renewalTotalRupees)
+                    ? formatPrice(renewalAmount)
                     : 'Custom'}
                 </span>
               </div>
@@ -1041,11 +946,18 @@ export function PlanBilling() {
                   disabled={
                     isRenewing ||
                     (!isDowngrade && !renewalAmount) ||
-                    (!isDowngrade && hasPendingDowngrade && !isPlanChange)
+                    (!isDowngrade && hasPendingDowngrade && !isPlanChange) ||
+                    walletBalanceInsufficient
                   }
                   className={isDowngrade ? "bg-orange-600 hover:bg-orange-700 text-white" : "bg-blue-600 hover:bg-blue-700 text-white"}
                   size="default"
-                  title={!renewalAmount && !isDowngrade ? 'This plan has custom pricing — please contact sales.' : undefined}
+                  title={
+                    walletBalanceInsufficient
+                      ? "Insufficient wallet balance — recharge your wallet first"
+                      : !renewalAmount && !isDowngrade
+                        ? "This plan has custom pricing — please contact sales."
+                        : undefined
+                  }
                 >
                 {isRenewing ? (
                   <>
@@ -1060,7 +972,7 @@ export function PlanBilling() {
                   </>
                 ) : (
                   <>
-                    <CreditCard className="h-4 w-4 mr-2" />
+                    <Wallet className="h-4 w-4 mr-2" />
                     Proceed to Checkout
                     <ArrowRight className="h-4 w-4 ml-2" />
                   </>
@@ -1068,16 +980,24 @@ export function PlanBilling() {
               </Button>
               </div>
 
+              {walletBalanceInsufficient && (
+                <p className="text-xs text-red-600 text-right">
+                  Your wallet balance is too low for this checkout.{" "}
+                  <Link
+                    href="/settings?section=recharge"
+                    className="font-medium underline underline-offset-2 hover:text-red-700"
+                  >
+                    Click here to Recharge
+                  </Link>
+                  .
+                </p>
+              )}
+
               <p className="text-xs text-gray-500 text-center">
                 {isDowngrade
                   ? `Downgrades switch on your next renewal and don't carry a charge. Current features remain active until ${formatDate(nextRenewalDate.toISOString())}.`
-                  : `By proceeding, you agree to ${isPlanChange ? 'change your plan and ' : ''}pay for ${selectedBillingPeriod === 'yearly' ? '1 year' : '1 month'} of the ${selectedPlan.name} plan. 18% GST is added on top; a tax invoice is emailed after payment.`}
+                  : `By proceeding, you agree to ${isPlanChange ? 'change your plan and ' : ''}pay from your messaging wallet for ${selectedBillingPeriod === 'yearly' ? '1 year' : '1 month'} of the ${selectedPlan.name} plan. GST was collected when you recharged your wallet.`}
               </p>
-              {!razorpayReady && !isDowngrade && (
-                <p className="text-xs text-gray-400 text-center">
-                  Razorpay loads on demand — first click may take a moment.
-                </p>
-              )}
               <div className="text-center mt-2">
                 <Link href="/pricing" className="text-sm text-blue-600 hover:text-blue-700 underline">
                   View all plans and features →

@@ -305,6 +305,54 @@ async function generateReceiptNumber(): Promise<string> {
   throw lastError instanceof Error ? lastError : new Error("Failed to generate receipt number")
 }
 
+function normalizeCheckoutServiceStaffContributions(
+  svcData: Record<string, unknown>,
+  staff: any[],
+  lineTotal: number
+): { staffId: string; staffContributions: any[] } {
+  const raw = Array.isArray(svcData.staffContributions)
+    ? (svcData.staffContributions as Array<Record<string, unknown>>)
+    : []
+  if (raw.length > 0) {
+    const staffContributions = raw.map((c) => {
+      const staffId = String(c.staffId || "")
+      const member = staff.find((s) => String(s._id || s.id) === staffId)
+      const pct = Number(c.percentage) || (raw.length === 1 ? 100 : 0)
+      const amountFromPayload = Number(c.amount)
+      return {
+        staffId,
+        staffName: String(c.staffName || member?.name || "Unassigned Staff"),
+        percentage: pct,
+        amount: Number.isFinite(amountFromPayload)
+          ? amountFromPayload
+          : lineTotal > 0
+            ? (lineTotal * pct) / 100
+            : 0,
+      }
+    })
+    return {
+      staffId: String(svcData.staffId || staffContributions[0]?.staffId || ""),
+      staffContributions,
+    }
+  }
+  const staffId = String(svcData.staffId || "")
+  const staffMember = staff.find((s) => String(s._id || s.id) === staffId)
+  if (staffId && staffMember) {
+    return {
+      staffId,
+      staffContributions: [
+        {
+          staffId,
+          staffName: staffMember.name || String(svcData.staffName || ""),
+          percentage: 100,
+          amount: lineTotal,
+        },
+      ],
+    }
+  }
+  return { staffId, staffContributions: [] }
+}
+
 async function buildSaleLinesFromAppointmentPayload(
   appointmentData: Record<string, unknown>,
   services: any[],
@@ -335,7 +383,6 @@ async function buildSaleLinesFromAppointmentPayload(
     for (const svcData of appointmentData.services as any[]) {
       const service = services.find((s) => (s._id || s.id) === svcData.serviceId)
       if (!service) continue
-      const staffMember = staff.find((s) => (s._id || s.id) === svcData.staffId)
       const qty = Math.max(1, Math.floor(Number(svcData.quantity) || 1))
       const unitPrice = Number(svcData.price) || Number(service.price) || 0
       const baseAmount = unitPrice * qty
@@ -349,26 +396,21 @@ async function buildSaleLinesFromAppointmentPayload(
         applyTax,
         priceInclusive
       )
+      const { staffId, staffContributions } = normalizeCheckoutServiceStaffContributions(
+        svcData,
+        staff,
+        lineTotal
+      )
       serviceItemsToAdd.push({
         id: `${Date.now()}-${Math.random()}`,
         serviceId: service._id || service.id,
-        staffId: svcData.staffId || "",
+        staffId,
         quantity: qty,
         price: unitPrice,
         discount: discPct,
         total: lineTotal,
-        staffContributions:
-          svcData.staffId && staffMember
-            ? [
-                {
-                  staffId: svcData.staffId,
-                  staffName: staffMember.name || svcData.staffName || "",
-                  percentage: 100,
-                  amount: lineTotal,
-                },
-              ]
-            : [],
-        appointmentLineLocked: true,
+        staffContributions,
+        appointmentLineLocked: Boolean(svcData.appointmentLineLocked),
       })
     }
   } else if (appointmentData.serviceId) {
@@ -623,6 +665,12 @@ export type ServiceCheckoutTenderSplit = {
   selectedWalletId: string
 }
 
+export type BillEditRefundProcessing = {
+  amount: number
+  mode: "wallet" | "cash"
+  returnedProducts: { productId: string; name: string; quantity: number }[]
+}
+
 export async function completeServiceCheckoutInline(opts: {
   saleData: Record<string, unknown>
   /** Ignored when `tenderSplit` is set (amounts come from split). */
@@ -639,6 +687,14 @@ export async function completeServiceCheckoutInline(opts: {
   checkoutPaymentConfiguration: unknown
   /** After staff confirms in UI: credit cash overpayment to prepaid (cash-only tenders; server enforces). */
   creditBillChangeToWallet?: boolean
+  /** When set, updates an existing sale instead of creating a new bill. */
+  existingSaleId?: string
+  existingBillNo?: string
+  editReason?: string
+  /** Product-return refund when revised bill total is below amount already paid. */
+  refundProcessing?: BillEditRefundProcessing
+  /** Original paid amount before refund (bill edit). */
+  originalRecordedPaid?: number
 }): Promise<CompleteServiceCheckoutInlineResult> {
   const {
     saleData: appointmentData,
@@ -654,7 +710,15 @@ export async function completeServiceCheckoutInline(opts: {
     checkoutTaxSettings: ts,
     checkoutPaymentConfiguration: payRaw,
     creditBillChangeToWallet: creditBillChangeOpt,
+    existingSaleId,
+    existingBillNo,
+    editReason,
+    refundProcessing,
+    originalRecordedPaid,
   } = opts
+
+  const isBillUpdate = Boolean(existingSaleId?.trim())
+  const isRefundBillEdit = isBillUpdate && !!refundProcessing
 
   const paymentMethod: CheckoutPaymentMethodChoice = paymentMethodOpt ?? "cash"
 
@@ -1070,16 +1134,23 @@ export async function completeServiceCheckoutInline(opts: {
       }
     }
 
-    const { payments, changeToCredit, recordedPaidTotal } = buildRecordedPaymentsForCheckout({
-      cashAmount,
-      cardAmount,
-      onlineAmount,
-      walletPayAmount,
-      saleDueTotal,
-      creditOverpaymentToWallet: creditChangeEffective,
-    })
+    const { payments, changeToCredit, recordedPaidTotal } = isRefundBillEdit
+      ? {
+          payments: [] as { type: string; amount: number }[],
+          changeToCredit: 0,
+          recordedPaidTotal: Math.max(0, Number(originalRecordedPaid) || 0),
+        }
+      : buildRecordedPaymentsForCheckout({
+          cashAmount,
+          cardAmount,
+          onlineAmount,
+          walletPayAmount,
+          saleDueTotal,
+          creditOverpaymentToWallet: creditChangeEffective,
+        })
 
     if (
+      !isRefundBillEdit &&
       creditChangeEffective &&
       totalPaid > saleDueTotal + 1e-6 &&
       Math.abs(recordedPaidTotal - saleDueTotal) > 0.02
@@ -1091,7 +1162,7 @@ export async function completeServiceCheckoutInline(opts: {
       }
     }
 
-    if (totalPaid > roundedTotal + 0.05) {
+    if (!isRefundBillEdit && totalPaid > roundedTotal + 0.05) {
       if (!creditChangeEffective) {
         if (!isCashOnlyCheckout) {
           return {
@@ -1519,7 +1590,12 @@ export async function completeServiceCheckoutInline(opts: {
         ? { staffId: receiptItems[0].staffId, staffName: receiptItems[0].staffName }
         : null
 
-    const receiptNumber = await generateReceiptNumber()
+    const receiptNumber = isBillUpdate
+      ? String(existingBillNo || appointmentData.billNo || "").trim()
+      : await generateReceiptNumber()
+    if (isBillUpdate && !receiptNumber) {
+      return { ok: false, error: "Bill number is missing for update" }
+    }
     const tipStaff = tipStaffId ? staff.find((s) => (s._id || s.id) === tipStaffId) : null
 
     const salePayload: Record<string, unknown> = {
@@ -1653,8 +1729,15 @@ export async function completeServiceCheckoutInline(opts: {
       discountType: isValueDiscountActive ? "fixed" : "percentage",
       paymentStatus: {
         totalAmount: calculatedTotal + tip,
-        paidAmount: recordedPaidTotal,
-        remainingAmount: calculatedTotal + tip - recordedPaidTotal,
+        paidAmount: isRefundBillEdit
+          ? Math.max(0, Number(originalRecordedPaid) || recordedPaidTotal)
+          : recordedPaidTotal,
+        remainingAmount:
+          calculatedTotal +
+          tip -
+          (isRefundBillEdit
+            ? Math.max(0, Number(originalRecordedPaid) || recordedPaidTotal)
+            : recordedPaidTotal),
         dueDate: new Date(),
       },
       status:
@@ -1702,7 +1785,28 @@ export async function completeServiceCheckoutInline(opts: {
         : {}),
     }
 
-    const result = await SalesAPI.create(salePayload as any)
+    const updateBody: Record<string, unknown> = {
+      ...salePayload,
+      editReason: (editReason || "Bill edited via checkout").trim(),
+    }
+    if (isRefundBillEdit && refundProcessing) {
+      delete updateBody.payments
+      const paid = Math.max(0, Number(originalRecordedPaid) || 0)
+      const newTotal = calculatedTotal + tip
+      const computedRefund = Math.max(0, Math.round((paid - newTotal) * 100) / 100)
+      if (computedRefund <= 0.005) {
+        return { ok: false, error: "No refund is due on this bill." }
+      }
+      updateBody.refundProcessing = {
+        ...refundProcessing,
+        amount: computedRefund,
+        editReason: (editReason || "Product return refund").trim(),
+      }
+    }
+
+    const result = isBillUpdate
+      ? await SalesAPI.update(String(existingSaleId), updateBody)
+      : await SalesAPI.create(salePayload as any)
     if (!result.success) {
       return { ok: false, error: result.error || "Failed to create sale" }
     }
@@ -1723,6 +1827,7 @@ export async function completeServiceCheckoutInline(opts: {
     }
 
     if (
+      !isBillUpdate &&
       walletPayAmount > 0 &&
       selectedWalletId &&
       saleDoc?._id &&
@@ -1774,7 +1879,7 @@ export async function completeServiceCheckoutInline(opts: {
       }
     }
 
-    if (validPrepaidPlanItems.length > 0 && saleDoc?._id && isLikelyMongoObjectId(cid || undefined)) {
+    if (!isBillUpdate && validPrepaidPlanItems.length > 0 && saleDoc?._id && isLikelyMongoObjectId(cid || undefined)) {
       try {
         for (const row of validPrepaidPlanItems) {
           const qty = Math.max(1, Math.floor(row.quantity || 1))
@@ -1792,7 +1897,7 @@ export async function completeServiceCheckoutInline(opts: {
       }
     }
 
-    if (validPackageItems.length > 0 && saleDoc?._id && isLikelyMongoObjectId(cid || undefined)) {
+    if (!isBillUpdate && validPackageItems.length > 0 && saleDoc?._id && isLikelyMongoObjectId(cid || undefined)) {
       try {
         const paymentTowardGoods = Math.min(recordedPaidTotal, calculatedTotal)
         const paymentRatio =

@@ -6,6 +6,7 @@ import { AnalyticsPageContent } from "@/components/analytics/analytics-page-cont
 import { ProtectedLayout } from "@/components/layout/protected-layout"
 import { ProtectedRoute } from "@/components/auth/protected-route"
 import { useFeature } from "@/hooks/use-entitlements"
+import { PageSkeleton } from "@/components/loading"
 
 export default function AnalyticsPage() {
   const router = useRouter()
@@ -17,7 +18,17 @@ export default function AnalyticsPage() {
     }
   }, [hasAccess, isLoading, router])
 
-  if (isLoading || !hasAccess) {
+  if (isLoading) {
+    return (
+      <ProtectedRoute requiredModule="analytics">
+        <ProtectedLayout>
+          <PageSkeleton variant="dashboard" />
+        </ProtectedLayout>
+      </ProtectedRoute>
+    )
+  }
+
+  if (!hasAccess) {
     return null
   }
 

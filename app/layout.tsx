@@ -7,18 +7,18 @@ import { AuthProvider } from "@/lib/auth-context"
 import { AdminAuthProvider } from "@/lib/admin-auth-context"
 import { QueryProvider } from "@/components/providers/query-provider"
 import { CookieConsentBanner } from "@/components/gdpr/cookie-consent-banner"
-import { OrganizationSchema, SoftwareApplicationSchema } from "@/components/seo/structured-data"
-
 const inter = Inter({ subsets: ["latin"] })
 
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://easemysalon.com'
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://www.easemysalon.in"
+const metaPixelId = process.env.NEXT_PUBLIC_META_PIXEL_ID
 
 export const metadata: Metadata = {
   title: {
-    default: "EaseMySalon - India's #1 Salon Management Software",
-    template: "%s | EaseMySalon"
+    default: "Salon Management Software | Grow Your Salon with EaseMySalon",
+    template: "%s",
   },
-  description: "Reduce no-shows by 40%, cut billing time by 70%, and increase revenue by 35%. India's leading salon POS, CRM, appointments, inventory & analytics platform. 7 Day Trial, no credit card required.",
+  description:
+    "Manage appointments, billing, CRM, staff, inventory and marketing from one platform. Start growing your salon with EaseMySalon today.",
   keywords: [
     "salon management software",
     "salon POS system",
@@ -93,31 +93,29 @@ export const metadata: Metadata = {
     icon: [{ url: "/images/monogram-circle-color-transparent.png", type: "image/png" }],
     apple: "/images/monogram-circle-color-transparent.png",
   },
-  alternates: {
-    canonical: '/',
-  },
   openGraph: {
-    type: 'website',
-    locale: 'en_IN',
-    url: '/',
-    siteName: 'EaseMySalon',
-    title: "EaseMySalon - India's #1 Salon Management Software",
-    description: "Reduce no-shows by 40%, cut billing time by 70%, and increase revenue by 35%. Complete salon POS, CRM, appointments & analytics platform. 7 Day Trial.",
+    type: "website",
+    locale: "en_IN",
+    siteName: "EaseMySalon",
+    title: "Salon Management Software | Grow Your Salon with EaseMySalon",
+    description:
+      "Manage appointments, billing, CRM, staff, inventory and marketing from one platform. Start growing your salon with EaseMySalon today.",
     images: [
       {
-        url: '/images/dashboard.png',
+        url: "/images/dashboard.png",
         width: 1200,
         height: 630,
-        alt: 'EaseMySalon - Salon Management Software Dashboard',
+        alt: "EaseMySalon - Salon Management Software Dashboard",
       },
     ],
   },
   twitter: {
-    card: 'summary_large_image',
-    title: "EaseMySalon - India's #1 Salon Management Software",
-    description: "Reduce no-shows by 40%, cut billing time by 70%, and increase revenue by 35%. Complete salon POS, CRM, appointments & analytics.",
-    images: ['/images/dashboard.png'],
-    creator: '@easemysalon',
+    card: "summary_large_image",
+    title: "Salon Management Software | Grow Your Salon with EaseMySalon",
+    description:
+      "Manage appointments, billing, CRM, staff, inventory and marketing from one platform. Start growing your salon with EaseMySalon today.",
+    images: ["/images/dashboard.png"],
+    creator: "@easemysalon",
   },
   robots: {
     index: true,
@@ -145,9 +143,55 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              window.dataLayer = window.dataLayer || [];
+              function gtag(){dataLayer.push(arguments);}
+              gtag('js', new Date());
+              gtag('config', 'AW-18203026415');
+              (function () {
+                var script = document.createElement('script');
+                script.async = true;
+                script.src = 'https://www.googletagmanager.com/gtag/js?id=AW-18203026415';
+                document.head.appendChild(script);
+              })();
+            `,
+          }}
+        />
+        {metaPixelId ? (
+          <>
+            <script
+              dangerouslySetInnerHTML={{
+                __html: `
+                  !function(f,b,e,v,n,t,s)
+                  {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+                  n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+                  if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+                  n.queue=[];t=b.createElement(e);t.async=!0;
+                  t.src=v;s=b.getElementsByTagName(e)[0];
+                  s.parentNode.insertBefore(t,s)}(window, document,'script',
+                  'https://connect.facebook.net/en_US/fbevents.js');
+                  fbq('init', '${metaPixelId}');
+                  fbq('track', 'PageView');
+                `,
+              }}
+            />
+            <noscript>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                height="1"
+                width="1"
+                style={{ display: "none" }}
+                alt=""
+                src={`https://www.facebook.com/tr?id=${metaPixelId}&ev=PageView&noscript=1`}
+              />
+            </noscript>
+          </>
+        ) : null}
+      </head>
       <body className={inter.className}>
-        <OrganizationSchema />
-        <SoftwareApplicationSchema />
         <AuthProvider>
           <QueryProvider>
           <AdminAuthProvider>

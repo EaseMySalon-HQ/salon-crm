@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { generateNextBusinessCode } = require('../lib/generate-business-code');
 
 const businessSchema = new mongoose.Schema({
   // Basic Information
@@ -107,6 +108,12 @@ const businessSchema = new mongoose.Schema({
         enabled: { type: Boolean, default: true },
         day: { type: String, enum: ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'], default: 'sunday' },
         time: { type: String, default: '20:00' }, // HH:mm format
+        recipientStaffIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Staff' }]
+      },
+      // Staff incentive summary — sent on the 1st for the previous calendar month
+      staffIncentiveSummary: {
+        enabled: { type: Boolean, default: true },
+        time: { type: String, default: '08:00' },
         recipientStaffIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Staff' }]
       },
       // Appointment Notifications
@@ -352,32 +359,11 @@ businessSchema.index({ name: 'text', code: 'text', 'contact.email': 'text' });
 // Generate unique business code
 businessSchema.pre('save', async function(next) {
   if (!this.code) {
-    let code;
-    let isUnique = false;
-    let attempts = 0;
-    
-    while (!isUnique && attempts < 10) {
-      // Count only non-deleted businesses for code generation
-      const count = await mongoose.model('Business').countDocuments({ 
-        status: { $ne: 'deleted' } 
-      });
-      code = `BIZ${String(count + 1).padStart(4, '0')}`;
-      
-      // Check if this code already exists (including deleted ones - codes are never reused)
-      const existing = await mongoose.model('Business').findOne({ code });
-      if (!existing) {
-        isUnique = true;
-      } else {
-        attempts++;
-      }
+    try {
+      this.code = await generateNextBusinessCode(this.constructor);
+    } catch (err) {
+      return next(err);
     }
-    
-    // Fallback to timestamp-based code if count-based fails
-    if (!isUnique) {
-      code = `BIZ${Date.now().toString().slice(-4)}`;
-    }
-    
-    this.code = code;
   }
   next();
 });

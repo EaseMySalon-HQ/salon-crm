@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { ArrowLeft, Boxes, CalendarRange, Loader2, Trash2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { FormSkeleton } from "@/components/loading"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -359,9 +360,7 @@ export function PackageSellPage() {
         </div>
 
         {loadingMeta ? (
-          <div className="flex justify-center py-20 text-slate-500">
-            <Loader2 className="h-6 w-6 animate-spin" />
-          </div>
+          <FormSkeleton fields={6} columns={1} />
         ) : (
           <div className="space-y-5">
             {/* Client */}

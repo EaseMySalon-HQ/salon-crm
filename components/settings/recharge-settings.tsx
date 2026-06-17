@@ -11,6 +11,7 @@ import {
   ChevronRight,
   AlertCircle,
   Download,
+  Calendar as CalendarIcon,
 } from "lucide-react"
 
 import {
@@ -31,9 +32,24 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Calendar } from "@/components/ui/calendar"
+import { format } from "date-fns"
+import type { DateRange } from "react-day-picker"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/use-toast"
 import { useQueryClient } from "@tanstack/react-query"
+import {
+  resolveReportSalesApiDateParams,
+  type ReportDatePeriod,
+} from "@/lib/report-sales-date-params"
 import {
   WalletAPI,
   type WalletTransaction,
@@ -126,9 +142,6 @@ function BalanceCard({
                   formatRupees(balanceRupees)
                 )}
               </div>
-              <div className="text-xs text-muted-foreground mt-1">
-                Every WhatsApp and SMS message is debited from this wallet.
-              </div>
             </div>
           </div>
           <Button variant="outline" size="sm" onClick={onRefresh} disabled={loading}>
@@ -151,9 +164,7 @@ function PricingCard() {
       <CardHeader>
         <CardTitle className="text-base">Pricing</CardTitle>
         <CardDescription>
-          Every message is debited from your wallet at the rates below. No free
-          quota. Wallet recharges are subject to 18% GST added on top of the
-          recharge amount.
+          Every message is debited from your wallet at the rates below.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-2">
@@ -344,9 +355,7 @@ function RechargeForm({
       <CardHeader>
         <CardTitle className="text-base">Recharge wallet</CardTitle>
         <CardDescription>
-          Minimum {formatRupees(MIN_RECHARGE_RUPEES)}, maximum {formatRupees(MAX_RECHARGE_RUPEES)}. 18%
-          GST is added on top — wallet is credited with the pre-tax amount.
-          Payment provider (Razorpay / Stripe / Zoho Pay) is set by your admin.
+          Wallet recharges are subject to 18% GST added on top of the recharge amount.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -434,7 +443,14 @@ function TransactionHistory({ refreshKey }: { refreshKey: number }) {
   const [page, setPage] = React.useState(1)
   const [totalPages, setTotalPages] = React.useState(1)
   const [downloadingId, setDownloadingId] = React.useState<string | null>(null)
+  const [typeFilter, setTypeFilter] = React.useState<"all" | "credit" | "debit">("all")
+  const [datePeriod, setDatePeriod] = React.useState<ReportDatePeriod>("all")
+  const [dateRange, setDateRange] = React.useState<DateRange | undefined>()
   const limit = 10
+
+  React.useEffect(() => {
+    setPage(1)
+  }, [typeFilter, datePeriod, dateRange?.from, dateRange?.to])
 
   const handleDownload = React.useCallback(
     async (txId: string) => {
@@ -458,7 +474,22 @@ function TransactionHistory({ refreshKey }: { refreshKey: number }) {
   const load = React.useCallback(async () => {
     setLoading(true)
     try {
-      const res = await WalletAPI.getTransactions({ page, limit })
+      const dateParams = resolveReportSalesApiDateParams(datePeriod, {
+        from: dateRange?.from,
+        to: dateRange?.to,
+      })
+      if (dateParams === null) {
+        setLogs([])
+        setTotalPages(1)
+        return
+      }
+      const res = await WalletAPI.getTransactions({
+        page,
+        limit,
+        type: typeFilter === "all" ? undefined : typeFilter,
+        dateFrom: dateParams.dateFrom,
+        dateTo: dateParams.dateTo,
+      })
       if (res?.success && res.data) {
         setLogs(res.data.logs || [])
         setTotalPages(res.data.pagination?.totalPages || 1)
@@ -470,7 +501,7 @@ function TransactionHistory({ refreshKey }: { refreshKey: number }) {
     } finally {
       setLoading(false)
     }
-  }, [page])
+  }, [page, typeFilter, datePeriod, dateRange?.from, dateRange?.to])
 
   React.useEffect(() => {
     load()
@@ -479,8 +510,97 @@ function TransactionHistory({ refreshKey }: { refreshKey: number }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Transaction history</CardTitle>
-        <CardDescription>Recharges and per-message debits.</CardDescription>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <CardTitle className="text-base">Transaction history</CardTitle>
+            <CardDescription>Recharges and per-message debits.</CardDescription>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Select
+              value={typeFilter}
+              onValueChange={(value: "all" | "credit" | "debit") => setTypeFilter(value)}
+            >
+              <SelectTrigger className="w-[130px]">
+                <SelectValue placeholder="Type" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All types</SelectItem>
+                <SelectItem value="credit">Credit</SelectItem>
+                <SelectItem value="debit">Debit</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select
+              value={datePeriod}
+              onValueChange={(value: ReportDatePeriod) => {
+                setDatePeriod(value)
+                if (value !== "custom") setDateRange(undefined)
+              }}
+            >
+              <SelectTrigger className="w-[160px]">
+                <SelectValue placeholder="Date period" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All time</SelectItem>
+                <SelectItem value="today">Today</SelectItem>
+                <SelectItem value="yesterday">Yesterday</SelectItem>
+                <SelectItem value="last7days">Last 7 days</SelectItem>
+                <SelectItem value="last30days">Last 30 days</SelectItem>
+                <SelectItem value="currentMonth">Current month</SelectItem>
+                <SelectItem value="custom">Custom</SelectItem>
+              </SelectContent>
+            </Select>
+            {datePeriod === "custom" && (
+              <>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="w-36 justify-start text-left font-normal h-9 px-3"
+                    >
+                      <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                      <span className="truncate">
+                        {dateRange?.from ? format(dateRange.from, "dd MMM yyyy") : "From"}
+                      </span>
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start">
+                    <Calendar
+                      mode="single"
+                      selected={dateRange?.from}
+                      onSelect={(d) => setDateRange((r) => ({ from: d, to: r?.to ?? d }))}
+                      disabled={(d) =>
+                        d > new Date() || (dateRange?.to ? d > dateRange.to : false)
+                      }
+                    />
+                  </PopoverContent>
+                </Popover>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="w-36 justify-start text-left font-normal h-9 px-3"
+                    >
+                      <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+                      <span className="truncate">
+                        {dateRange?.to ? format(dateRange.to, "dd MMM yyyy") : "To"}
+                      </span>
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start">
+                    <Calendar
+                      mode="single"
+                      selected={dateRange?.to}
+                      onSelect={(d) => setDateRange((r) => ({ from: r?.from, to: d }))}
+                      disabled={(d) =>
+                        d > new Date() || (dateRange?.from ? d < dateRange.from : false)
+                      }
+                    />
+                  </PopoverContent>
+                </Popover>
+              </>
+            )}
+          </div>
+        </div>
       </CardHeader>
       <CardContent className="p-0">
         <div className="overflow-x-auto">

@@ -7,10 +7,16 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { PublicShell } from "@/components/layout/public-shell"
+import {
+  BreadcrumbListSchema,
+  OrganizationSchema,
+  SoftwareApplicationSchema,
+} from "@/components/seo/structured-data"
 
 export const metadata: Metadata = {
-  title: "India's #1 Salon Management Software | Reduce No-Shows by 40%",
-  description: "Stop losing money. Start growing your salon business. EaseMySalon reduces no-shows by 40%, cuts billing time by 70%, and increases revenue by 35%. Complete salon POS, CRM, appointments, inventory & analytics platform. 7 Day Trial, no credit card required.",
+  title: "Salon Management Software | Grow Your Salon with EaseMySalon",
+  description:
+    "Manage appointments, billing, CRM, staff, inventory and marketing from one platform. Start growing your salon with EaseMySalon today.",
   keywords: [
     "salon management software",
     "salon POS system",
@@ -21,60 +27,109 @@ export const metadata: Metadata = {
     "salon software free trial",
     "reduce salon no-shows software",
     "salon revenue management software",
-    "cloud-based salon management system"
+    "cloud-based salon management system",
   ],
-  openGraph: {
-    title: "India's #1 Salon Management Software | EaseMySalon",
-    description: "Reduce no-shows by 40%, cut billing time by 70%, and increase revenue by 35%. Complete salon POS, CRM, appointments & analytics platform.",
-    images: ['/images/dashboard.png'],
-  },
   alternates: {
-    canonical: '/',
+    canonical: "/",
+  },
+  robots: { index: true, follow: true },
+  openGraph: {
+    type: "website",
+    locale: "en_IN",
+    url: "/",
+    siteName: "EaseMySalon",
+    title: "Salon Management Software | Grow Your Salon with EaseMySalon",
+    description:
+      "Manage appointments, billing, CRM, staff, inventory and marketing from one platform. Start growing your salon with EaseMySalon today.",
+    images: [
+      {
+        url: "/images/dashboard.png",
+        width: 1200,
+        height: 630,
+        alt: "EaseMySalon salon management software dashboard",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Salon Management Software | Grow Your Salon with EaseMySalon",
+    description:
+      "Manage appointments, billing, CRM, staff, inventory and marketing from one platform. Start growing your salon with EaseMySalon today.",
+    images: ["/images/dashboard.png"],
   },
 }
 
-const coreFeatures = [
-  { 
-    icon: Receipt, 
-    title: "POS & Billing", 
+const coreFeatures: Array<{
+  icon: typeof Receipt
+  title: string
+  desc: string
+  benefit: string
+  metric: string
+  href?: string
+  linkLabel?: string
+}> = [
+  {
+    icon: Receipt,
+    title: "POS & Billing",
     desc: "Fast GST-ready billing with split payments and memberships.",
     benefit: "Reduce billing time by 70%",
-    metric: "Average checkout: 30 seconds"
+    metric: "Average checkout: 30 seconds",
+    href: "/salon-billing-software",
+    linkLabel: "Discover Salon Billing Features",
   },
-  { 
-    icon: Calendar, 
-    title: "Appointments", 
+  {
+    icon: Calendar,
+    title: "Appointments",
     desc: "WhatsApp-native calendar with smart reminders and waitlists.",
     benefit: "Cut no-shows by 40%",
-    metric: "Automated reminders via WhatsApp"
+    metric: "Automated reminders via WhatsApp",
+    href: "/appointment-management",
+    linkLabel: "Learn About Appointment Management",
   },
-  { 
-    icon: Users, 
-    title: "CRM & Loyalty", 
+  {
+    icon: Users,
+    title: "CRM & Loyalty",
     desc: "360° client records, segments, packages and campaigns.",
     benefit: "Increase repeat visits by 35%",
-    metric: "Complete client history at your fingertips"
+    metric: "Complete client history at your fingertips",
+    href: "/salon-crm",
+    linkLabel: "Explore Salon CRM Software",
   },
-  { 
-    icon: BarChart3, 
-    title: "Inventory", 
+  {
+    icon: BarChart3,
+    title: "Inventory",
     desc: "Real-time stock, expiry alerts, purchase orders and transfers.",
     benefit: "Reduce wastage by 50%",
-    metric: "Never run out of stock again"
+    metric: "Never run out of stock again",
+    href: "/inventory-management",
+    linkLabel: "See Inventory Management Tools",
   },
-  { 
-    icon: Shield, 
-    title: "Staff & Roles", 
+  {
+    icon: Shield,
+    title: "Staff & Roles",
     desc: "Attendance, commission engine and granular permissions.",
     benefit: "Automate payroll in minutes",
-    metric: "Fair, transparent commission tracking"
+    metric: "Fair, transparent commission tracking",
+    href: "/staff-management",
+    linkLabel: "Explore Salon Staff Management",
   },
-  { 
-    icon: TrendingUp, 
-    title: "Reports", 
+  {
+    icon: TrendingUp,
+    title: "Reports",
     desc: "50+ live dashboards for revenue, clients, staff and branches.",
     benefit: "Make data-driven decisions",
-    metric: "Real-time insights, anytime, anywhere"
+    metric: "Real-time insights, anytime, anywhere",
+    href: "/reports-analytics",
+    linkLabel: "View Salon Reports & Analytics",
+  },
+  {
+    icon: MessageCircle,
+    title: "WhatsApp Marketing",
+    desc: "Reminders, campaigns, and two-way client chat via official Business API.",
+    benefit: "Recover revenue from no-shows",
+    metric: "India's #1 salon channel",
+    href: "/whatsapp-marketing",
+    linkLabel: "Discover WhatsApp Marketing for Salons",
   },
 ]
 
@@ -123,6 +178,9 @@ const solutionSegments = [
 export default function MarketingHome() {
   return (
     <PublicShell>
+      <OrganizationSchema />
+      <SoftwareApplicationSchema />
+      <BreadcrumbListSchema items={[{ name: "Home", url: "/" }]} />
       <section className="relative overflow-hidden bg-gradient-to-br from-[#7C3AED] via-[#8B5CF6] to-[#A855F7] text-white">
         <div className="container relative mx-auto px-4 sm:px-6 lg:px-8 py-20 lg:py-32">
           <div className="grid gap-12 lg:grid-cols-2 items-center">
@@ -130,19 +188,22 @@ export default function MarketingHome() {
               {/* Main Headline */}
               <div className="space-y-6">
                 <h1 className="text-4xl sm:text-5xl lg:text-6xl xl:text-7xl font-bold leading-tight">
-                  Stop Losing Money. Start Growing Your Salon Business.
+                  Salon Growth Software for Modern Salons
                 </h1>
                 <p className="text-xl sm:text-2xl text-purple-100 max-w-2xl mx-auto lg:mx-0 leading-relaxed">
-                  India's #1 Salon Management Software. <span className="font-semibold text-white">Reduce no-shows by 40%</span>, <span className="font-semibold text-white">cut billing time by 70%</span>, and <span className="font-semibold text-white">increase revenue by 35%</span> — all in one platform.
+                  GST billing, WhatsApp appointments, staff commissions, and multi-branch reporting — one platform for salons in Mumbai, Delhi, Bangalore, Pune, and across India. <span className="font-semibold text-white">Reduce no-shows by 40%</span>, <span className="font-semibold text-white">cut billing time by 70%</span>, and <span className="font-semibold text-white">increase revenue by 35%</span>.
+                </p>
+                <p className="text-base sm:text-lg text-purple-200/90 max-w-2xl mx-auto lg:mx-0 leading-relaxed">
+                  Plans from ₹199/month per outlet (GST exclusive). Start with a 7-day free trial — no credit card required. Built for how Indian salons run: UPI payments, walk-ins, memberships, packages, and stylist commissions.
                 </p>
               </div>
               
               {/* CTAs */}
               <div className="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start">
                 <Button size="lg" asChild className="bg-white text-[#7C3AED] hover:bg-gray-100 px-8 py-6 h-auto text-lg font-semibold shadow-2xl hover:shadow-3xl transform hover:scale-105 transition-all">
-                  <Link href="/contact">
+                  <Link href="/demo" aria-label="Book a free EaseMySalon salon software demo">
                     Book a Free Demo
-                    <ArrowRight className="ml-2 h-5 w-5" />
+                    <ArrowRight className="ml-2 h-5 w-5" aria-hidden />
                   </Link>
                 </Button>
                 <Button
@@ -151,7 +212,9 @@ export default function MarketingHome() {
                   asChild
                   className="px-8 py-6 h-auto text-lg border-2 border-white/40 text-white bg-white/5 hover:bg-white/20 backdrop-blur-sm"
                 >
-                  <Link href="/pricing">See Pricing</Link>
+                  <Link href="/pricing" aria-label="Compare EaseMySalon pricing plans">
+                    Compare Pricing Plans
+                  </Link>
                 </Button>
               </div>
               
@@ -223,8 +286,8 @@ export default function MarketingHome() {
       <section className="py-20 bg-white">
         <div className="container mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center space-y-4 max-w-3xl mx-auto">
-            <h2 className="text-3xl md:text-4xl font-semibold text-slate-900">Everything you need to run a high-growth salon</h2>
-            <p className="text-lg text-slate-600">EaseMySalon unifies POS, appointments, CRM, inventory, staff payroll and analytics—no integrations required.</p>
+            <h2 className="text-3xl md:text-4xl font-semibold text-slate-900">Key Features That Help Your Salon Grow</h2>
+            <p className="text-lg text-slate-600">EaseMySalon unifies POS, appointments, CRM, inventory, staff payroll and analytics in one platform—no integrations required.</p>
           </div>
           <div className="mt-12 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
             {coreFeatures.map((feature) => (
@@ -245,8 +308,12 @@ export default function MarketingHome() {
                 </CardHeader>
                 <CardContent>
                   <Button asChild variant="ghost" className="w-full justify-start text-[#7C3AED] hover:text-[#6D28D9]">
-                    <Link href="/features">
-                      Learn more about salon management features <ArrowRight className="ml-2 h-4 w-4" />
+                    <Link
+                      href={feature.href ?? "/features"}
+                      aria-label={feature.linkLabel ?? `Explore ${feature.title} salon software features`}
+                    >
+                      {feature.linkLabel ?? `Explore ${feature.title} for Salons`}
+                      <ArrowRight className="ml-2 h-4 w-4" aria-hidden />
                     </Link>
                   </Button>
                 </CardContent>
@@ -257,9 +324,9 @@ export default function MarketingHome() {
           {/* CTA after features */}
           <div className="mt-12 text-center">
             <Button size="lg" asChild className="bg-[#7C3AED] hover:bg-[#6D28D9] text-white px-8">
-              <Link href="/features">
+              <Link href="/features" aria-label="See all salon management software features">
                 See All Salon Management Features
-                <ArrowRight className="ml-2 h-4 w-4" />
+                <ArrowRight className="ml-2 h-4 w-4" aria-hidden />
               </Link>
             </Button>
           </div>
@@ -270,7 +337,7 @@ export default function MarketingHome() {
         <div className="container mx-auto px-4 sm:px-6 lg:px-8 grid gap-12 lg:grid-cols-2 items-start">
           <div className="space-y-6">
             <p className="text-sm uppercase tracking-wide text-white/60">Why EaseMySalon</p>
-            <h2 className="text-3xl md:text-4xl font-semibold">Purpose-built for Indian salons and spas</h2>
+            <h2 className="text-3xl md:text-4xl font-semibold">Why Salons Choose EaseMySalon</h2>
             <p className="text-lg text-white/70">Every feature is informed by hundreds of hours sitting with front desks, stylists and owners who demanded speed, accuracy and simplicity.</p>
             <div className="grid gap-4 sm:grid-cols-2">
               {uspList.map((usp, idx) => (
@@ -289,9 +356,9 @@ export default function MarketingHome() {
             {/* CTA in Why Choose section */}
             <div className="pt-6">
               <Button size="lg" asChild className="bg-white text-[#7C3AED] hover:bg-gray-100 px-8">
-                <Link href="/contact">
-                  Experience the Difference
-                  <ArrowRight className="ml-2 h-4 w-4" />
+                <Link href="/demo" aria-label="Book a free EaseMySalon demo">
+                  Book a Free Demo
+                  <ArrowRight className="ml-2 h-4 w-4" aria-hidden />
                 </Link>
               </Button>
             </div>
@@ -340,7 +407,13 @@ export default function MarketingHome() {
           </div>
           
           {/* Impact Tiles */}
-          <div className="mt-12 grid gap-6 lg:grid-cols-4">
+          <div className="mt-16 text-center max-w-2xl mx-auto">
+            <h2 className="text-3xl font-semibold text-slate-900">Benefits for Your Business</h2>
+            <p className="mt-2 text-slate-600">
+              Real outcomes Indian salon owners see within the first 90 days of using EaseMySalon.
+            </p>
+          </div>
+          <div className="mt-8 grid gap-6 lg:grid-cols-4">
             {[
               { title: "Launch in 1 day", desc: "Dedicated concierge migrates data, trains teams and goes live overnight.", accent: "from-purple-50 to-indigo-50" },
               { title: "WhatsApp-native desk", desc: "Bookings, reminders and receipts flow over WhatsApp with zero manual chase.", accent: "from-emerald-50 to-teal-50" },
@@ -355,6 +428,33 @@ export default function MarketingHome() {
                 <p className="text-sm text-slate-600 leading-relaxed">{tile.desc}</p>
               </div>
             ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="py-16 bg-gradient-to-r from-[#7C3AED] via-[#8B5CF6] to-[#A855F7] text-white">
+        <div className="container mx-auto px-4 sm:px-6 lg:px-8 max-w-3xl text-center">
+          <h2 className="text-3xl sm:text-4xl font-bold">Book a Free Demo</h2>
+          <p className="mt-3 text-lg text-purple-100">
+            See EaseMySalon live on your own data. Free setup, free migration, no credit card required.
+          </p>
+          <div className="mt-8 flex flex-col items-stretch justify-center gap-3 sm:flex-row sm:items-center sm:justify-center">
+            <Button size="lg" asChild className="bg-white text-[#7C3AED] hover:bg-gray-100">
+              <Link href="/demo" aria-label="Book a free salon management software demo">
+                Book a Free Demo
+                <ArrowRight className="ml-2 h-4 w-4" aria-hidden />
+              </Link>
+            </Button>
+            <Button
+              size="lg"
+              variant="outline"
+              asChild
+              className="border-2 border-white/50 bg-white/5 text-white hover:bg-white/10"
+            >
+              <Link href="/pricing" aria-label="Compare EaseMySalon pricing plans">
+                Compare Pricing Plans
+              </Link>
+            </Button>
           </div>
         </div>
       </section>

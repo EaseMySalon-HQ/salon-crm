@@ -2765,20 +2765,6 @@ app.get('/api/clients/search', authenticateToken, setupBusinessDatabase, async (
       });
     }
 
-    const walkIn = await Client.findOne({ isWalkIn: true }).select(projection).lean();
-    const escaped = String(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const qt = String(q).trim();
-    if (
-      walkIn &&
-      !merged.some((c) => String(c._id) === String(walkIn._id)) &&
-      (/^walk/i.test(qt) ||
-        (walkIn.name && new RegExp(`^${escaped}`, 'i').test(walkIn.name)) ||
-        (walkIn.phone && walkIn.phone.startsWith(qt)))
-    ) {
-      merged = [walkIn, ...merged];
-      if (merged.length > limit) merged = merged.slice(0, limit);
-    }
-
     res.json({ success: true, data: merged });
   } catch (error) {
     logger.error('Error searching clients:', error);
@@ -13116,6 +13102,10 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
 
     // Fire-and-forget: send email/WhatsApp/SMS notifications without blocking the response
     setImmediate(async () => {
+    const isWalkInSale =
+      String(sale?.customerPhone || sale?.customerMobile || '').trim() === WALK_IN_PHONE ||
+      /^walk-?in$/i.test(String(sale?.customerName || '').trim());
+
     logger.debug('📧 Sale customer email check:', {
       customerEmail: sale.customerEmail,
       hasEmail: !!sale.customerEmail,
@@ -13204,6 +13194,10 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
             customerEmail: sale.customerEmail
           });
           if (sendToClients && sale.customerEmail) {
+            if (isWalkInSale) {
+              emailStatus.error = 'Walk-in customer — receipt email skipped';
+              logger.debug('📧 Skipping receipt email for Walk-in sale');
+            } else {
             emailStatus.attempted = true;
             logger.debug(`📧 Attempting to send receipt email to: ${sale.customerEmail}`);
             try {
@@ -13287,6 +13281,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
               });
               emailStatus.error = clientEmailError.message;
             }
+            }
           } else {
             emailStatus.error = !sendToClients ? 'Send to clients disabled' : 'No customer email';
           }
@@ -13366,7 +13361,10 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
               
               logger.debug('📱 [WhatsApp] Customer phone from sale:', customerPhone);
               
-              if (customerPhone) {
+              if (isWalkInSale) {
+                logger.debug('📱 [WhatsApp] Skipping sale receipt for Walk-in customer');
+                whatsappStatus.error = 'Walk-in customer — receipt WhatsApp skipped';
+              } else if (customerPhone) {
                 try {
                   const { canUseAddon: canUseAddonWa } = require('./lib/entitlements');
                   const mainConnectionForWaQuota = await databaseManager.getMainConnection();
@@ -13551,10 +13549,12 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
           }
           if (canSendSms) {
             const customerPhone = sale?.customerPhone || sale?.customerMobile;
-            if (!customerPhone) {
+            if (isWalkInSale) {
+              logger.debug('📱 [SMS] Sale receipt skipped: Walk-in customer');
+            } else if (!customerPhone) {
               logger.debug('📱 [SMS] Sale receipt skipped: no customer phone on bill (customerPhone/customerMobile)');
             }
-            if (customerPhone) {
+            if (!isWalkInSale && customerPhone) {
               const saleForSms = savedSale || sale;
               const { Sale } = req.businessModels;
               const { buildSaleNotificationLinks } = require('./lib/feedback-link-helpers');
@@ -14074,6 +14074,46 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requirePermi
           : Number(existingSale.loyaltyDiscountAmount) || 0,
     };
 
+    let billEditRefundResult = null;
+    if (updateData.refundProcessing) {
+      const billRefundSvc = require('./services/bill-refund-service');
+      const tipAmount = Number(existingSale.tip) || 0;
+      const newTotalAmount =
+        Number(updateData.grossTotal ?? existingSale.grossTotal ?? 0) + tipAmount;
+      const overpaidAmount = Math.max(
+        0,
+        Math.round((oldPaidAmount - newTotalAmount) * 100) / 100,
+      );
+      if (
+        !Number.isFinite(Number(updateData.refundProcessing.amount)) ||
+        Number(updateData.refundProcessing.amount) <= 0
+      ) {
+        updateData.refundProcessing.amount = overpaidAmount;
+      }
+      try {
+        billEditRefundResult = await billRefundSvc.processBillEditRefund({
+          sale: existingSale,
+          refundProcessing: updateData.refundProcessing,
+          newTotalAmount,
+          previousPaidAmount: oldPaidAmount,
+          branchId: req.user.branchId,
+          businessModels: req.businessModels,
+          staffUser: req.user,
+        });
+      } catch (refundErr) {
+        logger.warn('[bill-refund] Failed:', refundErr?.message || refundErr);
+        if (useTransactions && session) {
+          try {
+            await session.abortTransaction();
+          } catch {
+            /* ignore */
+          }
+        }
+        if (session) session.endSession();
+        return res.status(refundErr.status || 400).json({ success: false, error: refundErr.message });
+      }
+    }
+
     const {
       mergePaymentConfiguration: mergePayCfgPut,
       eligibleRedemptionSubtotal: eligibleRedemptionSubtotalPut,
@@ -14081,7 +14121,7 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requirePermi
     } = require('./lib/payment-redemption-eligibility');
     const { BusinessSettings: BizSettingsRedeemPut } = req.businessModels;
     let eligibleRewardPut = null;
-    if (BizSettingsRedeemPut) {
+    if (BizSettingsRedeemPut && !updateData.refundProcessing) {
       const payDocPut = await BizSettingsRedeemPut.findOne().select('paymentConfiguration').lean();
       const payCfgPut = mergePayCfgPut(payDocPut?.paymentConfiguration);
       const itemsForRedeemPut = Array.isArray(existingSale.items) ? existingSale.items : [];
@@ -14111,7 +14151,9 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requirePermi
     }
 
     try {
-      rewardPointsSvcPut.validateSaleLoyaltyBeforeSave(mergedLoyaltyBody, rpSettingsPut, eligibleRewardPut);
+      if (!updateData.refundProcessing) {
+        rewardPointsSvcPut.validateSaleLoyaltyBeforeSave(mergedLoyaltyBody, rpSettingsPut, eligibleRewardPut);
+      }
     } catch (loyErr) {
       return res.status(loyErr.status || 400).json({ success: false, error: loyErr.message });
     }
@@ -14208,9 +14250,9 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requirePermi
               },
               inventoryChanges: inventoryChangesForHistory,
               paymentAdjustments: {
-                refundAmount: 0,
+                refundAmount: billEditRefundResult?.refundAmount ?? 0,
                 additionalAmount: 0,
-                refundMethods: [],
+                refundMethods: billEditRefundResult?.refundMethods ?? [],
               },
             },
           ],
