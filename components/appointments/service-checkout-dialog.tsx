@@ -133,6 +133,7 @@ import {
 import { previewRedemptionLive } from "@/lib/reward-points-preview"
 import {
   completeServiceCheckoutInline,
+  primeCheckoutInvoicePrefix,
   type CheckoutPaymentMethodChoice,
   type ServiceCheckoutTenderSplit,
 } from "@/lib/complete-service-checkout-inline"
@@ -708,7 +709,6 @@ function CheckoutCartServiceStaffControls({
   serviceTotal,
   onQuantityChange,
   onPatchLine,
-  onEditStaff,
 }: {
   lineId: string
   qty: number
@@ -720,24 +720,9 @@ function CheckoutCartServiceStaffControls({
   serviceTotal: number
   onQuantityChange: (qty: number) => void
   onPatchLine: (patch: Partial<ServiceCheckoutLine>) => void
-  onEditStaff: (contributions?: StaffContribution[]) => void
 }) {
-  const hasMultiStaff = staffContributions.length >= 2
-
-  const staffControl = hasMultiStaff ? (
-    <Button
-      type="button"
-      variant="outline"
-      className="h-8 w-full justify-between gap-2 px-2 py-1.5 text-left font-normal sm:flex-1"
-      onClick={() => onEditStaff(staffContributions)}
-      aria-label={`${staffContributions.length} staff selected — edit staff`}
-    >
-      <span className="min-w-0 truncate text-xs">
-        {staffContributions.length} staff selected
-      </span>
-      <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-50" aria-hidden />
-    </Button>
-  ) : staffOptions.length > 0 ? (
+  const staffControl =
+    staffOptions.length > 0 ? (
     <MultiStaffSelector
       key={lineId}
       portalContainer={checkoutPopoverPortal}
@@ -749,6 +734,7 @@ function CheckoutCartServiceStaffControls({
       serviceTotal={serviceTotal}
       compact
       hideShareEditor
+      shareEditorInDropdown
       placeholder={CHECKOUT_NO_STAFF_LABEL}
       popoverContentClassName="!z-[9999]"
       initialContributions={staffContributions}
@@ -757,9 +743,6 @@ function CheckoutCartServiceStaffControls({
           staffContributions: contributions,
           staffId: primaryStaffIdFromContributions(contributions),
         })
-        if (contributions.length >= 2) {
-          onEditStaff(contributions)
-        }
       }}
     />
   ) : null
@@ -1157,6 +1140,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
   const [paymentDialogWalletsRaw, setPaymentDialogWalletsRaw] = useState<any[]>([])
   /** Uncombined usable wallets (for change-to-wallet target pick); UI may show combined row. */
   const [paymentDialogWalletsUncombined, setPaymentDialogWalletsUncombined] = useState<any[]>([])
+  const [paymentDialogWalletSettings, setPaymentDialogWalletSettings] = useState<any>(null)
   const [paymentDialogRewardSettings, setPaymentDialogRewardSettings] = useState<any>(null)
   const [paymentDialogLoyaltyBalance, setPaymentDialogLoyaltyBalance] = useState(0)
   const [payCash, setPayCash] = useState(0)
@@ -1172,9 +1156,15 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
 
   useEffect(() => {
     let cancelled = false
-    void SettingsAPI.getPaymentSettings()
-      .then((res) => {
-        if (cancelled || !res.success || !res.data) return
+    void Promise.all([SettingsAPI.getPaymentSettings(), SettingsAPI.getBusinessSettings()])
+      .then(([res, bizRes]) => {
+        if (cancelled) return
+        if (bizRes.success && bizRes.data) {
+          primeCheckoutInvoicePrefix(
+            bizRes.data.invoicePrefix || bizRes.data.receiptPrefix
+          )
+        }
+        if (!res.success || !res.data) return
         const d = res.data as Record<string, unknown>
         setCheckoutTaxSettings({
           enableTax: d.enableTax !== false,
@@ -2948,6 +2938,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
 
       const walletSum = wallets.reduce((s, w) => s + (Number(w.remainingBalance) || 0), 0)
       if (cancelled) return
+      setPaymentDialogWalletSettings(walletBranchSettings)
       setPaymentDialogWalletsRaw(walletsForUi)
       setPaymentDialogWalletsUncombined(wallets)
       setPaymentDialogRewardSettings(rewardSettings)
@@ -3491,6 +3482,12 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
         existingSaleId: existingSaleId || undefined,
         existingBillNo: existingBillNo || undefined,
         editReason: billEditReason.trim() || undefined,
+        prefetchedRedemption: {
+          rewardPointsSettings: paymentDialogRewardSettings,
+          loyaltyBalance: paymentDialogLoyaltyBalance,
+          walletSettings: paymentDialogWalletSettings,
+          clientWalletsUsable: paymentDialogWalletsUncombined,
+        },
       })
 
       if (inlineResult.ok) {
@@ -5718,9 +5715,6 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                             setServiceLineQuantity(line.id, nextQty)
                           }
                           onPatchLine={(patch) => patchServiceLine(line.id, patch)}
-                          onEditStaff={(contributions) =>
-                            openServiceEdit(line.id, contributions)
-                          }
                         />
                       </div>
                     </div>
