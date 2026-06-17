@@ -305,6 +305,54 @@ async function generateReceiptNumber(): Promise<string> {
   throw lastError instanceof Error ? lastError : new Error("Failed to generate receipt number")
 }
 
+function normalizeCheckoutServiceStaffContributions(
+  svcData: Record<string, unknown>,
+  staff: any[],
+  lineTotal: number
+): { staffId: string; staffContributions: any[] } {
+  const raw = Array.isArray(svcData.staffContributions)
+    ? (svcData.staffContributions as Array<Record<string, unknown>>)
+    : []
+  if (raw.length > 0) {
+    const staffContributions = raw.map((c) => {
+      const staffId = String(c.staffId || "")
+      const member = staff.find((s) => String(s._id || s.id) === staffId)
+      const pct = Number(c.percentage) || (raw.length === 1 ? 100 : 0)
+      const amountFromPayload = Number(c.amount)
+      return {
+        staffId,
+        staffName: String(c.staffName || member?.name || "Unassigned Staff"),
+        percentage: pct,
+        amount: Number.isFinite(amountFromPayload)
+          ? amountFromPayload
+          : lineTotal > 0
+            ? (lineTotal * pct) / 100
+            : 0,
+      }
+    })
+    return {
+      staffId: String(svcData.staffId || staffContributions[0]?.staffId || ""),
+      staffContributions,
+    }
+  }
+  const staffId = String(svcData.staffId || "")
+  const staffMember = staff.find((s) => String(s._id || s.id) === staffId)
+  if (staffId && staffMember) {
+    return {
+      staffId,
+      staffContributions: [
+        {
+          staffId,
+          staffName: staffMember.name || String(svcData.staffName || ""),
+          percentage: 100,
+          amount: lineTotal,
+        },
+      ],
+    }
+  }
+  return { staffId, staffContributions: [] }
+}
+
 async function buildSaleLinesFromAppointmentPayload(
   appointmentData: Record<string, unknown>,
   services: any[],
@@ -335,7 +383,6 @@ async function buildSaleLinesFromAppointmentPayload(
     for (const svcData of appointmentData.services as any[]) {
       const service = services.find((s) => (s._id || s.id) === svcData.serviceId)
       if (!service) continue
-      const staffMember = staff.find((s) => (s._id || s.id) === svcData.staffId)
       const qty = Math.max(1, Math.floor(Number(svcData.quantity) || 1))
       const unitPrice = Number(svcData.price) || Number(service.price) || 0
       const baseAmount = unitPrice * qty
@@ -349,26 +396,21 @@ async function buildSaleLinesFromAppointmentPayload(
         applyTax,
         priceInclusive
       )
+      const { staffId, staffContributions } = normalizeCheckoutServiceStaffContributions(
+        svcData,
+        staff,
+        lineTotal
+      )
       serviceItemsToAdd.push({
         id: `${Date.now()}-${Math.random()}`,
         serviceId: service._id || service.id,
-        staffId: svcData.staffId || "",
+        staffId,
         quantity: qty,
         price: unitPrice,
         discount: discPct,
         total: lineTotal,
-        staffContributions:
-          svcData.staffId && staffMember
-            ? [
-                {
-                  staffId: svcData.staffId,
-                  staffName: staffMember.name || svcData.staffName || "",
-                  percentage: 100,
-                  amount: lineTotal,
-                },
-              ]
-            : [],
-        appointmentLineLocked: true,
+        staffContributions,
+        appointmentLineLocked: Boolean(svcData.appointmentLineLocked),
       })
     }
   } else if (appointmentData.serviceId) {

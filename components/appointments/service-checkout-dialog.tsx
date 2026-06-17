@@ -71,6 +71,15 @@ import { useToast } from "@/hooks/use-toast"
 import { useCurrency } from "@/hooks/use-currency"
 import { effectiveMembershipPlanDiscountPercent } from "@/lib/membership-plan-discount"
 import { cn } from "@/lib/utils"
+import { MultiStaffSelector, type StaffContribution } from "@/components/ui/multi-staff-selector"
+import {
+  STAFF_SHARE_VALIDATION_MESSAGE,
+  contributionsFromLegacyStaff,
+  formatStaffContributionsLabel,
+  isStaffShareValid,
+  primaryStaffIdFromContributions,
+} from "@/lib/staff-share-utils"
+import { getLinePreTaxTotal } from "@/lib/staff-line-revenue"
 import { expandBundleToLines, isBundleService } from "@/lib/bundle-service"
 import { clientStore, type Client } from "@/lib/client-store"
 import {
@@ -149,6 +158,8 @@ export type ServiceCheckoutLine = {
   id: string
   serviceId: string
   staffId: string
+  /** Multi-staff revenue split (percentages must sum to 100 when length > 1). */
+  staffContributions?: StaffContribution[]
   name: string
   duration: number
   /** Unit price before quantity multiplier. */
@@ -255,6 +266,36 @@ type CartLineEditDraft = {
 type ServiceLineEditDraft = CartLineEditDraft & {
   discountValue: number
   discountIsPercent: boolean
+  staffContributions: StaffContribution[]
+}
+
+function getServiceLineStaffContributions(line: ServiceCheckoutLine): StaffContribution[] {
+  if (line.staffContributions && line.staffContributions.length > 0) {
+    return line.staffContributions
+  }
+  if (line.staffId) {
+    return [{ staffId: line.staffId, staffName: "", percentage: 100, amount: 0 }]
+  }
+  return []
+}
+
+function serviceLineStaffIsValid(line: ServiceCheckoutLine): boolean {
+  const contribs = getServiceLineStaffContributions(line)
+  if (contribs.length === 0 || !contribs.every((c) => c.staffId)) return false
+  if (contribs.length === 1) return true
+  return isStaffShareValid(contribs)
+}
+
+function applyStaffContributionsToLine(
+  line: ServiceCheckoutLine,
+  contributions: StaffContribution[]
+): ServiceCheckoutLine {
+  const staffId = primaryStaffIdFromContributions(contributions)
+  return {
+    ...line,
+    staffContributions: contributions,
+    staffId,
+  }
 }
 
 function cartLineEditDraftFrom(line: {
@@ -308,6 +349,14 @@ function lineNetAfterLineDiscount(
     return Math.max(0, base * (1 - pct / 100))
   }
   return Math.max(0, base - d)
+}
+
+function serviceLineStaffPreTaxTotal(line: ServiceCheckoutLine): number {
+  const qty = serviceLineQuantity(line)
+  const unit = Number(line.price) || 0
+  const discVal = Number(line.discountValue) || 0
+  const discIsPct = line.discountIsPercent !== false
+  return lineNetAfterLineDiscount(unit, qty, discVal, discIsPct)
 }
 
 function catalogProductStockUnits(product: any | undefined): number {
@@ -648,6 +697,129 @@ function CheckoutLineDiscountRow({
   )
 }
 
+function CheckoutCartServiceStaffControls({
+  lineId,
+  qty,
+  discVal,
+  discIsPct,
+  staffContributions,
+  staffOptions,
+  checkoutPopoverPortal,
+  serviceTotal,
+  onQuantityChange,
+  onPatchLine,
+  onEditStaff,
+}: {
+  lineId: string
+  qty: number
+  discVal: number
+  discIsPct: boolean
+  staffContributions: StaffContribution[]
+  staffOptions: Array<{ id: string; name: string }>
+  checkoutPopoverPortal: HTMLElement | null
+  serviceTotal: number
+  onQuantityChange: (qty: number) => void
+  onPatchLine: (patch: Partial<ServiceCheckoutLine>) => void
+  onEditStaff: (contributions?: StaffContribution[]) => void
+}) {
+  const hasMultiStaff = staffContributions.length >= 2
+
+  const staffControl = hasMultiStaff ? (
+    <Button
+      type="button"
+      variant="outline"
+      className="h-8 w-full justify-between gap-2 px-2 py-1.5 text-left font-normal sm:flex-1"
+      onClick={() => onEditStaff(staffContributions)}
+      aria-label={`${staffContributions.length} staff selected — edit staff`}
+    >
+      <span className="min-w-0 truncate text-xs">
+        {staffContributions.length} staff selected
+      </span>
+      <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-50" aria-hidden />
+    </Button>
+  ) : staffOptions.length > 0 ? (
+    <MultiStaffSelector
+      key={lineId}
+      portalContainer={checkoutPopoverPortal}
+      staffList={staffOptions.map((s) => ({
+        _id: s.id,
+        id: s.id,
+        name: s.name,
+      }))}
+      serviceTotal={serviceTotal}
+      compact
+      hideShareEditor
+      placeholder={CHECKOUT_NO_STAFF_LABEL}
+      popoverContentClassName="!z-[9999]"
+      initialContributions={staffContributions}
+      onStaffContributionsChange={(contributions) => {
+        onPatchLine({
+          staffContributions: contributions,
+          staffId: primaryStaffIdFromContributions(contributions),
+        })
+        if (contributions.length >= 2) {
+          onEditStaff(contributions)
+        }
+      }}
+    />
+  ) : null
+
+  return (
+    <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+      <div className="flex items-center gap-2">
+        <div className="flex h-8 items-center gap-0.5 rounded-lg border border-border/80 bg-background">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 w-8 shrink-0 rounded-md p-0"
+            onClick={() => onQuantityChange(qty - 1)}
+            disabled={qty <= 1}
+            aria-label="Decrease quantity"
+          >
+            <Minus className="h-3.5 w-3.5" />
+          </Button>
+          <span className="w-8 text-center text-sm font-semibold tabular-nums">{qty}</span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 w-8 shrink-0 rounded-md p-0"
+            onClick={() => onQuantityChange(qty + 1)}
+            aria-label="Increase quantity"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      </div>
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+        <CheckoutLineDiscountRow
+          discountValue={discVal}
+          discountIsPercent={discIsPct}
+          onDiscountValueChange={(v) =>
+            onPatchLine({ discountValue: v, membershipAutoDiscount: false })
+          }
+          onSetPercentMode={() =>
+            onPatchLine({
+              discountIsPercent: true,
+              discountValue: 0,
+              membershipAutoDiscount: false,
+            })
+          }
+          onSetFixedMode={() =>
+            onPatchLine({
+              discountIsPercent: false,
+              discountValue: 0,
+              membershipAutoDiscount: false,
+            })
+          }
+        />
+        {staffControl ? <div className="min-w-0 w-full sm:flex-1">{staffControl}</div> : null}
+      </div>
+    </div>
+  )
+}
+
 function cloneLines(lines: ServiceCheckoutLine[]): ServiceCheckoutLine[] {
   return lines.map((l) => ({ ...l }))
 }
@@ -901,12 +1073,14 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
   const [loadingPackages, setLoadingPackages] = useState(false)
   /** Loaded for checkout; options always filtered with isStaffEligibleForAppointmentScheduling. */
   const [saleStaffCatalog, setSaleStaffCatalog] = useState<any[]>([])
+  const [checkoutPopoverPortal, setCheckoutPopoverPortal] = useState<HTMLElement | null>(null)
 
   const [editingServiceLineId, setEditingServiceLineId] = useState<string | null>(null)
   const [pendingCatalogService, setPendingCatalogService] = useState<PendingCatalogService | null>(
     null
   )
   const [serviceEditDraft, setServiceEditDraft] = useState<ServiceLineEditDraft | null>(null)
+  const [serviceEditStaffValid, setServiceEditStaffValid] = useState(true)
   /** When true, price input shows empty instead of 0 while focused for easier entry. */
   const [servicePriceInputEmpty, setServicePriceInputEmpty] = useState(false)
 
@@ -2156,9 +2330,11 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       price: 0,
       quantity: 1,
       staffId: "",
+      staffContributions: [],
       discountValue: 0,
       discountIsPercent: true,
     })
+    setServiceEditStaffValid(false)
   }
 
   function addCatalogService(svc: any) {
@@ -2229,29 +2405,30 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     )
   }
 
-  function setServiceLineStaff(lineId: string, staffId: string) {
-    setLines((prev) =>
-      prev.map((l) => (l.id === lineId ? { ...l, staffId } : l))
-    )
-  }
-
   function patchServiceLine(lineId: string, patch: Partial<ServiceCheckoutLine>) {
     setLines((prev) => prev.map((l) => (l.id === lineId ? { ...l, ...patch } : l)))
   }
 
-  function openServiceEdit(lineId: string) {
+  function openServiceEdit(lineId: string, contributionsOverride?: StaffContribution[]) {
     const line = lines.find((l) => l.id === lineId)
     if (!line) return
     closeProductEdit()
     closeCatalogLineEdit()
     setEditingServiceLineId(lineId)
+    const contribs = (contributionsOverride ?? getServiceLineStaffContributions(line)).map((c) => ({
+      ...c,
+      staffName:
+        c.staffName || staffOptions.find((s) => s.id === c.staffId)?.name || "",
+    }))
     setServiceEditDraft({
       price: Math.max(0, Number(line.price) || 0),
       quantity: serviceLineQuantity(line),
-      staffId: line.staffId || "",
+      staffId: line.staffId || primaryStaffIdFromContributions(contribs),
+      staffContributions: contribs,
       discountValue: Math.max(0, Number(line.discountValue) || 0),
       discountIsPercent: line.discountIsPercent !== false,
     })
+    setServiceEditStaffValid(serviceLineStaffIsValid({ ...line, staffContributions: contribs }))
   }
 
   function closeServiceEdit() {
@@ -2263,6 +2440,24 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
 
   function applyServiceEdit() {
     if (!editingServiceLineId || !serviceEditDraft) return
+    if (!serviceEditStaffValid) {
+      toast({
+        title: "Invalid staff share",
+        description: STAFF_SHARE_VALIDATION_MESSAGE,
+        variant: "destructive",
+      })
+      return
+    }
+    const contributions = serviceEditDraft.staffContributions
+    const primaryStaffId = primaryStaffIdFromContributions(contributions)
+    if (!primaryStaffId) {
+      toast({
+        title: "Assign staff",
+        description: "Select at least one staff member for this service.",
+        variant: "destructive",
+      })
+      return
+    }
     if (editingServiceLineId === PENDING_ZERO_PRICE_SERVICE_LINE_ID) {
       if (!pendingCatalogService) return
       const price = Math.max(0, Number(serviceEditDraft.price) || 0)
@@ -2279,18 +2474,21 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       const discountIsPercent = serviceEditDraft.discountIsPercent !== false
       setLines((prev) => [
         ...prev,
-        {
-          id: `add-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          serviceId: pendingCatalogService.serviceId,
-          staffId: serviceEditDraft.staffId,
-          name: pendingCatalogService.name,
-          duration: pendingCatalogService.duration,
-          price,
-          quantity,
-          locked: false,
-          discountValue,
-          discountIsPercent,
-        },
+        applyStaffContributionsToLine(
+          {
+            id: `add-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            serviceId: pendingCatalogService.serviceId,
+            staffId: primaryStaffId,
+            name: pendingCatalogService.name,
+            duration: pendingCatalogService.duration,
+            price,
+            quantity,
+            locked: false,
+            discountValue,
+            discountIsPercent,
+          },
+          contributions
+        ),
       ])
       closeServiceEdit()
       return
@@ -2305,15 +2503,18 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
               const discountTouched =
                 discountValue !== Math.max(0, Number(l.discountValue) || 0) ||
                 discountIsPercent !== (l.discountIsPercent !== false)
-              return {
-                ...l,
-                price: serviceEditDraft.price,
-                quantity,
-                staffId: serviceEditDraft.staffId,
-                discountValue,
-                discountIsPercent,
-                membershipAutoDiscount: discountTouched ? false : l.membershipAutoDiscount,
-              }
+              return applyStaffContributionsToLine(
+                {
+                  ...l,
+                  price: serviceEditDraft.price,
+                  quantity,
+                  staffId: primaryStaffId,
+                  discountValue,
+                  discountIsPercent,
+                  membershipAutoDiscount: discountTouched ? false : l.membershipAutoDiscount,
+                },
+                contributions
+              )
             })()
           : l
       )
@@ -2623,9 +2824,13 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       return false
     }
     if (lines.length > 0) {
-      const missingStaff = lines.some((l) => l.serviceId && !l.staffId)
+      const missingStaff = lines.some((l) => l.serviceId && !serviceLineStaffIsValid(l))
       if (missingStaff) {
-        toast({ title: "Assign staff", description: "Every service needs a staff member.", variant: "destructive" })
+        toast({
+          title: "Assign staff",
+          description: "Every service needs staff assigned with shares totalling 100%.",
+          variant: "destructive",
+        })
         return false
       }
       const missingService = lines.some((l) => !l.serviceId)
@@ -2794,15 +2999,30 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       checkoutPreferredPaymentMethod: preferred,
       notes: [notes?.trim(), checkoutSaleNote.trim()].filter(Boolean).join("\n\n") || "",
       services: lines.map((s) => {
-        const sid = String(s.staffId || "")
+        const contribs = getServiceLineStaffContributions(s)
+        const primaryId = primaryStaffIdFromContributions(contribs)
         const q = serviceLineQuantity(s)
         const staffMember =
-          staff.find((st: any) => String(st._id || st.id) === sid) ||
-          saleStaffCatalog.find((st: any) => String(st._id || st.id) === sid)
+          staff.find((st: any) => String(st._id || st.id) === primaryId) ||
+          saleStaffCatalog.find((st: any) => String(st._id || st.id) === primaryId)
+        const linePreTax = serviceLineStaffPreTaxTotal(s)
+        const staffContributions = contribs.map((c) => {
+          const member =
+            staff.find((st: any) => String(st._id || st.id) === c.staffId) ||
+            saleStaffCatalog.find((st: any) => String(st._id || st.id) === c.staffId)
+          const pct = Number(c.percentage) || (contribs.length === 1 ? 100 : 0)
+          return {
+            staffId: c.staffId,
+            staffName: c.staffName || member?.name || "",
+            percentage: pct,
+            amount: linePreTax > 0 ? (linePreTax * pct) / 100 : 0,
+          }
+        })
         return {
           serviceId: s.serviceId,
-          staffId: s.staffId,
-          staffName: staffMember?.name || "",
+          staffId: primaryId,
+          staffName: staffMember?.name || staffContributions[0]?.staffName || "",
+          staffContributions,
           name: s.name,
           price: s.price,
           duration: s.duration,
@@ -3783,72 +4003,75 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                 </div>
               </div>
             </div>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label>Staff</Label>
-                {staffOptions.length > 0 ? (
-                  <Select
-                    value={
-                      serviceEditDraft.staffId
-                        ? serviceEditDraft.staffId
-                        : CHECKOUT_NO_STAFF_SELECT_VALUE
-                    }
-                    onValueChange={(v) =>
-                      setServiceEditDraft((d) =>
-                        d
-                          ? {
-                              ...d,
-                              staffId: v === CHECKOUT_NO_STAFF_SELECT_VALUE ? "" : v,
-                            }
-                          : d
-                      )
-                    }
-                  >
-                    <SelectTrigger className="h-10 rounded-lg text-sm">
-                      <SelectValue placeholder={CHECKOUT_NO_STAFF_LABEL} />
-                    </SelectTrigger>
-                    <SelectContent
-                      position="popper"
-                      className="z-[260] max-h-[min(24rem,70vh)]"
-                    >
-                      <SelectItem value={CHECKOUT_NO_STAFF_SELECT_VALUE}>
-                        {CHECKOUT_NO_STAFF_LABEL}
-                      </SelectItem>
-                      {staffOptions.map((s) => (
-                        <SelectItem key={s.id} value={s.id}>
-                          {s.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                ) : (
-                  <p className="rounded-lg border border-amber-200/80 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                    No staff loaded — refresh the page or add staff in settings.
-                  </p>
-                )}
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="svc-checkout-discount">Discount</Label>
-                <CheckoutLineDiscountRow
-                  variant="form"
-                  inputId="svc-checkout-discount"
-                  discountValue={serviceEditDraft.discountValue}
-                  discountIsPercent={serviceEditDraft.discountIsPercent}
-                  onDiscountValueChange={(v) =>
-                    setServiceEditDraft((d) => (d ? { ...d, discountValue: v } : d))
+            <div className="space-y-2">
+              <Label>Staff</Label>
+              {staffOptions.length > 0 ? (
+                <MultiStaffSelector
+                  key={editingServiceLineId || "edit"}
+                  staffList={staffOptions.map((s) => ({
+                    _id: s.id,
+                    id: s.id,
+                    name: s.name,
+                  }))}
+                  serviceTotal={
+                    serviceEditDraft
+                      ? lineNetAfterLineDiscount(
+                          serviceEditDraft.price,
+                          Math.max(1, Math.floor(serviceEditDraft.quantity) || 1),
+                          serviceEditDraft.discountValue,
+                          serviceEditDraft.discountIsPercent
+                        )
+                      : 0
                   }
-                  onSetPercentMode={() =>
+                  placeholder={CHECKOUT_NO_STAFF_LABEL}
+                  popoverContentClassName="!z-[9999]"
+                  initialContributions={serviceEditDraft.staffContributions.map((c) => ({
+                    ...c,
+                    staffName:
+                      c.staffName ||
+                      staffOptions.find((s) => s.id === c.staffId)?.name ||
+                      "",
+                  }))}
+                  onStaffContributionsChange={(contributions) => {
                     setServiceEditDraft((d) =>
-                      d ? { ...d, discountIsPercent: true, discountValue: 0 } : d
+                      d
+                        ? {
+                            ...d,
+                            staffContributions: contributions,
+                            staffId: primaryStaffIdFromContributions(contributions),
+                          }
+                        : d
                     )
-                  }
-                  onSetFixedMode={() =>
-                    setServiceEditDraft((d) =>
-                      d ? { ...d, discountIsPercent: false, discountValue: 0 } : d
-                    )
-                  }
+                  }}
+                  onValidationChange={setServiceEditStaffValid}
                 />
-              </div>
+              ) : (
+                <p className="rounded-lg border border-amber-200/80 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                  No staff loaded — refresh the page or add staff in settings.
+                </p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="svc-checkout-discount">Discount</Label>
+              <CheckoutLineDiscountRow
+                variant="form"
+                inputId="svc-checkout-discount"
+                discountValue={serviceEditDraft.discountValue}
+                discountIsPercent={serviceEditDraft.discountIsPercent}
+                onDiscountValueChange={(v) =>
+                  setServiceEditDraft((d) => (d ? { ...d, discountValue: v } : d))
+                }
+                onSetPercentMode={() =>
+                  setServiceEditDraft((d) =>
+                    d ? { ...d, discountIsPercent: true, discountValue: 0 } : d
+                  )
+                }
+                onSetFixedMode={() =>
+                  setServiceEditDraft((d) =>
+                    d ? { ...d, discountIsPercent: false, discountValue: 0 } : d
+                  )
+                }
+              />
             </div>
             <div className="flex flex-row flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
               <div>
@@ -3886,6 +4109,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                   type="button"
                   className="h-10 rounded-full bg-violet-600 px-6 font-semibold text-white hover:bg-violet-700"
                   onClick={applyServiceEdit}
+                  disabled={!serviceEditStaffValid}
                 >
                   Apply
                 </Button>
@@ -5391,16 +5615,23 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                   </p>
                 ) : null}
                 {lines.map((line) => {
-                  const staffName =
-                    staffOptions.find((s) => s.id === line.staffId)?.name ||
+                  const staffContributions = getServiceLineStaffContributions(line).map((c) => ({
+                    ...c,
+                    staffName:
+                      c.staffName ||
+                      staffOptions.find((s) => s.id === c.staffId)?.name ||
+                      "",
+                  }))
+                  const staffLabel = formatStaffContributionsLabel(
+                    staffContributions,
                     CHECKOUT_NO_STAFF_LABEL
+                  )
                   const isLocked = line.locked === true
                   const qty = serviceLineQuantity(line)
                   const unit = Number(line.price) || 0
                   const discVal = Number(line.discountValue) || 0
                   const discIsPct = line.discountIsPercent !== false
                   const lineTotal = lineNetAfterLineDiscount(unit, qty, discVal, discIsPct)
-                  const staffTriggerId = `cart-service-staff-${line.id}`
                   return (
                     <div
                       key={line.id}
@@ -5424,7 +5655,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                             <p className="text-xs text-muted-foreground">
                               Service · ₹
                               {unit.toLocaleString("en-IN", { maximumFractionDigits: 2 })} each ·{" "}
-                              {formatDurationShort(line.duration)} · {staffName}
+                              {formatDurationShort(line.duration)} · {staffLabel}
                               {qty > 1 ? ` · ×${qty}` : ""}
                             </p>
                           </div>
@@ -5474,94 +5705,23 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                             </div>
                           </div>
                         </div>
-                        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-                          <div className="flex items-center gap-2">
-                            <div className="flex h-8 items-center gap-0.5 rounded-lg border border-border/80 bg-background">
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                className="h-8 w-8 shrink-0 rounded-md p-0"
-                                onClick={() => setServiceLineQuantity(line.id, qty - 1)}
-                                disabled={qty <= 1}
-                                aria-label="Decrease quantity"
-                              >
-                                <Minus className="h-3.5 w-3.5" />
-                              </Button>
-                              <span className="w-8 text-center text-sm font-semibold tabular-nums">
-                                {qty}
-                              </span>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                className="h-8 w-8 shrink-0 rounded-md p-0"
-                                onClick={() => setServiceLineQuantity(line.id, qty + 1)}
-                                aria-label="Increase quantity"
-                              >
-                                <Plus className="h-3.5 w-3.5" />
-                              </Button>
-                            </div>
-                          </div>
-                          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-                            <CheckoutLineDiscountRow
-                              discountValue={discVal}
-                              discountIsPercent={discIsPct}
-                              onDiscountValueChange={(v) =>
-                                patchServiceLine(line.id, {
-                                  discountValue: v,
-                                  membershipAutoDiscount: false,
-                                })
-                              }
-                              onSetPercentMode={() =>
-                                patchServiceLine(line.id, {
-                                  discountIsPercent: true,
-                                  discountValue: 0,
-                                  membershipAutoDiscount: false,
-                                })
-                              }
-                              onSetFixedMode={() =>
-                                patchServiceLine(line.id, {
-                                  discountIsPercent: false,
-                                  discountValue: 0,
-                                  membershipAutoDiscount: false,
-                                })
-                              }
-                            />
-                            {staffOptions.length > 0 ? (
-                              <div className="min-w-0 w-full sm:w-[9.5rem] sm:max-w-[9.5rem] sm:flex-1">
-                                <Select
-                                  value={
-                                    line.staffId ? line.staffId : CHECKOUT_NO_STAFF_SELECT_VALUE
-                                  }
-                                  onValueChange={(v) =>
-                                    setServiceLineStaff(
-                                      line.id,
-                                      v === CHECKOUT_NO_STAFF_SELECT_VALUE ? "" : v
-                                    )
-                                  }
-                                >
-                                  <SelectTrigger
-                                    id={staffTriggerId}
-                                    className="h-8 w-full max-w-none rounded-lg px-2 text-xs"
-                                  >
-                                    <SelectValue placeholder={CHECKOUT_NO_STAFF_LABEL} />
-                                  </SelectTrigger>
-                                  <SelectContent position="popper" className={cartSelectContentClass}>
-                                    <SelectItem value={CHECKOUT_NO_STAFF_SELECT_VALUE}>
-                                      {CHECKOUT_NO_STAFF_LABEL}
-                                    </SelectItem>
-                                    {staffOptions.map((s) => (
-                                      <SelectItem key={s.id} value={s.id}>
-                                        {s.name}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                            ) : null}
-                          </div>
-                        </div>
+                        <CheckoutCartServiceStaffControls
+                          lineId={line.id}
+                          qty={qty}
+                          discVal={discVal}
+                          discIsPct={discIsPct}
+                          staffContributions={staffContributions}
+                          staffOptions={staffOptions}
+                          checkoutPopoverPortal={checkoutPopoverPortal}
+                          serviceTotal={serviceLineStaffPreTaxTotal(line)}
+                          onQuantityChange={(nextQty) =>
+                            setServiceLineQuantity(line.id, nextQty)
+                          }
+                          onPatchLine={(patch) => patchServiceLine(line.id, patch)}
+                          onEditStaff={(contributions) =>
+                            openServiceEdit(line.id, contributions)
+                          }
+                        />
                       </div>
                     </div>
                   )
@@ -7283,6 +7443,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     return (
       <>
         <div
+          ref={setCheckoutPopoverPortal}
           role="dialog"
           aria-modal="true"
           aria-label="Checkout"

@@ -81,10 +81,25 @@ export function mapSaleToServiceCheckoutInitialState(sale: Record<string, unknow
     const name = String(item.name || "")
 
     if (type === "service") {
+      const rawContribs = Array.isArray(item.staffContributions)
+        ? (item.staffContributions as Array<Record<string, unknown>>)
+        : []
+      const staffContributions =
+        rawContribs.length > 0
+          ? rawContribs.map((c) => ({
+              staffId: normalizeId(c.staffId),
+              staffName: String(c.staffName || item.staffName || ""),
+              percentage: Number(c.percentage) || 0,
+              amount: Number(c.amount) || 0,
+            }))
+          : staffId
+            ? [{ staffId, staffName: String(item.staffName || ""), percentage: 100, amount: 0 }]
+            : []
       lines.push({
         id: `svc-${index}-${normalizeId(item.serviceId) || index}`,
         serviceId: normalizeId(item.serviceId),
-        staffId,
+        staffId: staffId || staffContributions[0]?.staffId || "",
+        staffContributions,
         name,
         duration: Number(item.duration) || 60,
         price,

@@ -2530,16 +2530,6 @@ export function SalesReport() {
               )}
             </div>
             <div className="flex items-center gap-3">
-              {(reportType === "sales" || reportType === "staff-tip") && (
-                <Button
-                  onClick={() => router.push('/reports/unpaid-bills')}
-                  variant="outline"
-                  className="border-red-200 text-red-700 hover:bg-red-50 hover:border-red-300"
-                >
-                  <AlertCircle className="h-4 w-4 mr-2" />
-                  View Unpaid Bills
-                </Button>
-              )}
               {(reportType === "sales" || reportType === "staff-tip" || reportType === "summary" || reportType === "service-list" || reportType === "product-list" || reportType === "appointment-list" || reportType === "deleted-invoice" || reportType === "unpaid-part-paid" || reportType === "cash-movement" || reportType === "gst") && canExport && (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>

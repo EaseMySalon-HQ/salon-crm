@@ -3530,12 +3530,16 @@ export class WalletAPI {
     limit?: number
     type?: "credit" | "debit"
     channel?: "sms" | "whatsapp"
+    dateFrom?: string
+    dateTo?: string
   }): Promise<ApiResponse<WalletTransactionsResponse>> {
     const params = new URLSearchParams()
     if (filters?.page) params.append("page", String(filters.page))
     if (filters?.limit) params.append("limit", String(filters.limit))
     if (filters?.type) params.append("type", filters.type)
     if (filters?.channel) params.append("channel", filters.channel)
+    if (filters?.dateFrom) params.append("dateFrom", filters.dateFrom)
+    if (filters?.dateTo) params.append("dateTo", filters.dateTo)
     const qs = params.toString()
     const response = await apiClient.get(
       qs ? `/wallet/transactions?${qs}` : "/wallet/transactions"
@@ -3964,7 +3968,9 @@ export interface PlanCheckoutVerifyResponse {
   billingPeriod?: PlanBillingPeriod
   newRenewalDate?: string
   alreadyApplied?: boolean
+  freeActivation?: boolean
   invoiceNumber?: string
+  walletBalancePaise?: number
   amounts?: {
     basePaise: number
     gstPaise: number
@@ -4049,6 +4055,17 @@ export class PlanCheckoutAPI {
     payload: PlanCheckoutVerifyPayload
   ): Promise<ApiResponse<PlanCheckoutVerifyResponse>> {
     const response = await apiClient.post("/plan/checkout/verify", payload)
+    return response.data
+  }
+
+  static async payWithWallet(
+    planId: PlanSubscriptionId,
+    billingPeriod: PlanBillingPeriod
+  ): Promise<ApiResponse<PlanCheckoutVerifyResponse>> {
+    const response = await apiClient.post("/plan/checkout/wallet", {
+      planId,
+      billingPeriod,
+    })
     return response.data
   }
 
