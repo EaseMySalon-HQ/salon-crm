@@ -38,6 +38,8 @@ interface MultiStaffSelectorProps {
   portalContainer?: HTMLElement | null
   /** When set, staff share row (2+ staff) renders in this host instead of below the trigger. */
   shareRowHost?: HTMLElement | null
+  /** When true with hideShareEditor, show % inputs inside the staff dropdown for selected staff (2+). */
+  shareEditorInDropdown?: boolean
 }
 
 function staffKey(staff: { _id?: string; id?: string }) {
@@ -59,6 +61,7 @@ export function MultiStaffSelector({
   popoverContentClassName,
   portalContainer: portalContainerProp,
   shareRowHost,
+  shareEditorInDropdown = false,
 }: MultiStaffSelectorProps) {
   const sharesManuallyEdited = useRef(false)
   const onChangeRef = useRef(onStaffContributionsChange)
@@ -144,6 +147,36 @@ export function MultiStaffSelector({
   }
 
   const showShareEditor = !hideShareEditor && selectedStaffIds.length >= 2
+  const showShareInDropdown =
+    shareEditorInDropdown && hideShareEditor && selectedStaffIds.length >= 2
+
+  const sharePercentInput = (index: number, staffName: string, className?: string) => (
+    <div
+      className={cn(
+        "inline-flex h-6 shrink-0 items-center justify-end rounded-md border border-input bg-background px-1",
+        className
+      )}
+      onClick={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <span className="shrink-0 text-[10px] leading-none text-muted-foreground" aria-hidden>
+        %
+      </span>
+      <Input
+        type="number"
+        min={0}
+        max={100}
+        step={1}
+        disabled={disabled}
+        value={Number.isFinite(percentages[index]) ? percentages[index] : 0}
+        onChange={(e) => handlePercentageChange(index, e.target.value)}
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        className="h-5 w-7 min-w-0 border-0 bg-transparent p-0 pl-0.5 text-right text-[11px] font-medium leading-none tabular-nums shadow-none outline-none [appearance:textfield] focus-visible:border-0 focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+        aria-label={`${staffName} share percentage`}
+      />
+    </div>
+  )
 
   const triggerLabel = useMemo(() => {
     if (selectedStaffIds.length === 0) return null
@@ -261,6 +294,7 @@ export function MultiStaffSelector({
               const id = staffKey(staff)
               if (!id) return null
               const checked = selectedStaffIds.includes(id)
+              const shareIndex = selectedStaffIds.indexOf(id)
               return (
                 <button
                   key={id}
@@ -279,11 +313,21 @@ export function MultiStaffSelector({
                   >
                     {checked ? <Check className="h-3 w-3" /> : null}
                   </span>
-                  <span className="truncate">{staff.name}</span>
+                  <span className="min-w-0 flex-1 truncate text-left">{staff.name}</span>
+                  {showShareInDropdown && checked && shareIndex >= 0
+                    ? sharePercentInput(shareIndex, staff.name, "ml-auto w-11 justify-end")
+                    : showShareInDropdown
+                      ? <span className="ml-auto w-11 shrink-0" aria-hidden />
+                      : null}
                 </button>
               )
             })}
           </div>
+          {showShareInDropdown && !shareValid ? (
+            <p className="mt-2 border-t border-border/60 pt-2 text-[11px] text-red-600">
+              {STAFF_SHARE_VALIDATION_MESSAGE}
+            </p>
+          ) : null}
         </PopoverContent>
       </Popover>
 
