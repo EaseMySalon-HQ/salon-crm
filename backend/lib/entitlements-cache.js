@@ -16,6 +16,7 @@ const {
   getEffectiveFeatures,
   getPlanInfo,
 } = require('./entitlements');
+const { expandPlanFeatureBundles } = require('./plan-feature-bundles');
 const { logger } = require('../utils/logger');
 
 // businessId(string) -> { features:Set<string>, limits, status, planId, planInfo, cachedAt }
@@ -28,7 +29,8 @@ function isFresh(entry) {
 }
 
 function buildEntry(business) {
-  const features = getEffectiveFeatures(business);
+  const planId = business.plan?.planId;
+  const features = expandPlanFeatureBundles(getEffectiveFeatures(business), planId);
   const planInfo = getPlanInfo(business);
   return {
     features: new Set(features),

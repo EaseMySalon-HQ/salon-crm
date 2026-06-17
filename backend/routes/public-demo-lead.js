@@ -46,6 +46,7 @@ router.post(
         branches,
         preferredTime,
         message,
+        services,
         website,
       } = req.body;
 
@@ -69,6 +70,9 @@ router.post(
       const branchCount = branches != null ? String(branches).trim() : '';
       const preferredDemoTime = preferredTime != null ? String(preferredTime).trim() : '';
       const demoNotes = String(message || '').trim();
+      const interestedServices = Array.isArray(services)
+        ? [...new Set(services.map((s) => String(s).trim()).filter(Boolean))]
+        : [];
 
       const interestedParts = [
         cityName ? `City: ${cityName}` : '',
@@ -96,6 +100,11 @@ router.post(
         if (branchCount && !existing.branchCount) existing.branchCount = branchCount;
         if (preferredDemoTime) existing.preferredDemoTime = preferredDemoTime;
         if (email && !existing.email) existing.email = String(email).trim().toLowerCase();
+        if (interestedServices.length > 0) {
+          existing.interestedServices = [
+            ...new Set([...(existing.interestedServices || []), ...interestedServices]),
+          ];
+        }
         await existing.save();
 
         await PlatformLeadActivity.create({
@@ -103,7 +112,7 @@ router.post(
           activityType: 'updated',
           performedByName: 'Website demo form',
           description: 'Repeat demo booking from website',
-          details: { preferredDemoTime, demoNotes },
+          details: { preferredDemoTime, demoNotes, interestedServices },
         });
 
         return res.json({
@@ -123,6 +132,7 @@ router.post(
         source: 'website',
         status: 'new',
         interestedIn: interestedParts.join(' | '),
+        interestedServices,
         notes: demoNotes,
       });
 
@@ -143,6 +153,7 @@ router.post(
           city: cityName,
           branchCount,
           preferredDemoTime,
+          interestedServices,
         },
       });
 

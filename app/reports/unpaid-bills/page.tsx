@@ -21,8 +21,7 @@ import {
   TrendingUp,
   Eye,
   Receipt,
-  Edit,
-  RefreshCw
+  Edit
 } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
@@ -120,17 +119,7 @@ export default function UnpaidBillsPage() {
   }
 
   const handleEditBill = (bill: UnpaidBill) => {
-    router.push(`/billing/${bill.billNo}?mode=edit`)
-  }
-
-  const handleExchangeBill = (bill: UnpaidBill) => {
-    router.push(`/billing/${bill.billNo}?mode=exchange`)
-  }
-
-  const handleExchangeComplete = () => {
-    setIsExchangeDialogOpen(false)
-    setBillForExchange(null)
-    loadUnpaidBills() // Refresh the list
+    router.push(`/billing/${bill.billNo}?mode=edit&returnTo=${encodeURIComponent("/reports/unpaid-bills")}`)
   }
 
   const getStatusBadge = (status: string, isOverdue: boolean) => {
@@ -366,18 +355,6 @@ export default function UnpaidBillsPage() {
                               >
                                 <Edit className="h-4 w-4 mr-1" />
                                 Edit
-                              </Button>
-                            )}
-                            {canEditSale && (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => handleExchangeBill(bill)}
-                                title="Exchange Products"
-                                className="border-blue-200 text-blue-700 hover:bg-blue-50"
-                              >
-                                <RefreshCw className="h-4 w-4 mr-1" />
-                                Exchange
                               </Button>
                             )}
                             <Button

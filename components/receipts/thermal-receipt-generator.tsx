@@ -7,6 +7,7 @@ import { receiptWalkInSaleLabel } from "@/lib/receipt-line-source"
 import { getReceiptPaymentStamp } from "@/lib/receipt-payment-stamp"
 import { formatPaymentRecordedDateLabelFromIso, receiptPaymentTypeDisplayName } from "@/lib/sale-payment-lines"
 import { getReceiptSettlementSummary } from "@/lib/receipt-settlement-summary"
+import { buildReceiptRefundsSectionHtml } from "@/lib/receipt-refunds"
 import { receiptTipDisplayLines } from "@/lib/receipt-tip-lines"
 import {
   buildReceiptTaxDetailHtml,
@@ -67,7 +68,7 @@ function buildThermalSettlementTotals(receipt: Receipt): string {
               s.showReceivedAndAdjusted ? "2px solid #000" : "1px dashed #000"
             };">
               <span>Total Paid (Bill):</span>
-              <span>₹${s.paidTowardBill.toFixed(2)}</span>
+              <span>₹${s.effectivePaidTowardBill.toFixed(2)}</span>
             </div>`
   return h
 }
@@ -268,6 +269,7 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
               })
               .join("")}
         </div>
+        ${buildReceiptRefundsSectionHtml(getReceiptSettlementSummary(receipt).refundLines, thermalFormat)}
 
           <div class="footer">
             <div>Thank you for visiting!</div>
@@ -550,6 +552,7 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
             })
             .join("")}
         </div>
+        ${buildReceiptRefundsSectionHtml(getReceiptSettlementSummary(receipt).refundLines, thermalFormat)}
 
         <div class="footer">
           <div>Thank you for visiting!</div>

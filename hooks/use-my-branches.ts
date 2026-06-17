@@ -17,6 +17,7 @@ export function useMyBranches() {
   const { hasFeature, isLoading: entitlementsLoading } = useEntitlements()
   const isOwner = !!user && user.isOwner === true
   const hasMultiLocation = hasFeature("multi_location")
+  const isImpersonating = !!user?.isImpersonation
 
   const query = useQuery({
     queryKey: ["auth", "my-branches"],
@@ -26,12 +27,12 @@ export function useMyBranches() {
       return res.data.branches
     },
     staleTime: STALE_TIME.auth,
-    enabled: isOwner,
+    enabled: isOwner && !isImpersonating,
     retry: false,
   })
 
   const branches = query.data ?? []
-  const isMultiBranch = isOwner && branches.length >= 2
+  const isMultiBranch = isOwner && !isImpersonating && branches.length >= 2
   const canManageBranches = isMultiBranch && hasMultiLocation
 
   return {

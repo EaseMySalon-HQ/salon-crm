@@ -489,6 +489,30 @@ class EmailService {
   }
 
   /**
+   * Send monthly staff incentive summary (previous calendar month).
+   */
+  async sendStaffIncentiveSummary({ to, businessName, periodLabel, periodStart, periodEnd, summaryData }) {
+    const baseUrl = process.env.APP_URL || process.env.FRONTEND_URL || '';
+    const logoUrl = baseUrl ? `${baseUrl.replace(/\/$/, '')}/images/logo-no-background.png` : '';
+    const { html, text } = emailTemplates.staffIncentiveSummary({
+      businessName,
+      periodLabel,
+      periodStart,
+      periodEnd,
+      logoUrl,
+      rows: summaryData?.rows || [],
+      totals: summaryData?.totals || {},
+    });
+
+    return this.sendEmail({
+      to,
+      subject: `Staff Incentive Summary — ${periodLabel || periodStart || 'Monthly Report'}`,
+      html,
+      text,
+    });
+  }
+
+  /**
    * Get custom template from AdminSettings or use default
    */
   async getCustomTemplate(templateName, defaultTemplate, data) {

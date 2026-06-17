@@ -32,6 +32,7 @@ import {
   MessageSquare,
   Bell,
   Boxes,
+  Globe,
 } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 import { buildLoginRedirectHref } from "@/lib/auth-utils"
@@ -49,6 +50,7 @@ import { MembershipPlansTable } from "@/components/membership/membership-plans-t
 import { ChannelUsageSettings } from "./channel-usage-settings"
 import { WhatsAppIntegrationSettings } from "./whatsapp-business-settings"
 import { FeedbackManagementSettings } from "./feedback-management-settings"
+import { GoogleBusinessSettings } from "./google-business-settings"
 import RechargeSettings from "./recharge-settings"
 import { PrepaidWalletSettings } from "./prepaid-wallet-settings"
 import { RewardPointsProgramSettings } from "./reward-points-settings"
@@ -77,6 +79,7 @@ const SETTINGS_SECTION_IDS = [
   "products",
   "channel-usage",
   "whatsapp-integration",
+  "google-business",
   "feedback",
   "recharge",
   "prepaid-wallet",
@@ -95,6 +98,8 @@ type SettingsItem = {
   title: string
   description: string
   icon: LucideIcon
+  /** Tailwind classes for the icon tile (background, border, icon color). */
+  iconColors: string
   /** Extra strings matched by search (e.g. synonyms, acronyms) */
   searchTerms?: string[]
 }
@@ -117,6 +122,8 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         title: "Business settings",
         description: "Company name, contact, branding, and business profile.",
         icon: Building2,
+        iconColors:
+          "bg-blue-50 text-blue-600 border-blue-100 group-hover:bg-blue-100/80 group-hover:border-blue-200",
         searchTerms: ["company", "logo", "profile", "store"],
       },
       {
@@ -124,6 +131,8 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         title: "Tax settings",
         description: "GST, tax rates, and how tax is applied on sales.",
         icon: Calculator,
+        iconColors:
+          "bg-emerald-50 text-emerald-600 border-emerald-100 group-hover:bg-emerald-100/80 group-hover:border-emerald-200",
         searchTerms: ["gst", "vat", "hst"],
       },
       {
@@ -131,6 +140,8 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         title: "Currency settings",
         description: "Default currency, symbols, and how amounts are shown.",
         icon: DollarSign,
+        iconColors:
+          "bg-amber-50 text-amber-600 border-amber-100 group-hover:bg-amber-100/80 group-hover:border-amber-200",
         searchTerms: ["money", "inr", "format"],
       },
     ],
@@ -145,6 +156,8 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         title: "Appointment settings",
         description: "Booking rules, time slots, and scheduling preferences.",
         icon: Calendar,
+        iconColors:
+          "bg-violet-50 text-violet-600 border-violet-100 group-hover:bg-violet-100/80 group-hover:border-violet-200",
         searchTerms: ["booking", "schedule", "calendar"],
       },
       {
@@ -152,6 +165,8 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         title: "Services",
         description: "Service menu, pricing, and service categories.",
         icon: Wrench,
+        iconColors:
+          "bg-rose-50 text-rose-600 border-rose-100 group-hover:bg-rose-100/80 group-hover:border-rose-200",
         searchTerms: ["menu", "scissors", "categories"],
       },
       {
@@ -159,6 +174,8 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         title: "Products",
         description: "Retail products, stock, categories, and suppliers.",
         icon: Package,
+        iconColors:
+          "bg-orange-50 text-orange-600 border-orange-100 group-hover:bg-orange-100/80 group-hover:border-orange-200",
         searchTerms: ["inventory", "retail", "stock"],
       },
       {
@@ -166,6 +183,8 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         title: "Membership",
         description: "Membership tiers, benefits, and customer subscriptions.",
         icon: IdCard,
+        iconColors:
+          "bg-cyan-50 text-cyan-600 border-cyan-100 group-hover:bg-cyan-100/80 group-hover:border-cyan-200",
         searchTerms: ["subscription", "tiers", "loyalty"],
       },
       {
@@ -173,6 +192,8 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         title: "Packages",
         description: "Multi-session packages, pricing, and sellable bundles.",
         icon: Boxes,
+        iconColors:
+          "bg-purple-50 text-purple-600 border-purple-100 group-hover:bg-purple-100/80 group-hover:border-purple-200",
         searchTerms: ["bundle", "sittings", "sessions", "prepaid"],
       },
       {
@@ -180,6 +201,8 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         title: "Prepaid wallet",
         description: "Client wallet plans, credit rules, liability, and expiry alerts.",
         icon: CircleDollarSign,
+        iconColors:
+          "bg-teal-50 text-teal-600 border-teal-100 group-hover:bg-teal-100/80 group-hover:border-teal-200",
         searchTerms: ["prepaid", "credit", "wallet plans", "liability"],
       },
       {
@@ -187,6 +210,8 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         title: "Reward points",
         description: "Loyalty earning and redemption rules for customer bills.",
         icon: Gift,
+        iconColors:
+          "bg-fuchsia-50 text-fuchsia-600 border-fuchsia-100 group-hover:bg-fuchsia-100/80 group-hover:border-fuchsia-200",
         searchTerms: ["loyalty", "points", "rewards", "earn", "redeem"],
       },
     ],
@@ -201,6 +226,8 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         title: "POS settings",
         description: "Invoice numbers, bill prefixes, and point-of-sale flow.",
         icon: Receipt,
+        iconColors:
+          "bg-slate-100 text-slate-700 border-slate-200 group-hover:bg-slate-200/60 group-hover:border-slate-300",
         searchTerms: ["invoice", "bill", "counter"],
       },
       {
@@ -208,6 +235,8 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         title: "Payment settings",
         description: "Tender types, payment methods, and how you get paid.",
         icon: CreditCard,
+        iconColors:
+          "bg-sky-50 text-sky-600 border-sky-100 group-hover:bg-sky-100/80 group-hover:border-sky-200",
         searchTerms: ["upi", "card", "methods"],
       },
       {
@@ -215,6 +244,8 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         title: "Plan & billing",
         description: "Your EaseMySalon plan, usage, and subscription checkout.",
         icon: Wallet,
+        iconColors:
+          "bg-indigo-50 text-indigo-600 border-indigo-100 group-hover:bg-indigo-100/80 group-hover:border-indigo-200",
         searchTerms: ["saas", "subscription", "invoice"],
       },
     ],
@@ -229,6 +260,8 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         title: "Notifications",
         description: "Email and WhatsApp message preferences — receipts, appointments, and alerts.",
         icon: Bell,
+        iconColors:
+          "bg-yellow-50 text-yellow-700 border-yellow-100 group-hover:bg-yellow-100/80 group-hover:border-yellow-200",
         searchTerms: ["alerts", "reminders", "email", "whatsapp", "sms"],
       },
       {
@@ -236,6 +269,8 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         title: "WhatsApp Integration",
         description: "Connect your WhatsApp Business number via Meta Cloud API (Embedded Signup).",
         icon: MessageCircle,
+        iconColors:
+          "bg-green-50 text-green-600 border-green-100 group-hover:bg-green-100/80 group-hover:border-green-200",
         searchTerms: ["whatsapp", "meta", "business api", "waba", "embedded signup"],
       },
       {
@@ -243,13 +278,24 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         title: "Channel usage",
         description: "WhatsApp, SMS, and email delivery stats and message logs.",
         icon: BarChart2,
+        iconColors:
+          "bg-sky-50 text-sky-700 border-sky-100 group-hover:bg-sky-100/80 group-hover:border-sky-200",
         searchTerms: ["whatsapp", "logs", "delivered"],
+      },
+      {
+        id: "google-business",
+        title: "Google Business Profile",
+        description: "Connect Google, sync reviews, auto-reply, and local SEO tools.",
+        icon: Globe,
+        searchTerms: ["gmb", "google", "reviews", "seo", "maps"],
       },
       {
         id: "feedback",
         title: "Feedback management",
         description: "Customer ratings, reviews, and follow-up after visits.",
         icon: MessageSquare,
+        iconColors:
+          "bg-orange-50 text-orange-700 border-orange-100 group-hover:bg-orange-100/80 group-hover:border-orange-200",
         searchTerms: ["reviews", "ratings", "google", "nps"],
       },
       {
@@ -257,6 +303,8 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         title: "Recharge",
         description: "Top up your messaging wallet for SMS and WhatsApp.",
         icon: Zap,
+        iconColors:
+          "bg-amber-50 text-amber-700 border-amber-100 group-hover:bg-amber-100/80 group-hover:border-amber-200",
         searchTerms: ["wallet", "credits", "top up"],
       },
     ],
@@ -271,6 +319,8 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         title: "General settings",
         description: "Locale, theme, and basic app behavior.",
         icon: Settings,
+        iconColors:
+          "bg-slate-100 text-slate-600 border-slate-200 group-hover:bg-slate-200/60 group-hover:border-slate-300",
         searchTerms: ["preferences", "language", "theme"],
       },
     ],
@@ -284,6 +334,7 @@ const SETTINGS_PLAN_FEATURES: Partial<Record<SettingsSectionId, string>> = {
   feedback: "feedback_management",
   "reward-points": "reward_points",
   "whatsapp-integration": "whatsapp_integration",
+  "google-business": "gmb",
 }
 
 function itemMatchesQuery(item: SettingsItem, q: string): boolean {
@@ -438,6 +489,8 @@ export function SettingsPage() {
         return <PackagesSettingsPanel />
       case "whatsapp-integration":
         return <WhatsAppIntegrationSettings />
+      case "google-business":
+        return <GoogleBusinessSettings />
       case "channel-usage":
         return <ChannelUsageSettings />
       case "feedback":
@@ -532,7 +585,9 @@ export function SettingsPage() {
                           aria-label={`Open ${item.title}`}
                         >
                           <div className="flex items-start gap-3">
-                            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200/80 bg-slate-50 text-slate-700 group-hover:border-slate-300 group-hover:bg-white">
+                            <span
+                              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition-colors ${item.iconColors}`}
+                            >
                               <Icon className="h-4 w-4" strokeWidth={1.75} aria-hidden />
                             </span>
                             <div className="min-w-0 flex-1">
@@ -580,7 +635,14 @@ export function SettingsPage() {
           </button>
           <Card className="w-full max-w-none border-slate-200/90 bg-white shadow-sm">
             <CardContent className="p-4 sm:p-6 lg:p-8">
-              {activeSection && !canAccessSetting(activeSection) ? (
+              {activeSection && (isLoading || entitlementsLoading) ? (
+                <div className="flex items-center justify-center py-12">
+                  <div
+                    className="animate-spin rounded-full h-8 w-8 border-2 border-slate-200 border-t-slate-600"
+                    aria-hidden
+                  />
+                </div>
+              ) : activeSection && !canAccessSetting(activeSection) ? (
                 <p className="text-sm text-slate-600">You don&apos;t have permission to access this setting.</p>
               ) : (
                 renderSettingComponent()

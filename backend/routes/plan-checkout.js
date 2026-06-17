@@ -4,6 +4,7 @@
  * Surface for the Settings → Plan & Billing → Proceed to Checkout button:
  *   POST /api/plan/checkout/order          — create payment order for a renewal/upgrade
  *   POST /api/plan/checkout/verify         — verify gateway callback, activate plan, email invoice
+ *   POST /api/plan/checkout/wallet         — debit messaging wallet and activate plan
  *   GET  /api/plan/checkout/status         — current pending-downgrade + last tx summary (for UI state)
  *   POST /api/plan/schedule-downgrade      — queue a lower-tier plan to apply at next renewal (no charge)
  *   DELETE /api/plan/schedule-downgrade    — cancel a previously scheduled downgrade
@@ -39,6 +40,7 @@ const {
 const { getPlanConfig } = require('../config/plans');
 const { normalizePlanId, tierOf, isValidPlanId } = require('../lib/plan-id');
 const entitlementsCache = require('../lib/entitlements-cache');
+const { atomicDeduct } = require('../lib/wallet-deduction');
 
 const GST_RATE = 0.18;
 
@@ -139,6 +141,203 @@ function classifyKind({ previousPlanId, selectedPlanId, hasPriorPaidPlan }) {
   if (next > prev) return 'upgrade';
   if (next < prev) return 'change'; // caught earlier — shouldn't reach here
   return 'change';
+}
+
+/**
+ * Shared post-payment handler: mutate Business.plan, write ledger + audit rows,
+ * enqueue the GST invoice email. Used by gateway verify and wallet checkout.
+ */
+async function finalizePlanCheckout({
+  req,
+  businessId,
+  planId,
+  billingPeriod,
+  expected,
+  payment: {
+    provider,
+    providerOrderId = null,
+    providerPaymentId = null,
+    totalChargedPaise,
+  },
+}) {
+  const { Business, PlanInvoiceTransaction, PlanChangeLog } = await getMainModels();
+
+  const business = await Business.findById(businessId);
+  if (!business) {
+    const err = new Error('Business not found');
+    err.status = 404;
+    throw err;
+  }
+
+  const previousPlan = {
+    planId: business.plan?.planId || null,
+    billingPeriod: business.plan?.billingPeriod || null,
+    renewalDate: business.plan?.renewalDate || null,
+    isTrial: !!business.plan?.isTrial,
+  };
+  const hasPriorPaidPlan = !!(previousPlan.planId && !previousPlan.isTrial);
+  const kind = classifyKind({
+    previousPlanId: previousPlan.planId,
+    selectedPlanId: planId,
+    hasPriorPaidPlan,
+  });
+
+  const baseForExtension =
+    previousPlan.renewalDate && new Date(previousPlan.renewalDate) > new Date()
+      ? previousPlan.renewalDate
+      : null;
+  const newRenewalDate = advanceDate(baseForExtension, billingPeriod);
+
+  if (!business.plan) business.plan = {};
+  business.plan.planId = planId;
+  business.plan.billingPeriod = billingPeriod;
+  business.plan.renewalDate = newRenewalDate;
+  business.plan.isTrial = false;
+  business.plan.trialEndsAt = null;
+  business.plan.pendingPlanId = null;
+  business.plan.pendingBillingPeriod = null;
+  business.plan.pendingEffectiveAt = null;
+
+  const planConfig = getPlanConfig(planId);
+  if (planConfig?.limits) {
+    if (!business.plan.addons) business.plan.addons = {};
+    if (!business.plan.addons.sms) business.plan.addons.sms = {};
+    business.plan.addons.sms.enabled =
+      (planConfig.limits.smsMessages ?? 0) > 0;
+    if (!business.plan.addons.whatsapp) business.plan.addons.whatsapp = {};
+    business.plan.addons.whatsapp.enabled =
+      (planConfig.limits.whatsappMessages ?? 0) > 0;
+  }
+
+  await business.save();
+  entitlementsCache.invalidate(businessId);
+
+  const now = new Date();
+  const planTxn = await PlanInvoiceTransaction.create({
+    businessId,
+    kind,
+    planId,
+    billingPeriod,
+    amountPaise: expected.basePaise,
+    gstPaise: expected.gstPaise,
+    gstRate: expected.gstRate,
+    totalChargedPaise: totalChargedPaise ?? expected.totalPaise,
+    provider,
+    providerOrderId,
+    providerPaymentId,
+    description: `${kind === 'renewal' ? 'Renewal' : kind === 'upgrade' ? 'Upgrade' : kind === 'new' ? 'New subscription' : 'Plan change'} — ${planId} (${billingPeriod}) via ${provider}`,
+    previousRenewalDate: previousPlan.renewalDate,
+    newRenewalDate,
+    previousPlanId: previousPlan.planId,
+    previousBillingPeriod: previousPlan.billingPeriod,
+    timestamp: now,
+  });
+
+  try {
+    await PlanChangeLog.create({
+      businessId,
+      changedBy: req.user._id,
+      changeType:
+        previousPlan.planId === planId ? 'billing_period_change' : 'plan_change',
+      previousValue: previousPlan,
+      newValue: {
+        planId,
+        billingPeriod,
+        renewalDate: newRenewalDate,
+        isTrial: false,
+      },
+      field: previousPlan.planId === planId ? 'billingPeriod' : 'planId',
+      reason: `Self-service ${kind}`,
+      metadata: {
+        source: 'self_service',
+        provider,
+        providerOrderId,
+        providerPaymentId,
+        transactionId: planTxn._id,
+        amountPaise: expected.basePaise,
+        gstPaise: expected.gstPaise,
+        totalChargedPaise: totalChargedPaise ?? expected.totalPaise,
+      },
+    });
+  } catch (logErr) {
+    logger.warn(
+      '[plan-checkout] PlanChangeLog write failed:',
+      logErr?.message || logErr
+    );
+  }
+
+  setImmediate(() => {
+    sendPlanRenewalInvoice({
+      transactionId: planTxn._id,
+      triggeredByEmail: req.user?.email || null,
+    }).catch(err => {
+      logger.error(
+        '[plan-invoice] fire-and-forget send failed:',
+        err?.message || err
+      );
+    });
+  });
+
+  return {
+    kind,
+    planId,
+    billingPeriod,
+    newRenewalDate,
+    planTxn,
+    expected,
+    plan: {
+      planId,
+      billingPeriod,
+      renewalDate: newRenewalDate,
+      isTrial: false,
+      pendingPlanId: null,
+      pendingBillingPeriod: null,
+      pendingEffectiveAt: null,
+    },
+  };
+}
+
+function buildCheckoutSuccessPayload(result) {
+  const { kind, planId, billingPeriod, newRenewalDate, planTxn, expected, plan } =
+    result;
+  return {
+    transactionId: String(planTxn._id),
+    kind,
+    planId,
+    billingPeriod,
+    newRenewalDate,
+    amounts: {
+      basePaise: expected.basePaise,
+      gstPaise: expected.gstPaise,
+      totalChargedPaise: expected.totalPaise,
+      gstRate: expected.gstRate,
+    },
+    plan,
+  };
+}
+
+async function activateFreePlan({ businessId, planId, billingPeriod }) {
+  const { Business } = await getMainModels();
+  const business = await Business.findById(businessId);
+  if (!business) {
+    return { ok: false, status: 404, error: 'Business not found' };
+  }
+  if (!business.plan) business.plan = {};
+  const baseForExtension =
+    business.plan.renewalDate && new Date(business.plan.renewalDate) > new Date()
+      ? business.plan.renewalDate
+      : null;
+  business.plan.planId = planId;
+  business.plan.billingPeriod = billingPeriod;
+  business.plan.renewalDate = advanceDate(baseForExtension, billingPeriod);
+  business.plan.isTrial = false;
+  business.plan.trialEndsAt = null;
+  business.plan.pendingPlanId = null;
+  business.plan.pendingBillingPeriod = null;
+  business.plan.pendingEffectiveAt = null;
+  await business.save();
+  entitlementsCache.invalidate(business._id);
+  return { ok: true };
 }
 
 // ── POST /checkout/order ────────────────────────────────────────────────────
@@ -284,7 +483,6 @@ router.post('/checkout/verify', authenticateToken, setupMainDatabase, async (req
       Business,
       AdminSettings,
       PlanInvoiceTransaction,
-      PlanChangeLog,
     } = await getMainModels();
     const adminSettings = await AdminSettings.getSettings();
 
@@ -343,165 +541,164 @@ router.post('/checkout/verify', authenticateToken, setupMainDatabase, async (req
       }
     }
 
-    const business = await Business.findById(businessId);
-    if (!business) {
-      return res.status(404).json({ success: false, error: 'Business not found' });
-    }
-    const previousPlan = {
-      planId: business.plan?.planId || null,
-      billingPeriod: business.plan?.billingPeriod || null,
-      renewalDate: business.plan?.renewalDate || null,
-      isTrial: !!business.plan?.isTrial,
-    };
-    const hasPriorPaidPlan = !!(previousPlan.planId && !previousPlan.isTrial);
-    const kind = classifyKind({
-      previousPlanId: previousPlan.planId,
-      selectedPlanId: planId,
-      hasPriorPaidPlan,
-    });
-
-    // For renewals we extend the existing renewal date — keep days of the
-    // current cycle intact. For upgrades/new we also extend from the existing
-    // renewal date if it's in the future, otherwise start from now.
-    const baseForExtension =
-      previousPlan.renewalDate && new Date(previousPlan.renewalDate) > new Date()
-        ? previousPlan.renewalDate
-        : null;
-    const newRenewalDate = advanceDate(baseForExtension, billingPeriod);
-
-    // Mutate the business plan.
-    if (!business.plan) business.plan = {};
-    business.plan.planId = planId;
-    business.plan.billingPeriod = billingPeriod;
-    business.plan.renewalDate = newRenewalDate;
-    business.plan.isTrial = false;
-    business.plan.trialEndsAt = null;
-    // A successful payment supersedes any queued downgrade.
-    business.plan.pendingPlanId = null;
-    business.plan.pendingBillingPeriod = null;
-    business.plan.pendingEffectiveAt = null;
-
-    // Sync addon enabled flags from the new plan config (quotas deprecated,
-    // but `enabled` still gates access to the channel).
-    const planConfig = getPlanConfig(planId);
-    if (planConfig?.limits) {
-      if (!business.plan.addons) business.plan.addons = {};
-      if (!business.plan.addons.sms) business.plan.addons.sms = {};
-      business.plan.addons.sms.enabled =
-        (planConfig.limits.smsMessages ?? 0) > 0;
-      if (!business.plan.addons.whatsapp) business.plan.addons.whatsapp = {};
-      business.plan.addons.whatsapp.enabled =
-        (planConfig.limits.whatsappMessages ?? 0) > 0;
-    }
-
-    await business.save();
-
-    entitlementsCache.invalidate(businessId);
-
-    const now = new Date();
-    const planTxn = await PlanInvoiceTransaction.create({
+    const result = await finalizePlanCheckout({
+      req,
       businessId,
-      kind,
       planId,
       billingPeriod,
-      amountPaise: expected.basePaise,
-      gstPaise: expected.gstPaise,
-      gstRate: expected.gstRate,
-      totalChargedPaise: gatewayTotalPaise ?? expected.totalPaise,
-      provider,
-      providerOrderId: verification.providerOrderId || orderId || null,
-      providerPaymentId: verification.providerPaymentId || paymentId || null,
-      description: `${kind === 'renewal' ? 'Renewal' : kind === 'upgrade' ? 'Upgrade' : kind === 'new' ? 'New subscription' : 'Plan change'} — ${planId} (${billingPeriod}) via ${provider}`,
-      previousRenewalDate: previousPlan.renewalDate,
-      newRenewalDate,
-      previousPlanId: previousPlan.planId,
-      previousBillingPeriod: previousPlan.billingPeriod,
-      timestamp: now,
-    });
-
-    // Audit row (self-service source). `changedBy` holds the user's _id so
-    // the existing Mongoose ObjectId constraint is satisfied; the `metadata.source`
-    // distinguishes self-service from admin-driven changes.
-    try {
-      await PlanChangeLog.create({
-        businessId,
-        changedBy: req.user._id,
-        changeType:
-          previousPlan.planId === planId ? 'billing_period_change' : 'plan_change',
-        previousValue: previousPlan,
-        newValue: {
-          planId,
-          billingPeriod,
-          renewalDate: newRenewalDate,
-          isTrial: false,
-        },
-        field: previousPlan.planId === planId ? 'billingPeriod' : 'planId',
-        reason: `Self-service ${kind}`,
-        metadata: {
-          source: 'self_service',
-          provider,
-          providerOrderId: verification.providerOrderId || orderId || null,
-          providerPaymentId:
-            verification.providerPaymentId || paymentId || null,
-          transactionId: planTxn._id,
-          amountPaise: expected.basePaise,
-          gstPaise: expected.gstPaise,
-          totalChargedPaise: gatewayTotalPaise ?? expected.totalPaise,
-        },
-      });
-    } catch (logErr) {
-      // Don't fail the checkout if audit-logging hiccups — the money-state
-      // is already committed.
-      logger.warn(
-        '[plan-checkout] PlanChangeLog write failed:',
-        logErr?.message || logErr
-      );
-    }
-
-    // Fire-and-forget: generate invoice PDF + email. Failures must not
-    // roll back the payment.
-    setImmediate(() => {
-      sendPlanRenewalInvoice({
-        transactionId: planTxn._id,
-        triggeredByEmail: req.user?.email || null,
-      }).catch(err => {
-        logger.error(
-          '[plan-invoice] fire-and-forget send failed:',
-          err?.message || err
-        );
-      });
+      expected,
+      payment: {
+        provider,
+        providerOrderId: verification.providerOrderId || orderId || null,
+        providerPaymentId: verification.providerPaymentId || paymentId || null,
+        totalChargedPaise: gatewayTotalPaise ?? expected.totalPaise,
+      },
     });
 
     return res.json({
       success: true,
-      data: {
-        transactionId: String(planTxn._id),
-        kind,
-        planId,
-        billingPeriod,
-        newRenewalDate,
-        amounts: {
-          basePaise: expected.basePaise,
-          gstPaise: expected.gstPaise,
-          totalChargedPaise: gatewayTotalPaise ?? expected.totalPaise,
-          gstRate: expected.gstRate,
-        },
-        plan: {
-          planId,
-          billingPeriod,
-          renewalDate: newRenewalDate,
-          isTrial: false,
-          pendingPlanId: null,
-          pendingBillingPeriod: null,
-          pendingEffectiveAt: null,
-        },
-      },
+      data: buildCheckoutSuccessPayload(result),
     });
   } catch (err) {
     logger.error('[plan-checkout] Error verifying payment:', err);
     return res.status(500).json({
       success: false,
       error: err?.message || 'Failed to verify payment',
+    });
+  }
+});
+
+// ── POST /checkout/wallet ───────────────────────────────────────────────────
+// Debits the messaging wallet at the plan list price (no extra GST — tax was
+// collected when the wallet was recharged).
+
+router.post('/checkout/wallet', authenticateToken, setupMainDatabase, async (req, res) => {
+  try {
+    if (!requireOwner(req, res)) return;
+    const businessId = req.user?.branchId;
+    if (!businessId) {
+      return res.status(400).json({ success: false, error: 'Business ID not found' });
+    }
+
+    const { planId: rawPlanId, billingPeriod } = req.body || {};
+    const planId = normalizePlanId(rawPlanId);
+    if (!rawPlanId || !isValidPlanId(rawPlanId)) {
+      return res.status(400).json({ success: false, error: 'Invalid planId' });
+    }
+    if (!['monthly', 'yearly'].includes(billingPeriod)) {
+      return res.status(400).json({ success: false, error: 'Invalid billingPeriod' });
+    }
+
+    const { Business } = await getMainModels();
+    const business = await Business.findById(businessId).select('plan wallet').lean();
+    if (!business) {
+      return res.status(404).json({ success: false, error: 'Business not found' });
+    }
+
+    const currentPlanId = business?.plan?.planId || 'starter';
+    if (tierOf(planId) < tierOf(currentPlanId)) {
+      return res.status(400).json({
+        success: false,
+        error:
+          'Downgrades are scheduled for your next renewal and do not require a payment.',
+      });
+    }
+
+    const expected = computeBreakdown(planId, billingPeriod);
+    if (!expected) {
+      return res.status(400).json({
+        success: false,
+        error:
+          'This plan does not have a self-service price. Please contact sales.',
+      });
+    }
+
+    const walletChargePaise = expected.basePaise;
+
+    if (walletChargePaise === 0) {
+      const free = await activateFreePlan({ businessId, planId, billingPeriod });
+      if (!free.ok) {
+        return res.status(free.status || 500).json({ success: false, error: free.error });
+      }
+      return res.json({
+        success: true,
+        data: {
+          freeActivation: true,
+          planId,
+          billingPeriod,
+        },
+      });
+    }
+
+    const balancePaise = Number(business?.wallet?.balancePaise || 0);
+    if (balancePaise < walletChargePaise) {
+      return res.status(400).json({
+        success: false,
+        error: 'Insufficient wallet balance',
+      });
+    }
+
+    const deduct = await atomicDeduct({
+      businessId,
+      costPaise: walletChargePaise,
+      channel: null,
+      messageCategory: null,
+      description: `Plan subscription — ${planId} (${billingPeriod})`,
+    });
+    if (!deduct.success) {
+      return res.status(400).json({
+        success: false,
+        error: deduct.error || 'Insufficient wallet balance',
+      });
+    }
+
+    const walletExpected = {
+      ...expected,
+      gstPaise: 0,
+      totalPaise: walletChargePaise,
+      gstRate: 0,
+    };
+
+    try {
+      const result = await finalizePlanCheckout({
+        req,
+        businessId,
+        planId,
+        billingPeriod,
+        expected: walletExpected,
+        payment: {
+          provider: 'system',
+          providerPaymentId: String(deduct.walletTransactionId),
+          totalChargedPaise: walletChargePaise,
+        },
+      });
+
+      return res.json({
+        success: true,
+        data: {
+          ...buildCheckoutSuccessPayload(result),
+          walletBalancePaise: deduct.newBalancePaise,
+        },
+      });
+    } catch (finalizeErr) {
+      await Business.findByIdAndUpdate(businessId, {
+        $inc: { 'wallet.balancePaise': walletChargePaise },
+      });
+      logger.error(
+        '[plan-checkout] Wallet checkout failed after debit — balance restored:',
+        finalizeErr?.message || finalizeErr
+      );
+      const status = finalizeErr.status || 500;
+      return res.status(status).json({
+        success: false,
+        error: finalizeErr?.message || 'Failed to complete wallet checkout',
+      });
+    }
+  } catch (err) {
+    logger.error('[plan-checkout] Error in wallet checkout:', err);
+    return res.status(500).json({
+      success: false,
+      error: err?.message || 'Failed to complete wallet checkout',
     });
   }
 });

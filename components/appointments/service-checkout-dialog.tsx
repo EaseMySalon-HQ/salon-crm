@@ -71,6 +71,15 @@ import { useToast } from "@/hooks/use-toast"
 import { useCurrency } from "@/hooks/use-currency"
 import { effectiveMembershipPlanDiscountPercent } from "@/lib/membership-plan-discount"
 import { cn } from "@/lib/utils"
+import { MultiStaffSelector, type StaffContribution } from "@/components/ui/multi-staff-selector"
+import {
+  STAFF_SHARE_VALIDATION_MESSAGE,
+  contributionsFromLegacyStaff,
+  formatStaffContributionsLabel,
+  isStaffShareValid,
+  primaryStaffIdFromContributions,
+} from "@/lib/staff-share-utils"
+import { getLinePreTaxTotal } from "@/lib/staff-line-revenue"
 import { expandBundleToLines, isBundleService } from "@/lib/bundle-service"
 import { clientStore, type Client } from "@/lib/client-store"
 import {
@@ -124,9 +133,13 @@ import {
 import { previewRedemptionLive } from "@/lib/reward-points-preview"
 import {
   completeServiceCheckoutInline,
+  primeCheckoutInvoicePrefix,
   type CheckoutPaymentMethodChoice,
   type ServiceCheckoutTenderSplit,
 } from "@/lib/complete-service-checkout-inline"
+import type { BillEditCheckoutInitialState } from "@/lib/map-sale-to-service-checkout"
+import { computeBillEditReturnedProducts } from "@/lib/compute-bill-edit-returned-products"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import {
   PINNED_CHECKOUT_SERVICES_EVENT,
   readPinnedServiceIds,
@@ -146,6 +159,8 @@ export type ServiceCheckoutLine = {
   id: string
   serviceId: string
   staffId: string
+  /** Multi-staff revenue split (percentages must sum to 100 when length > 1). */
+  staffContributions?: StaffContribution[]
   name: string
   duration: number
   /** Unit price before quantity multiplier. */
@@ -252,6 +267,36 @@ type CartLineEditDraft = {
 type ServiceLineEditDraft = CartLineEditDraft & {
   discountValue: number
   discountIsPercent: boolean
+  staffContributions: StaffContribution[]
+}
+
+function getServiceLineStaffContributions(line: ServiceCheckoutLine): StaffContribution[] {
+  if (line.staffContributions && line.staffContributions.length > 0) {
+    return line.staffContributions
+  }
+  if (line.staffId) {
+    return [{ staffId: line.staffId, staffName: "", percentage: 100, amount: 0 }]
+  }
+  return []
+}
+
+function serviceLineStaffIsValid(line: ServiceCheckoutLine): boolean {
+  const contribs = getServiceLineStaffContributions(line)
+  if (contribs.length === 0 || !contribs.every((c) => c.staffId)) return false
+  if (contribs.length === 1) return true
+  return isStaffShareValid(contribs)
+}
+
+function applyStaffContributionsToLine(
+  line: ServiceCheckoutLine,
+  contributions: StaffContribution[]
+): ServiceCheckoutLine {
+  const staffId = primaryStaffIdFromContributions(contributions)
+  return {
+    ...line,
+    staffContributions: contributions,
+    staffId,
+  }
 }
 
 function cartLineEditDraftFrom(line: {
@@ -305,6 +350,14 @@ function lineNetAfterLineDiscount(
     return Math.max(0, base * (1 - pct / 100))
   }
   return Math.max(0, base - d)
+}
+
+function serviceLineStaffPreTaxTotal(line: ServiceCheckoutLine): number {
+  const qty = serviceLineQuantity(line)
+  const unit = Number(line.price) || 0
+  const discVal = Number(line.discountValue) || 0
+  const discIsPct = line.discountIsPercent !== false
+  return lineNetAfterLineDiscount(unit, qty, discVal, discIsPct)
 }
 
 function catalogProductStockUnits(product: any | undefined): number {
@@ -645,6 +698,111 @@ function CheckoutLineDiscountRow({
   )
 }
 
+function CheckoutCartServiceStaffControls({
+  lineId,
+  qty,
+  discVal,
+  discIsPct,
+  staffContributions,
+  staffOptions,
+  checkoutPopoverPortal,
+  serviceTotal,
+  onQuantityChange,
+  onPatchLine,
+}: {
+  lineId: string
+  qty: number
+  discVal: number
+  discIsPct: boolean
+  staffContributions: StaffContribution[]
+  staffOptions: Array<{ id: string; name: string }>
+  checkoutPopoverPortal: HTMLElement | null
+  serviceTotal: number
+  onQuantityChange: (qty: number) => void
+  onPatchLine: (patch: Partial<ServiceCheckoutLine>) => void
+}) {
+  const staffControl =
+    staffOptions.length > 0 ? (
+    <MultiStaffSelector
+      key={lineId}
+      portalContainer={checkoutPopoverPortal}
+      staffList={staffOptions.map((s) => ({
+        _id: s.id,
+        id: s.id,
+        name: s.name,
+      }))}
+      serviceTotal={serviceTotal}
+      compact
+      hideShareEditor
+      shareEditorInDropdown
+      placeholder={CHECKOUT_NO_STAFF_LABEL}
+      popoverContentClassName="!z-[9999]"
+      initialContributions={staffContributions}
+      onStaffContributionsChange={(contributions) => {
+        onPatchLine({
+          staffContributions: contributions,
+          staffId: primaryStaffIdFromContributions(contributions),
+        })
+      }}
+    />
+  ) : null
+
+  return (
+    <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+      <div className="flex items-center gap-2">
+        <div className="flex h-8 items-center gap-0.5 rounded-lg border border-border/80 bg-background">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 w-8 shrink-0 rounded-md p-0"
+            onClick={() => onQuantityChange(qty - 1)}
+            disabled={qty <= 1}
+            aria-label="Decrease quantity"
+          >
+            <Minus className="h-3.5 w-3.5" />
+          </Button>
+          <span className="w-8 text-center text-sm font-semibold tabular-nums">{qty}</span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 w-8 shrink-0 rounded-md p-0"
+            onClick={() => onQuantityChange(qty + 1)}
+            aria-label="Increase quantity"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      </div>
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+        <CheckoutLineDiscountRow
+          discountValue={discVal}
+          discountIsPercent={discIsPct}
+          onDiscountValueChange={(v) =>
+            onPatchLine({ discountValue: v, membershipAutoDiscount: false })
+          }
+          onSetPercentMode={() =>
+            onPatchLine({
+              discountIsPercent: true,
+              discountValue: 0,
+              membershipAutoDiscount: false,
+            })
+          }
+          onSetFixedMode={() =>
+            onPatchLine({
+              discountIsPercent: false,
+              discountValue: 0,
+              membershipAutoDiscount: false,
+            })
+          }
+        />
+        {staffControl ? <div className="min-w-0 w-full sm:flex-1">{staffControl}</div> : null}
+      </div>
+    </div>
+  )
+}
+
 function cloneLines(lines: ServiceCheckoutLine[]): ServiceCheckoutLine[] {
   return lines.map((l) => ({ ...l }))
 }
@@ -811,6 +969,10 @@ export interface ServiceCheckoutDialogProps {
   onSuccessfulCheckout?: () => void
   /** Called when the payment step (vs catalog) toggles — drawer host can mirror title in sheet header. */
   onPaymentStepChange?: (inPaymentStep: boolean) => void
+  /** Edit an existing bill (same checkout UI as appointments). */
+  existingSaleId?: string
+  existingBillNo?: string
+  initialBillEditState?: BillEditCheckoutInitialState
 }
 
 export type ServiceCheckoutDialogHandle = {
@@ -841,6 +1003,9 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
   ensureAppointmentBookingBeforeCheckout,
   onSuccessfulCheckout,
   onPaymentStepChange,
+  existingSaleId,
+  existingBillNo,
+  initialBillEditState,
 }: ServiceCheckoutDialogProps,
   ref
 ) {
@@ -864,6 +1029,10 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
   const prepaidSnapshotRef = useRef<ServiceCheckoutPrepaidLine[]>([])
   const packageSnapshotRef = useRef<ServiceCheckoutPackageLine[]>([])
   const wasOpenRef = useRef(false)
+  const billEditTenderRef = useRef<BillEditCheckoutInitialState["initialTender"] | null>(null)
+  const [billEditReason, setBillEditReason] = useState("")
+  const [billRefundDialogOpen, setBillRefundDialogOpen] = useState(false)
+  const [billRefundMode, setBillRefundMode] = useState<"wallet" | "cash" | "">("")
   /** Latest save / resume token for this checkout session (clear on continue or cancel draft). */
   const persistedDraftRef = useRef<string | null>(null)
   const [productLines, setProductLines] = useState<ServiceCheckoutProductLine[]>([])
@@ -887,12 +1056,14 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
   const [loadingPackages, setLoadingPackages] = useState(false)
   /** Loaded for checkout; options always filtered with isStaffEligibleForAppointmentScheduling. */
   const [saleStaffCatalog, setSaleStaffCatalog] = useState<any[]>([])
+  const [checkoutPopoverPortal, setCheckoutPopoverPortal] = useState<HTMLElement | null>(null)
 
   const [editingServiceLineId, setEditingServiceLineId] = useState<string | null>(null)
   const [pendingCatalogService, setPendingCatalogService] = useState<PendingCatalogService | null>(
     null
   )
   const [serviceEditDraft, setServiceEditDraft] = useState<ServiceLineEditDraft | null>(null)
+  const [serviceEditStaffValid, setServiceEditStaffValid] = useState(true)
   /** When true, price input shows empty instead of 0 while focused for easier entry. */
   const [servicePriceInputEmpty, setServicePriceInputEmpty] = useState(false)
 
@@ -969,6 +1140,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
   const [paymentDialogWalletsRaw, setPaymentDialogWalletsRaw] = useState<any[]>([])
   /** Uncombined usable wallets (for change-to-wallet target pick); UI may show combined row. */
   const [paymentDialogWalletsUncombined, setPaymentDialogWalletsUncombined] = useState<any[]>([])
+  const [paymentDialogWalletSettings, setPaymentDialogWalletSettings] = useState<any>(null)
   const [paymentDialogRewardSettings, setPaymentDialogRewardSettings] = useState<any>(null)
   const [paymentDialogLoyaltyBalance, setPaymentDialogLoyaltyBalance] = useState(0)
   const [payCash, setPayCash] = useState(0)
@@ -984,9 +1156,15 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
 
   useEffect(() => {
     let cancelled = false
-    void SettingsAPI.getPaymentSettings()
-      .then((res) => {
-        if (cancelled || !res.success || !res.data) return
+    void Promise.all([SettingsAPI.getPaymentSettings(), SettingsAPI.getBusinessSettings()])
+      .then(([res, bizRes]) => {
+        if (cancelled) return
+        if (bizRes.success && bizRes.data) {
+          primeCheckoutInvoicePrefix(
+            bizRes.data.invoicePrefix || bizRes.data.receiptPrefix
+          )
+        }
+        if (!res.success || !res.data) return
         const d = res.data as Record<string, unknown>
         setCheckoutTaxSettings({
           enableTax: d.enableTax !== false,
@@ -1269,32 +1447,56 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       }
 
       persistedDraftRef.current = null
-      const snap = cloneLines(initialLines).map((l) => ({
-        ...l,
-        locked: true,
-        quantity: serviceLineQuantity(l),
-      }))
-      snapshotRef.current = snap
-      setLines(snap.length > 0 ? snap : [])
+      if (initialBillEditState) {
+        billEditTenderRef.current = initialBillEditState.initialTender
+        const serviceSnap = cloneLines(initialBillEditState.lines).map((l) => ({
+          ...l,
+          quantity: serviceLineQuantity(l),
+        }))
+        snapshotRef.current = serviceSnap
+        setLines(serviceSnap)
+        productSnapshotRef.current = cloneProductLines(initialBillEditState.productLines)
+        setProductLines(cloneProductLines(initialBillEditState.productLines))
+        membershipSnapshotRef.current = cloneMembershipLines(initialBillEditState.membershipLines)
+        setMembershipLines(cloneMembershipLines(initialBillEditState.membershipLines))
+        prepaidSnapshotRef.current = clonePrepaidLines(initialBillEditState.prepaidLines)
+        setPrepaidLines(clonePrepaidLines(initialBillEditState.prepaidLines))
+        packageSnapshotRef.current = clonePackageLines(initialBillEditState.packageLines)
+        setPackageLines(clonePackageLines(initialBillEditState.packageLines))
+        setCheckoutTipLines(cloneCheckoutTipLines(initialBillEditState.checkoutTipLines))
+        setCheckoutCartDiscountType(initialBillEditState.checkoutCartDiscountType)
+        setCheckoutCartDiscountValue(initialBillEditState.checkoutCartDiscountValue)
+        setCheckoutSaleNote(initialBillEditState.checkoutSaleNote)
+        setBillEditReason("")
+      } else {
+        billEditTenderRef.current = null
+        const snap = cloneLines(initialLines).map((l) => ({
+          ...l,
+          locked: true,
+          quantity: serviceLineQuantity(l),
+        }))
+        snapshotRef.current = snap
+        setLines(snap.length > 0 ? snap : [])
+        productSnapshotRef.current = []
+        setProductLines([])
+        membershipSnapshotRef.current = []
+        setMembershipLines([])
+        prepaidSnapshotRef.current = []
+        setPrepaidLines([])
+        packageSnapshotRef.current = []
+        setPackageLines([])
+        clearCheckoutExtras()
+      }
       setSearch("")
       setCategory("services")
-      productSnapshotRef.current = []
-      setProductLines([])
       setProductSearch("")
-      membershipSnapshotRef.current = []
-      setMembershipLines([])
       setMembershipSearch("")
-      prepaidSnapshotRef.current = []
-      setPrepaidLines([])
       setPrepaidSearch("")
-      packageSnapshotRef.current = []
-      setPackageLines([])
       setPackageSearch("")
-      clearCheckoutExtras()
       setHasPersistedDraft(false)
     }
     wasOpenRef.current = open
-  }, [open, initialLines, customer, appointmentId, consumeResumeDraftIntent, resumeSavedDraftToken])
+  }, [open, initialLines, customer, appointmentId, consumeResumeDraftIntent, resumeSavedDraftToken, initialBillEditState])
 
   useEffect(() => {
     if (!open) {
@@ -1991,6 +2193,31 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     [paymentDueAfterLoyalty, paymentTotalTenderEntered]
   )
 
+  const checkoutSummaryPayLabel = existingSaleId ? "Total paid" : "To pay"
+  const checkoutSummaryPayAmount = existingSaleId
+    ? paymentMethodDialogOpen
+      ? paymentTotalTenderEntered
+      : initialBillEditState?.recordedPaidAmount ?? 0
+    : paymentMethodDialogOpen
+      ? paymentRemainingDue
+      : cartToPayIncludingTips
+
+  const billEditRefundDue = useMemo(() => {
+    if (!existingSaleId) return 0
+    const paid = initialBillEditState?.recordedPaidAmount ?? 0
+    return Math.max(0, paid - cartToPayIncludingTips)
+  }, [existingSaleId, initialBillEditState, cartToPayIncludingTips])
+
+  const showBillEditRefundAction = Boolean(existingSaleId && billEditRefundDue > 0.005)
+
+  const billEditReturnedProducts = useMemo(() => {
+    if (!initialBillEditState) return []
+    return computeBillEditReturnedProducts(
+      initialBillEditState.productLines,
+      productLines
+    )
+  }, [initialBillEditState, productLines])
+
   const formatCheckoutInr = (amount: number) =>
     amount.toLocaleString("en-IN", { maximumFractionDigits: 2 })
 
@@ -2093,9 +2320,11 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       price: 0,
       quantity: 1,
       staffId: "",
+      staffContributions: [],
       discountValue: 0,
       discountIsPercent: true,
     })
+    setServiceEditStaffValid(false)
   }
 
   function addCatalogService(svc: any) {
@@ -2166,29 +2395,30 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     )
   }
 
-  function setServiceLineStaff(lineId: string, staffId: string) {
-    setLines((prev) =>
-      prev.map((l) => (l.id === lineId ? { ...l, staffId } : l))
-    )
-  }
-
   function patchServiceLine(lineId: string, patch: Partial<ServiceCheckoutLine>) {
     setLines((prev) => prev.map((l) => (l.id === lineId ? { ...l, ...patch } : l)))
   }
 
-  function openServiceEdit(lineId: string) {
+  function openServiceEdit(lineId: string, contributionsOverride?: StaffContribution[]) {
     const line = lines.find((l) => l.id === lineId)
     if (!line) return
     closeProductEdit()
     closeCatalogLineEdit()
     setEditingServiceLineId(lineId)
+    const contribs = (contributionsOverride ?? getServiceLineStaffContributions(line)).map((c) => ({
+      ...c,
+      staffName:
+        c.staffName || staffOptions.find((s) => s.id === c.staffId)?.name || "",
+    }))
     setServiceEditDraft({
       price: Math.max(0, Number(line.price) || 0),
       quantity: serviceLineQuantity(line),
-      staffId: line.staffId || "",
+      staffId: line.staffId || primaryStaffIdFromContributions(contribs),
+      staffContributions: contribs,
       discountValue: Math.max(0, Number(line.discountValue) || 0),
       discountIsPercent: line.discountIsPercent !== false,
     })
+    setServiceEditStaffValid(serviceLineStaffIsValid({ ...line, staffContributions: contribs }))
   }
 
   function closeServiceEdit() {
@@ -2200,6 +2430,24 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
 
   function applyServiceEdit() {
     if (!editingServiceLineId || !serviceEditDraft) return
+    if (!serviceEditStaffValid) {
+      toast({
+        title: "Invalid staff share",
+        description: STAFF_SHARE_VALIDATION_MESSAGE,
+        variant: "destructive",
+      })
+      return
+    }
+    const contributions = serviceEditDraft.staffContributions
+    const primaryStaffId = primaryStaffIdFromContributions(contributions)
+    if (!primaryStaffId) {
+      toast({
+        title: "Assign staff",
+        description: "Select at least one staff member for this service.",
+        variant: "destructive",
+      })
+      return
+    }
     if (editingServiceLineId === PENDING_ZERO_PRICE_SERVICE_LINE_ID) {
       if (!pendingCatalogService) return
       const price = Math.max(0, Number(serviceEditDraft.price) || 0)
@@ -2216,18 +2464,21 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       const discountIsPercent = serviceEditDraft.discountIsPercent !== false
       setLines((prev) => [
         ...prev,
-        {
-          id: `add-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          serviceId: pendingCatalogService.serviceId,
-          staffId: serviceEditDraft.staffId,
-          name: pendingCatalogService.name,
-          duration: pendingCatalogService.duration,
-          price,
-          quantity,
-          locked: false,
-          discountValue,
-          discountIsPercent,
-        },
+        applyStaffContributionsToLine(
+          {
+            id: `add-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            serviceId: pendingCatalogService.serviceId,
+            staffId: primaryStaffId,
+            name: pendingCatalogService.name,
+            duration: pendingCatalogService.duration,
+            price,
+            quantity,
+            locked: false,
+            discountValue,
+            discountIsPercent,
+          },
+          contributions
+        ),
       ])
       closeServiceEdit()
       return
@@ -2242,15 +2493,18 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
               const discountTouched =
                 discountValue !== Math.max(0, Number(l.discountValue) || 0) ||
                 discountIsPercent !== (l.discountIsPercent !== false)
-              return {
-                ...l,
-                price: serviceEditDraft.price,
-                quantity,
-                staffId: serviceEditDraft.staffId,
-                discountValue,
-                discountIsPercent,
-                membershipAutoDiscount: discountTouched ? false : l.membershipAutoDiscount,
-              }
+              return applyStaffContributionsToLine(
+                {
+                  ...l,
+                  price: serviceEditDraft.price,
+                  quantity,
+                  staffId: primaryStaffId,
+                  discountValue,
+                  discountIsPercent,
+                  membershipAutoDiscount: discountTouched ? false : l.membershipAutoDiscount,
+                },
+                contributions
+              )
             })()
           : l
       )
@@ -2560,9 +2814,13 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       return false
     }
     if (lines.length > 0) {
-      const missingStaff = lines.some((l) => l.serviceId && !l.staffId)
+      const missingStaff = lines.some((l) => l.serviceId && !serviceLineStaffIsValid(l))
       if (missingStaff) {
-        toast({ title: "Assign staff", description: "Every service needs a staff member.", variant: "destructive" })
+        toast({
+          title: "Assign staff",
+          description: "Every service needs staff assigned with shares totalling 100%.",
+          variant: "destructive",
+        })
         return false
       }
       const missingService = lines.some((l) => !l.serviceId)
@@ -2680,6 +2938,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
 
       const walletSum = wallets.reduce((s, w) => s + (Number(w.remainingBalance) || 0), 0)
       if (cancelled) return
+      setPaymentDialogWalletSettings(walletBranchSettings)
       setPaymentDialogWalletsRaw(walletsForUi)
       setPaymentDialogWalletsUncombined(wallets)
       setPaymentDialogRewardSettings(rewardSettings)
@@ -2695,6 +2954,17 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       setPaymentDialogRewardBalanceText(
         showReward ? `${loyalty.toLocaleString("en-IN")} pts available` : ""
       )
+      const savedTender = billEditTenderRef.current
+      if (savedTender) {
+        setPayCash(Math.max(0, savedTender.cash))
+        setPayCard(Math.max(0, savedTender.card))
+        setPayOnline(Math.max(0, savedTender.online))
+        setPayWallet(Math.max(0, savedTender.wallet))
+        setPayLoyaltyPoints(Math.max(0, savedTender.loyaltyPoints))
+        if (savedTender.walletId) {
+          setPaySelectedWalletId(savedTender.walletId)
+        }
+      }
       setPaymentMethodLoading(false)
     })()
 
@@ -2706,6 +2976,231 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
   function continueToPayment() {
     if (!validateCheckoutBeforePayment()) return
     setPaymentMethodDialogOpen(true)
+  }
+
+  function buildCheckoutSaleData(preferred: CheckoutPaymentMethodChoice): Record<string, unknown> {
+    return {
+      clientId: customer!._id || customer!.id,
+      clientName: customer!.name,
+      clientPhone: isWalkInClient(customer!) ? WALK_IN_SYSTEM_PHONE : customer!.phone || "",
+      clientEmail: isWalkInClient(customer!) ? "" : customer!.email || "",
+      date: appointmentDate ? format(appointmentDate, "yyyy-MM-dd") : format(new Date(), "yyyy-MM-dd"),
+      time: appointmentTime || "",
+      appointmentPricingFinalized: true,
+      checkoutPreferredPaymentMethod: preferred,
+      notes: [notes?.trim(), checkoutSaleNote.trim()].filter(Boolean).join("\n\n") || "",
+      services: lines.map((s) => {
+        const contribs = getServiceLineStaffContributions(s)
+        const primaryId = primaryStaffIdFromContributions(contribs)
+        const q = serviceLineQuantity(s)
+        const staffMember =
+          staff.find((st: any) => String(st._id || st.id) === primaryId) ||
+          saleStaffCatalog.find((st: any) => String(st._id || st.id) === primaryId)
+        const linePreTax = serviceLineStaffPreTaxTotal(s)
+        const staffContributions = contribs.map((c) => {
+          const member =
+            staff.find((st: any) => String(st._id || st.id) === c.staffId) ||
+            saleStaffCatalog.find((st: any) => String(st._id || st.id) === c.staffId)
+          const pct = Number(c.percentage) || (contribs.length === 1 ? 100 : 0)
+          return {
+            staffId: c.staffId,
+            staffName: c.staffName || member?.name || "",
+            percentage: pct,
+            amount: linePreTax > 0 ? (linePreTax * pct) / 100 : 0,
+          }
+        })
+        return {
+          serviceId: s.serviceId,
+          staffId: primaryId,
+          staffName: staffMember?.name || staffContributions[0]?.staffName || "",
+          staffContributions,
+          name: s.name,
+          price: s.price,
+          duration: s.duration,
+          quantity: q,
+          discount: lineDiscountAsPayloadPercent(s.price, q, s.discountValue, s.discountIsPercent),
+        }
+      }),
+      ...(productLines.length > 0
+        ? {
+            products: productLines.map((p) => {
+              const q = Math.max(1, Math.floor(Number(p.quantity) || 1))
+              return {
+                productId: p.productId,
+                staffId: p.staffId || "",
+                name: p.name,
+                price: p.price,
+                quantity: q,
+                discount: lineDiscountAsPayloadPercent(p.price, q, p.discountValue, p.discountIsPercent),
+              }
+            }),
+          }
+        : {}),
+      ...(membershipLines.length > 0
+        ? {
+            memberships: membershipLines.map((m) => {
+              const q = Math.max(1, Math.floor(Number(m.quantity) || 1))
+              return {
+                planId: m.planId,
+                staffId: m.staffId || "",
+                planName: m.planName,
+                price: m.price,
+                durationInDays: m.durationInDays,
+                quantity: q,
+                discount: lineDiscountAsPayloadPercent(m.price, q, m.discountValue, m.discountIsPercent),
+              }
+            }),
+          }
+        : {}),
+      ...(prepaidLines.length > 0
+        ? {
+            prepaidPlans: prepaidLines.map((pr) => {
+              const q = Math.max(1, Math.floor(Number(pr.quantity) || 1))
+              return {
+                planId: pr.planId,
+                staffId: pr.staffId || "",
+                planName: pr.planName,
+                creditAmount: pr.creditAmount,
+                validityDays: pr.validityDays,
+                price: pr.price,
+                quantity: q,
+                discount: lineDiscountAsPayloadPercent(pr.price, q, pr.discountValue, pr.discountIsPercent),
+              }
+            }),
+          }
+        : {}),
+      ...(packageLines.length > 0
+        ? {
+            packages: packageLines.map((pk) => {
+              const q = Math.max(1, Math.floor(Number(pk.quantity) || 1))
+              return {
+                packageId: pk.packageId,
+                staffId: pk.staffId || "",
+                packageName: pk.packageName,
+                totalSittings: pk.totalSittings,
+                validityDays: pk.validityDays,
+                price: pk.price,
+                quantity: q,
+                discount: lineDiscountAsPayloadPercent(pk.price, q, pk.discountValue, pk.discountIsPercent),
+              }
+            }),
+          }
+        : {}),
+      ...(checkoutTipLines.filter((t) => t.staffId && t.amount > 0).length > 0
+        ? {
+            checkoutTips: checkoutTipLines
+              .filter((t) => t.staffId && t.amount > 0)
+              .map((t) => ({ staffId: t.staffId, amount: Math.max(0, Number(t.amount) || 0) })),
+          }
+        : {}),
+      ...(checkoutCartDiscountType === "fixed" && cartDiscountApplied > 0
+        ? { cartDiscountFixed: cartDiscountApplied }
+        : {}),
+      ...(checkoutCartDiscountType === "percentage" && checkoutCartDiscountValue > 0
+        ? {
+            cartDiscountPercent: Math.min(100, Math.max(0, checkoutCartDiscountValue)),
+          }
+        : {}),
+    }
+  }
+
+  async function processBillEditRefund() {
+    if (!validateCheckoutBeforePayment()) return
+    if (!billEditReason.trim()) {
+      toast({
+        title: "Edit reason required",
+        description: "Please enter why you are editing this bill.",
+        variant: "destructive",
+      })
+      return
+    }
+    if (!billRefundMode) {
+      toast({
+        title: "Refund mode required",
+        description: "Select Wallet or Cash to process the refund.",
+        variant: "destructive",
+      })
+      return
+    }
+    if (billRefundMode === "wallet" && (!customer || isWalkInClient(customer))) {
+      toast({
+        title: "Customer required",
+        description: "Select a saved customer to credit the refund to their wallet.",
+        variant: "destructive",
+      })
+      return
+    }
+    if (!checkoutTaxSettings) {
+      toast({
+        title: "Settings still loading",
+        description: "Wait a moment, then try again.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setNavigating(true)
+    try {
+      const saleData = buildCheckoutSaleData("cash")
+      const staffMerged: any[] = (() => {
+        const m = new Map<string, any>()
+        for (const s of staff || []) {
+          const id = String(s._id || s.id)
+          if (id) m.set(id, s)
+        }
+        for (const s of saleStaffCatalog || []) {
+          const id = String(s._id || s.id)
+          if (id) m.set(id, s)
+        }
+        return Array.from(m.values())
+      })()
+
+      const inlineResult = await completeServiceCheckoutInline({
+        saleData,
+        paymentMethod: "cash",
+        customer: customer!,
+        staff: staffMerged,
+        catalogServices,
+        catalogProducts,
+        catalogMembershipPlans,
+        catalogPrepaidPlans,
+        catalogPackages,
+        checkoutTaxSettings,
+        checkoutPaymentConfiguration,
+        existingSaleId: existingSaleId || undefined,
+        existingBillNo: existingBillNo || undefined,
+        editReason: billEditReason.trim(),
+        originalRecordedPaid: initialBillEditState?.recordedPaidAmount ?? 0,
+        refundProcessing: {
+          amount: billEditRefundDue,
+          mode: billRefundMode,
+          returnedProducts: billEditReturnedProducts,
+        },
+      })
+
+      if (inlineResult.ok) {
+        setBillRefundDialogOpen(false)
+        setBillRefundMode("")
+        toast({
+          title: "Refund processed",
+          description:
+            billRefundMode === "wallet"
+              ? `₹${formatCheckoutInr(billEditRefundDue)} refunded to customer's wallet successfully.`
+              : `₹${formatCheckoutInr(billEditRefundDue)} refunded via cash successfully.`,
+        })
+        onOpenChange(false)
+        onSuccessfulCheckout?.()
+        return
+      }
+
+      toast({
+        title: "Refund failed",
+        description: inlineResult.error || "Could not process refund. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setNavigating(false)
+    }
   }
 
   const closePaymentStep = useCallback(() => {
@@ -2880,6 +3375,15 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       selectedWalletId: String(paySelectedWalletId || "").trim(),
     }
 
+    if (existingSaleId && !billEditReason.trim()) {
+      toast({
+        title: "Edit reason required",
+        description: "Please provide a reason for editing this bill.",
+        variant: "destructive",
+      })
+      return
+    }
+
     setNavigating(true)
     try {
       if (persistedDraftRef.current) {
@@ -2891,6 +3395,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
 
       let ensuredBooking: EnsureAppointmentBookingResult | null = null
       if (
+        !existingSaleId &&
         !isEditMode &&
         lines.length > 0 &&
         typeof ensureAppointmentBookingBeforeCheckout === "function"
@@ -2920,115 +3425,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
         }
       }
 
-      const saleData: Record<string, unknown> = {
-        clientId: customer!._id || customer!.id,
-        clientName: customer!.name,
-        clientPhone: isWalkInClient(customer!) ? WALK_IN_SYSTEM_PHONE : customer!.phone || "",
-        clientEmail: isWalkInClient(customer!) ? "" : customer!.email || "",
-        date: appointmentDate ? format(appointmentDate, "yyyy-MM-dd") : format(new Date(), "yyyy-MM-dd"),
-        time: appointmentTime || "",
-        /** Quick Sale opens in payment-only mode; cart/discounts/tips are final from checkout. */
-        appointmentPricingFinalized: true,
-        checkoutPreferredPaymentMethod: preferred,
-        notes: [notes?.trim(), checkoutSaleNote.trim()].filter(Boolean).join("\n\n") || "",
-        services: lines.map((s) => {
-          const sid = String(s.staffId || "")
-          const q = serviceLineQuantity(s)
-          const staffMember =
-            staff.find((st: any) => String(st._id || st.id) === sid) ||
-            saleStaffCatalog.find((st: any) => String(st._id || st.id) === sid)
-          return {
-            serviceId: s.serviceId,
-            staffId: s.staffId,
-            staffName: staffMember?.name || "",
-            name: s.name,
-            price: s.price,
-            duration: s.duration,
-            quantity: q,
-            discount: lineDiscountAsPayloadPercent(s.price, q, s.discountValue, s.discountIsPercent),
-          }
-        }),
-        ...(productLines.length > 0
-          ? {
-              products: productLines.map((p) => {
-                const q = Math.max(1, Math.floor(Number(p.quantity) || 1))
-                return {
-                  productId: p.productId,
-                  staffId: p.staffId || "",
-                  name: p.name,
-                  price: p.price,
-                  quantity: q,
-                  discount: lineDiscountAsPayloadPercent(p.price, q, p.discountValue, p.discountIsPercent),
-                }
-              }),
-            }
-          : {}),
-        ...(membershipLines.length > 0
-          ? {
-              memberships: membershipLines.map((m) => {
-                const q = Math.max(1, Math.floor(Number(m.quantity) || 1))
-                return {
-                  planId: m.planId,
-                  staffId: m.staffId || "",
-                  planName: m.planName,
-                  price: m.price,
-                  durationInDays: m.durationInDays,
-                  quantity: q,
-                  discount: lineDiscountAsPayloadPercent(m.price, q, m.discountValue, m.discountIsPercent),
-                }
-              }),
-            }
-          : {}),
-        ...(prepaidLines.length > 0
-          ? {
-              prepaidPlans: prepaidLines.map((pr) => {
-                const q = Math.max(1, Math.floor(Number(pr.quantity) || 1))
-                return {
-                  planId: pr.planId,
-                  staffId: pr.staffId || "",
-                  planName: pr.planName,
-                  creditAmount: pr.creditAmount,
-                  validityDays: pr.validityDays,
-                  price: pr.price,
-                  quantity: q,
-                  discount: lineDiscountAsPayloadPercent(pr.price, q, pr.discountValue, pr.discountIsPercent),
-                }
-              }),
-            }
-          : {}),
-        ...(packageLines.length > 0
-          ? {
-              packages: packageLines.map((pk) => {
-                const q = Math.max(1, Math.floor(Number(pk.quantity) || 1))
-                return {
-                  packageId: pk.packageId,
-                  staffId: pk.staffId || "",
-                  packageName: pk.packageName,
-                  totalSittings: pk.totalSittings,
-                  validityDays: pk.validityDays,
-                  price: pk.price,
-                  quantity: q,
-                  discount: lineDiscountAsPayloadPercent(pk.price, q, pk.discountValue, pk.discountIsPercent),
-                }
-              }),
-            }
-          : {}),
-        ...(checkoutTipLines.filter((t) => t.staffId && t.amount > 0).length > 0
-          ? {
-              checkoutTips: checkoutTipLines
-                .filter((t) => t.staffId && t.amount > 0)
-                .map((t) => ({ staffId: t.staffId, amount: Math.max(0, Number(t.amount) || 0) })),
-            }
-          : {}),
-        ...(checkoutCartDiscountType === "fixed" && cartDiscountApplied > 0
-          ? { cartDiscountFixed: cartDiscountApplied }
-          : {}),
-        ...(checkoutCartDiscountType === "percentage" && checkoutCartDiscountValue > 0
-          ? {
-              cartDiscountPercent: Math.min(100, Math.max(0, checkoutCartDiscountValue)),
-            }
-          : {}),
-      }
+      const saleData = buildCheckoutSaleData(preferred)
       if (ensuredBooking) {
         saleData.appointmentId = ensuredBooking.appointmentId
         saleData.linkedAppointmentIds = ensuredBooking.linkedAppointmentIds
@@ -3082,12 +3479,26 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
         checkoutTaxSettings,
         checkoutPaymentConfiguration,
         creditBillChangeToWallet: opts?.creditBillChangeToWallet === true,
+        existingSaleId: existingSaleId || undefined,
+        existingBillNo: existingBillNo || undefined,
+        editReason: billEditReason.trim() || undefined,
+        prefetchedRedemption: {
+          rewardPointsSettings: paymentDialogRewardSettings,
+          loyaltyBalance: paymentDialogLoyaltyBalance,
+          walletSettings: paymentDialogWalletSettings,
+          clientWalletsUsable: paymentDialogWalletsUncombined,
+        },
       })
 
       if (inlineResult.ok) {
         const remaining = Math.max(0, due - totalPaid)
         toast(
-          isUnpaidBill
+          existingSaleId
+            ? {
+                title: "Bill updated",
+                description: `${inlineResult.billNo} was saved successfully.`,
+              }
+            : isUnpaidBill
             ? {
                 title: "Unpaid bill saved",
                 description: `${inlineResult.billNo} saved. ₹${formatCheckoutInr(remaining)} is due on this bill.`,
@@ -3104,6 +3515,15 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
         )
         onOpenChange(false)
         onSuccessfulCheckout?.()
+        return
+      }
+
+      if (existingSaleId) {
+        toast({
+          title: "Could not update bill",
+          description: inlineResult.error || "Please try again.",
+          variant: "destructive",
+        })
         return
       }
 
@@ -3580,72 +4000,75 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                 </div>
               </div>
             </div>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label>Staff</Label>
-                {staffOptions.length > 0 ? (
-                  <Select
-                    value={
-                      serviceEditDraft.staffId
-                        ? serviceEditDraft.staffId
-                        : CHECKOUT_NO_STAFF_SELECT_VALUE
-                    }
-                    onValueChange={(v) =>
-                      setServiceEditDraft((d) =>
-                        d
-                          ? {
-                              ...d,
-                              staffId: v === CHECKOUT_NO_STAFF_SELECT_VALUE ? "" : v,
-                            }
-                          : d
-                      )
-                    }
-                  >
-                    <SelectTrigger className="h-10 rounded-lg text-sm">
-                      <SelectValue placeholder={CHECKOUT_NO_STAFF_LABEL} />
-                    </SelectTrigger>
-                    <SelectContent
-                      position="popper"
-                      className="z-[260] max-h-[min(24rem,70vh)]"
-                    >
-                      <SelectItem value={CHECKOUT_NO_STAFF_SELECT_VALUE}>
-                        {CHECKOUT_NO_STAFF_LABEL}
-                      </SelectItem>
-                      {staffOptions.map((s) => (
-                        <SelectItem key={s.id} value={s.id}>
-                          {s.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                ) : (
-                  <p className="rounded-lg border border-amber-200/80 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                    No staff loaded — refresh the page or add staff in settings.
-                  </p>
-                )}
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="svc-checkout-discount">Discount</Label>
-                <CheckoutLineDiscountRow
-                  variant="form"
-                  inputId="svc-checkout-discount"
-                  discountValue={serviceEditDraft.discountValue}
-                  discountIsPercent={serviceEditDraft.discountIsPercent}
-                  onDiscountValueChange={(v) =>
-                    setServiceEditDraft((d) => (d ? { ...d, discountValue: v } : d))
+            <div className="space-y-2">
+              <Label>Staff</Label>
+              {staffOptions.length > 0 ? (
+                <MultiStaffSelector
+                  key={editingServiceLineId || "edit"}
+                  staffList={staffOptions.map((s) => ({
+                    _id: s.id,
+                    id: s.id,
+                    name: s.name,
+                  }))}
+                  serviceTotal={
+                    serviceEditDraft
+                      ? lineNetAfterLineDiscount(
+                          serviceEditDraft.price,
+                          Math.max(1, Math.floor(serviceEditDraft.quantity) || 1),
+                          serviceEditDraft.discountValue,
+                          serviceEditDraft.discountIsPercent
+                        )
+                      : 0
                   }
-                  onSetPercentMode={() =>
+                  placeholder={CHECKOUT_NO_STAFF_LABEL}
+                  popoverContentClassName="!z-[9999]"
+                  initialContributions={serviceEditDraft.staffContributions.map((c) => ({
+                    ...c,
+                    staffName:
+                      c.staffName ||
+                      staffOptions.find((s) => s.id === c.staffId)?.name ||
+                      "",
+                  }))}
+                  onStaffContributionsChange={(contributions) => {
                     setServiceEditDraft((d) =>
-                      d ? { ...d, discountIsPercent: true, discountValue: 0 } : d
+                      d
+                        ? {
+                            ...d,
+                            staffContributions: contributions,
+                            staffId: primaryStaffIdFromContributions(contributions),
+                          }
+                        : d
                     )
-                  }
-                  onSetFixedMode={() =>
-                    setServiceEditDraft((d) =>
-                      d ? { ...d, discountIsPercent: false, discountValue: 0 } : d
-                    )
-                  }
+                  }}
+                  onValidationChange={setServiceEditStaffValid}
                 />
-              </div>
+              ) : (
+                <p className="rounded-lg border border-amber-200/80 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                  No staff loaded — refresh the page or add staff in settings.
+                </p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="svc-checkout-discount">Discount</Label>
+              <CheckoutLineDiscountRow
+                variant="form"
+                inputId="svc-checkout-discount"
+                discountValue={serviceEditDraft.discountValue}
+                discountIsPercent={serviceEditDraft.discountIsPercent}
+                onDiscountValueChange={(v) =>
+                  setServiceEditDraft((d) => (d ? { ...d, discountValue: v } : d))
+                }
+                onSetPercentMode={() =>
+                  setServiceEditDraft((d) =>
+                    d ? { ...d, discountIsPercent: true, discountValue: 0 } : d
+                  )
+                }
+                onSetFixedMode={() =>
+                  setServiceEditDraft((d) =>
+                    d ? { ...d, discountIsPercent: false, discountValue: 0 } : d
+                  )
+                }
+              />
             </div>
             <div className="flex flex-row flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
               <div>
@@ -3683,6 +4106,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                   type="button"
                   className="h-10 rounded-full bg-violet-600 px-6 font-semibold text-white hover:bg-violet-700"
                   onClick={applyServiceEdit}
+                  disabled={!serviceEditStaffValid}
                 >
                   Apply
                 </Button>
@@ -4043,6 +4467,21 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
 
   const serviceCheckoutPaymentFormFields = (
     <div className="space-y-4 px-5 py-4">
+            {existingSaleId ? (
+              <div className="space-y-1.5">
+                <Label htmlFor="bill-edit-reason" className="text-xs font-medium text-red-700">
+                  Edit reason *
+                </Label>
+                <Textarea
+                  id="bill-edit-reason"
+                  rows={2}
+                  value={billEditReason}
+                  onChange={(e) => setBillEditReason(e.target.value)}
+                  placeholder="Why are you editing this bill?"
+                  className="min-h-[72px] resize-none rounded-lg"
+                />
+              </div>
+            ) : null}
 
             {paymentDialogShowWallet && paymentDialogWalletsRaw.length > 1 ? (
               <div className="space-y-1.5">
@@ -4337,6 +4776,11 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
             {!paymentMethodDialogOpen ? (
               <>
             <div className="p-5 pb-4 space-y-4 shrink-0">
+              {existingBillNo ? (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  Editing bill <span className="font-semibold">{existingBillNo}</span>
+                </div>
+              ) : null}
               {category === "services" ? (
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -5168,16 +5612,23 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                   </p>
                 ) : null}
                 {lines.map((line) => {
-                  const staffName =
-                    staffOptions.find((s) => s.id === line.staffId)?.name ||
+                  const staffContributions = getServiceLineStaffContributions(line).map((c) => ({
+                    ...c,
+                    staffName:
+                      c.staffName ||
+                      staffOptions.find((s) => s.id === c.staffId)?.name ||
+                      "",
+                  }))
+                  const staffLabel = formatStaffContributionsLabel(
+                    staffContributions,
                     CHECKOUT_NO_STAFF_LABEL
+                  )
                   const isLocked = line.locked === true
                   const qty = serviceLineQuantity(line)
                   const unit = Number(line.price) || 0
                   const discVal = Number(line.discountValue) || 0
                   const discIsPct = line.discountIsPercent !== false
                   const lineTotal = lineNetAfterLineDiscount(unit, qty, discVal, discIsPct)
-                  const staffTriggerId = `cart-service-staff-${line.id}`
                   return (
                     <div
                       key={line.id}
@@ -5201,7 +5652,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                             <p className="text-xs text-muted-foreground">
                               Service · ₹
                               {unit.toLocaleString("en-IN", { maximumFractionDigits: 2 })} each ·{" "}
-                              {formatDurationShort(line.duration)} · {staffName}
+                              {formatDurationShort(line.duration)} · {staffLabel}
                               {qty > 1 ? ` · ×${qty}` : ""}
                             </p>
                           </div>
@@ -5251,94 +5702,20 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                             </div>
                           </div>
                         </div>
-                        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-                          <div className="flex items-center gap-2">
-                            <div className="flex h-8 items-center gap-0.5 rounded-lg border border-border/80 bg-background">
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                className="h-8 w-8 shrink-0 rounded-md p-0"
-                                onClick={() => setServiceLineQuantity(line.id, qty - 1)}
-                                disabled={qty <= 1}
-                                aria-label="Decrease quantity"
-                              >
-                                <Minus className="h-3.5 w-3.5" />
-                              </Button>
-                              <span className="w-8 text-center text-sm font-semibold tabular-nums">
-                                {qty}
-                              </span>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                className="h-8 w-8 shrink-0 rounded-md p-0"
-                                onClick={() => setServiceLineQuantity(line.id, qty + 1)}
-                                aria-label="Increase quantity"
-                              >
-                                <Plus className="h-3.5 w-3.5" />
-                              </Button>
-                            </div>
-                          </div>
-                          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-                            <CheckoutLineDiscountRow
-                              discountValue={discVal}
-                              discountIsPercent={discIsPct}
-                              onDiscountValueChange={(v) =>
-                                patchServiceLine(line.id, {
-                                  discountValue: v,
-                                  membershipAutoDiscount: false,
-                                })
-                              }
-                              onSetPercentMode={() =>
-                                patchServiceLine(line.id, {
-                                  discountIsPercent: true,
-                                  discountValue: 0,
-                                  membershipAutoDiscount: false,
-                                })
-                              }
-                              onSetFixedMode={() =>
-                                patchServiceLine(line.id, {
-                                  discountIsPercent: false,
-                                  discountValue: 0,
-                                  membershipAutoDiscount: false,
-                                })
-                              }
-                            />
-                            {staffOptions.length > 0 ? (
-                              <div className="min-w-0 w-full sm:w-[9.5rem] sm:max-w-[9.5rem] sm:flex-1">
-                                <Select
-                                  value={
-                                    line.staffId ? line.staffId : CHECKOUT_NO_STAFF_SELECT_VALUE
-                                  }
-                                  onValueChange={(v) =>
-                                    setServiceLineStaff(
-                                      line.id,
-                                      v === CHECKOUT_NO_STAFF_SELECT_VALUE ? "" : v
-                                    )
-                                  }
-                                >
-                                  <SelectTrigger
-                                    id={staffTriggerId}
-                                    className="h-8 w-full max-w-none rounded-lg px-2 text-xs"
-                                  >
-                                    <SelectValue placeholder={CHECKOUT_NO_STAFF_LABEL} />
-                                  </SelectTrigger>
-                                  <SelectContent position="popper" className={cartSelectContentClass}>
-                                    <SelectItem value={CHECKOUT_NO_STAFF_SELECT_VALUE}>
-                                      {CHECKOUT_NO_STAFF_LABEL}
-                                    </SelectItem>
-                                    {staffOptions.map((s) => (
-                                      <SelectItem key={s.id} value={s.id}>
-                                        {s.name}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                            ) : null}
-                          </div>
-                        </div>
+                        <CheckoutCartServiceStaffControls
+                          lineId={line.id}
+                          qty={qty}
+                          discVal={discVal}
+                          discIsPct={discIsPct}
+                          staffContributions={staffContributions}
+                          staffOptions={staffOptions}
+                          checkoutPopoverPortal={checkoutPopoverPortal}
+                          serviceTotal={serviceLineStaffPreTaxTotal(line)}
+                          onQuantityChange={(nextQty) =>
+                            setServiceLineQuantity(line.id, nextQty)
+                          }
+                          onPatchLine={(patch) => patchServiceLine(line.id, patch)}
+                        />
                       </div>
                     </div>
                   )
@@ -6065,17 +6442,14 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                         onClick={() => setCartBreakdownOpen(true)}
                       >
                         <span className="inline-flex items-center gap-0.5">
-                          To pay
+                          {checkoutSummaryPayLabel}
                           <ChevronRight
                             className="h-4 w-4 shrink-0 font-normal text-muted-foreground"
                             aria-hidden
                           />
                         </span>
                         <span className="tabular-nums">
-                          ₹
-                          {formatCheckoutInr(
-                            paymentMethodDialogOpen ? paymentRemainingDue : cartToPayIncludingTips
-                          )}
+                          ₹{formatCheckoutInr(checkoutSummaryPayAmount)}
                         </span>
                       </button>
                     </>
@@ -6175,12 +6549,9 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                         </div>
                       ) : null}
                       <div className="flex items-center justify-between text-base font-bold text-foreground">
-                        <span>To pay</span>
+                        <span>{checkoutSummaryPayLabel}</span>
                         <span className="tabular-nums">
-                          ₹
-                          {formatCheckoutInr(
-                            paymentMethodDialogOpen ? paymentRemainingDue : cartToPayIncludingTips
-                          )}
+                          ₹{formatCheckoutInr(checkoutSummaryPayAmount)}
                         </span>
                       </div>
                     </div>
@@ -6207,7 +6578,13 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                       disabled={paymentMethodLoading}
                       onClick={() => void confirmPaymentMethodAndContinue()}
                     >
-                      {paymentRemainingDue > 0.01 ? "Save Part-Paid" : "Complete billing"}
+                      {existingSaleId
+                        ? paymentRemainingDue > 0.01
+                          ? "Save Part-Paid"
+                          : "Save changes"
+                        : paymentRemainingDue > 0.01
+                          ? "Save Part-Paid"
+                          : "Complete billing"}
                     </LoadingButton>
                   </>
                 ) : (
@@ -6255,14 +6632,16 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                       Add sale note
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      onSelect={(e) => {
-                        e.preventDefault()
-                        saveCheckoutDraft()
-                      }}
-                    >
-                      Save draft
-                    </DropdownMenuItem>
+                    {!existingSaleId ? (
+                      <DropdownMenuItem
+                        onSelect={(e) => {
+                          e.preventDefault()
+                          saveCheckoutDraft()
+                        }}
+                      >
+                        Save draft
+                      </DropdownMenuItem>
+                    ) : null}
                     {hasPersistedDraft ? (
                       <DropdownMenuItem
                         className="text-destructive focus:text-destructive"
@@ -6299,13 +6678,22 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                     (packageLines.length > 0 && packageLines.some((l) => !l.staffId)) ||
                     (productLines.length > 0 && productLines.some((l) => !l.staffId))
                   }
-                  onClick={() => void continueToPayment()}
+                  onClick={() => {
+                    if (showBillEditRefundAction) {
+                      setBillRefundMode("")
+                      setBillRefundDialogOpen(true)
+                      return
+                    }
+                    void continueToPayment()
+                  }}
                 >
                   {navigating ? (
                     <>
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                       Opening checkout…
                     </>
+                  ) : showBillEditRefundAction ? (
+                    `Refund ₹${formatCheckoutInr(billEditRefundDue)}`
                   ) : (
                     "Continue to payment"
                   )}
@@ -6409,6 +6797,104 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
               "Create client"
             )}
           </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+
+  const billRefundDialog = (
+    <Dialog open={billRefundDialogOpen} onOpenChange={setBillRefundDialogOpen}>
+      <DialogContent className="z-[200] gap-4 sm:max-w-md" overlayClassName="z-[190]" aria-describedby={undefined}>
+        <DialogHeader>
+          <DialogTitle className="text-base font-semibold tracking-tight">Process refund</DialogTitle>
+          <DialogDescription>
+            Customer overpaid after bill changes. Choose how to return the excess amount.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 py-1">
+          <div className="space-y-1.5">
+            <Label htmlFor="bill-refund-edit-reason" className="text-xs font-medium text-red-700">
+              Edit reason *
+            </Label>
+            <Textarea
+              id="bill-refund-edit-reason"
+              rows={2}
+              value={billEditReason}
+              onChange={(e) => setBillEditReason(e.target.value)}
+              placeholder="Why are you editing this bill?"
+              className="min-h-[72px] resize-none rounded-lg"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-sm font-medium">Refund amount</Label>
+            <Input
+              readOnly
+              value={`₹${formatCheckoutInr(billEditRefundDue)}`}
+              className="h-10 rounded-lg bg-muted/50 font-semibold tabular-nums"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label className="text-sm font-medium">Select refund mode *</Label>
+            <RadioGroup
+              value={billRefundMode}
+              onValueChange={(v) => setBillRefundMode(v as "wallet" | "cash")}
+              className="grid gap-2"
+            >
+              <label
+                htmlFor="bill-refund-mode-wallet"
+                className={cn(
+                  "flex items-center gap-3 rounded-lg border px-3 py-2.5 cursor-pointer transition-colors",
+                  billRefundMode === "wallet" ? "border-violet-400 bg-violet-50/60" : "border-border/70"
+                )}
+              >
+                <RadioGroupItem value="wallet" id="bill-refund-mode-wallet" />
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <Wallet className="h-4 w-4 text-violet-600" aria-hidden />
+                  Wallet
+                </div>
+              </label>
+              <label
+                htmlFor="bill-refund-mode-cash"
+                className={cn(
+                  "flex items-center gap-3 rounded-lg border px-3 py-2.5 cursor-pointer transition-colors",
+                  billRefundMode === "cash" ? "border-violet-400 bg-violet-50/60" : "border-border/70"
+                )}
+              >
+                <RadioGroupItem value="cash" id="bill-refund-mode-cash" />
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <CreditCard className="h-4 w-4 text-violet-600" aria-hidden />
+                  Cash
+                </div>
+              </label>
+            </RadioGroup>
+          </div>
+          {billEditReturnedProducts.length > 0 ? (
+            <div className="rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">Returned products: </span>
+              {billEditReturnedProducts
+                .map((p) => `${p.name} × ${p.quantity}`)
+                .join(", ")}
+            </div>
+          ) : null}
+        </div>
+        <DialogFooter className="gap-2 sm:gap-0">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setBillRefundDialogOpen(false)}
+            disabled={navigating}
+          >
+            Cancel
+          </Button>
+          <LoadingButton
+            type="button"
+            className="bg-violet-600 hover:bg-violet-700 text-white"
+            loading={navigating}
+            loadingText="Processing…"
+            onClick={() => void processBillEditRefund()}
+          >
+            Process Refund
+          </LoadingButton>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -6951,6 +7437,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     return (
       <>
         <div
+          ref={setCheckoutPopoverPortal}
           role="dialog"
           aria-modal="true"
           aria-label="Checkout"
@@ -6967,6 +7454,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
         {newClientDialog}
         {pinServicePickerDialog}
         {cancelDraftConfirmDialog}
+        {billRefundDialog}
         {checkoutPartialPaymentConfirmDialog}
         {checkoutCreditChangeConfirmDialog}
         {checkoutExtrasDialogs}
@@ -7012,6 +7500,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       {newClientDialog}
       {pinServicePickerDialog}
       {cancelDraftConfirmDialog}
+      {billRefundDialog}
       {checkoutPartialPaymentConfirmDialog}
       {checkoutCreditChangeConfirmDialog}
       {checkoutExtrasDialogs}

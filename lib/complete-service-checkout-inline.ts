@@ -14,6 +14,7 @@ import {
   RewardPointsAPI,
   SalesAPI,
   SettingsAPI,
+  type RewardPointsSettings,
 } from "@/lib/api"
 import type { Client } from "@/lib/client-store"
 import { addReceipt } from "@/lib/data"
@@ -278,20 +279,43 @@ function serviceProductLineDiscountPreTax(
   return Math.max(0, gross - afterLine)
 }
 
-async function generateReceiptNumber(): Promise<string> {
+let cachedInvoicePrefix: string | null = null
+
+/** Cache invoice prefix when checkout opens so bill number generation needs one API call. */
+export function primeCheckoutInvoicePrefix(prefix: string | undefined) {
+  const trimmed = String(prefix || "").trim()
+  if (trimmed) cachedInvoicePrefix = trimmed
+}
+
+async function resolveInvoicePrefix(invoicePrefixOverride?: string): Promise<string> {
+  const override = String(invoicePrefixOverride || "").trim()
+  if (override) return override
+  if (cachedInvoicePrefix) return cachedInvoicePrefix
+  try {
+    const settingsResponse = await SettingsAPI.getBusinessSettings()
+    if (settingsResponse.success && settingsResponse.data) {
+      const prefix =
+        settingsResponse.data.invoicePrefix || settingsResponse.data.receiptPrefix || "INV"
+      cachedInvoicePrefix = prefix
+      return prefix
+    }
+  } catch {
+    /* use default */
+  }
+  return "INV"
+}
+
+async function generateReceiptNumber(invoicePrefixOverride?: string): Promise<string> {
   const maxRetries = 3
   let lastError: unknown = null
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const incrementResponse = await SettingsAPI.incrementReceiptNumber()
+      const [incrementResponse, prefix] = await Promise.all([
+        SettingsAPI.incrementReceiptNumber(),
+        resolveInvoicePrefix(invoicePrefixOverride),
+      ])
       if (incrementResponse.success) {
         const newReceiptNumber = incrementResponse.data.receiptNumber
-        let prefix = "INV"
-        const settingsResponse = await SettingsAPI.getBusinessSettings()
-        if (settingsResponse.success && settingsResponse.data) {
-          prefix =
-            settingsResponse.data.invoicePrefix || settingsResponse.data.receiptPrefix || "INV"
-        }
         return `${prefix}-${String(newReceiptNumber).padStart(6, "0")}`
       }
       lastError = new Error(incrementResponse.error || "Failed to increment receipt number")
@@ -303,6 +327,313 @@ async function generateReceiptNumber(): Promise<string> {
     }
   }
   throw lastError instanceof Error ? lastError : new Error("Failed to generate receipt number")
+}
+
+export type ServiceCheckoutPrefetchedRedemption = {
+  rewardPointsSettings?: RewardPointsSettings | null
+  loyaltyBalance?: number
+  walletSettings?: { allowCouponStacking?: boolean; combineMultipleWallets?: boolean } | null
+  clientWalletsUsable?: unknown[]
+}
+
+function checkoutNeedsRedemptionContext(opts: {
+  paymentMethod: CheckoutPaymentMethodChoice
+  tenderSplit?: ServiceCheckoutTenderSplit
+  creditBillChangeToWallet?: boolean
+  prefetchedRedemption?: ServiceCheckoutPrefetchedRedemption
+}): boolean {
+  if (opts.prefetchedRedemption) return false
+  if (opts.creditBillChangeToWallet) return true
+  if (opts.paymentMethod === "wallet" || opts.paymentMethod === "reward") return true
+  const ts = opts.tenderSplit
+  if (!ts) return false
+  if ((ts.walletPayAmount || 0) > 0) return true
+  if ((ts.loyaltyPointsInput || 0) > 0) return true
+  return false
+}
+
+async function loadRedemptionContext(
+  cid: string | null,
+  needsLoad: boolean,
+  prefetched?: ServiceCheckoutPrefetchedRedemption
+): Promise<{
+  rewardPointsSettings: RewardPointsSettings | null
+  loyaltyBalance: number
+  walletSettings: { allowCouponStacking?: boolean; combineMultipleWallets?: boolean } | null
+  clientWalletsUsable: any[]
+}> {
+  if (prefetched) {
+    return {
+      rewardPointsSettings: prefetched.rewardPointsSettings ?? null,
+      loyaltyBalance: prefetched.loyaltyBalance ?? 0,
+      walletSettings: prefetched.walletSettings ?? null,
+      clientWalletsUsable: (prefetched.clientWalletsUsable as any[]) ?? [],
+    }
+  }
+  if (!needsLoad) {
+    return {
+      rewardPointsSettings: null,
+      loyaltyBalance: 0,
+      walletSettings: null,
+      clientWalletsUsable: [],
+    }
+  }
+
+  const [rs, ws, cres, wres] = await Promise.all([
+    RewardPointsAPI.getSettings(),
+    ClientWalletAPI.getSettings(),
+    cid && isLikelyMongoObjectId(cid) ? ClientsAPI.getById(cid) : Promise.resolve(null),
+    cid && isLikelyMongoObjectId(cid) ? ClientWalletAPI.getClientWallets(cid) : Promise.resolve(null),
+  ])
+
+  let loyaltyBalance = 0
+  if (cres && "success" in cres && cres.success && cres.data) {
+    loyaltyBalance = Number((cres.data as any).rewardPointsBalance) || 0
+  }
+
+  let clientWalletsUsable: any[] = []
+  if (wres && "success" in wres && wres.success && wres.data?.wallets) {
+    clientWalletsUsable = filterWalletsForQuickSaleDisplay(wres.data.wallets as any[])
+  }
+
+  return {
+    rewardPointsSettings: rs.success && rs.data ? rs.data : null,
+    loyaltyBalance,
+    walletSettings: ws.success && ws.data ? (ws.data as any) : null,
+    clientWalletsUsable,
+  }
+}
+
+async function runPostCheckoutSideEffects(args: {
+  isBillUpdate: boolean
+  appointmentLinkageIntact: boolean
+  linkedAppointmentId: string | null
+  linkedAppointmentIds: string[]
+  recordedPaidTotal: number
+  calculatedTotal: number
+  tip: number
+  saleDoc: any
+  walletPayAmount: number
+  selectedWalletId: string
+  customer: Client
+  validServiceItems: any[]
+  services: any[]
+  isGlobalDiscountActive: boolean
+  isValueDiscountActive: boolean
+  built: { discountPercentage: number; discountValue: number }
+  changeToCredit: number
+  clientWalletsUsable: any[]
+  cid: string | null
+  receiptNumber: string
+  validPrepaidPlanItems: any[]
+  validPackageItems: any[]
+  validProductItems: any[]
+}) {
+  const {
+    isBillUpdate,
+    appointmentLinkageIntact,
+    linkedAppointmentId,
+    linkedAppointmentIds,
+    recordedPaidTotal,
+    calculatedTotal,
+    tip,
+    saleDoc,
+    walletPayAmount,
+    selectedWalletId,
+    customer,
+    validServiceItems,
+    services,
+    isGlobalDiscountActive,
+    isValueDiscountActive,
+    built,
+    changeToCredit,
+    clientWalletsUsable,
+    cid,
+    receiptNumber,
+    validPrepaidPlanItems,
+    validPackageItems,
+    validProductItems,
+  } = args
+
+  const tasks: Promise<unknown>[] = []
+
+  if (
+    appointmentLinkageIntact &&
+    linkedAppointmentId &&
+    (recordedPaidTotal >= calculatedTotal + tip || saleDoc?.status === "completed")
+  ) {
+    const idsToComplete = resolveAppointmentIdsToComplete(linkedAppointmentIds, linkedAppointmentId)
+    tasks.push(
+      Promise.all(idsToComplete.map((id) => AppointmentsAPI.update(id, { status: "completed" }))).catch(
+        () => undefined
+      )
+    )
+  }
+
+  if (
+    !isBillUpdate &&
+    walletPayAmount > 0 &&
+    selectedWalletId &&
+    saleDoc?._id &&
+    isLikelyMongoObjectId(getCustomerId(customer) || undefined)
+  ) {
+    const serviceNames = validServiceItems.map((it: any) => {
+      const svc = services.find((s) => (s._id || s.id) === it.serviceId)
+      return svc?.name || "Service"
+    })
+    const couponApplied =
+      isGlobalDiscountActive ||
+      isValueDiscountActive ||
+      built.discountPercentage > 0 ||
+      built.discountValue > 0
+    tasks.push(
+      ClientWalletAPI.redeem({
+        walletId: selectedWalletId,
+        amount: walletPayAmount,
+        saleId: String(saleDoc._id),
+        serviceNames,
+        couponApplied,
+      })
+        .then((rw) => {
+          if (!rw.success) console.warn("[inline-checkout] wallet redeem:", rw.message)
+        })
+        .catch((e) => console.warn("[inline-checkout] wallet redeem error", e))
+    )
+  }
+
+  if (changeToCredit > 0.005 && saleDoc?._id && isLikelyMongoObjectId(cid || undefined)) {
+    tasks.push(
+      (async () => {
+        try {
+          if (clientWalletsUsable.length > 0) {
+            const walletIdForCredit = pickWalletIdForChangeCredit(clientWalletsUsable, selectedWalletId)
+            if (walletIdForCredit) {
+              await ClientWalletAPI.creditChange({
+                walletId: walletIdForCredit,
+                amount: changeToCredit,
+                saleId: String(saleDoc._id),
+                billNo: receiptNumber,
+              })
+            }
+          } else {
+            await ClientWalletAPI.creditChangeOpenWallet({
+              clientId: cid!,
+              amount: changeToCredit,
+              saleId: String(saleDoc._id),
+              billNo: receiptNumber,
+            })
+          }
+        } catch (e) {
+          console.warn("[inline-checkout] change credit", e)
+        }
+      })()
+    )
+  }
+
+  if (!isBillUpdate && validPrepaidPlanItems.length > 0 && saleDoc?._id && isLikelyMongoObjectId(cid || undefined)) {
+    tasks.push(
+      (async () => {
+        try {
+          for (const row of validPrepaidPlanItems) {
+            const qty = Math.max(1, Math.floor(row.quantity || 1))
+            for (let q = 0; q < qty; q++) {
+              await ClientWalletAPI.issue({
+                clientId: cid!,
+                planId: row.planId,
+                amountPaid: row.price,
+                saleId: String(saleDoc._id),
+              })
+            }
+          }
+        } catch (e) {
+          console.warn("[inline-checkout] prepaid issue", e)
+        }
+      })()
+    )
+  }
+
+  if (!isBillUpdate && validPackageItems.length > 0 && saleDoc?._id && isLikelyMongoObjectId(cid || undefined)) {
+    tasks.push(
+      (async () => {
+        try {
+          const paymentTowardGoods = Math.min(recordedPaidTotal, calculatedTotal)
+          const paymentRatio =
+            calculatedTotal > 0 ? Math.min(1, Math.max(0, paymentTowardGoods / calculatedTotal)) : 1
+          for (const row of validPackageItems) {
+            const qty = Math.max(1, Math.floor(row.quantity || 1))
+            const perUnitPaid = Math.round(((Number(row.price) || 0) * paymentRatio) * 100) / 100
+            for (let q = 0; q < qty; q++) {
+              await PackagesAPI.sell(row.packageId, {
+                client_id: cid!,
+                amount_paid: perUnitPaid,
+                sold_by_staff_id: row.staffId || undefined,
+              })
+            }
+          }
+        } catch (e) {
+          console.warn("[inline-checkout] package sell", e)
+        }
+      })()
+    )
+  }
+
+  if (validProductItems.length > 0) {
+    tasks.push(ProductsAPI.getAll({ limit: 1000 }).catch(() => undefined))
+  }
+
+  await Promise.allSettled(tasks)
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("appointments-refresh"))
+  }
+}
+
+function normalizeCheckoutServiceStaffContributions(
+  svcData: Record<string, unknown>,
+  staff: any[],
+  lineTotal: number
+): { staffId: string; staffContributions: any[] } {
+  const raw = Array.isArray(svcData.staffContributions)
+    ? (svcData.staffContributions as Array<Record<string, unknown>>)
+    : []
+  if (raw.length > 0) {
+    const staffContributions = raw.map((c) => {
+      const staffId = String(c.staffId || "")
+      const member = staff.find((s) => String(s._id || s.id) === staffId)
+      const pct = Number(c.percentage) || (raw.length === 1 ? 100 : 0)
+      const amountFromPayload = Number(c.amount)
+      return {
+        staffId,
+        staffName: String(c.staffName || member?.name || "Unassigned Staff"),
+        percentage: pct,
+        amount: Number.isFinite(amountFromPayload)
+          ? amountFromPayload
+          : lineTotal > 0
+            ? (lineTotal * pct) / 100
+            : 0,
+      }
+    })
+    return {
+      staffId: String(svcData.staffId || staffContributions[0]?.staffId || ""),
+      staffContributions,
+    }
+  }
+  const staffId = String(svcData.staffId || "")
+  const staffMember = staff.find((s) => String(s._id || s.id) === staffId)
+  if (staffId && staffMember) {
+    return {
+      staffId,
+      staffContributions: [
+        {
+          staffId,
+          staffName: staffMember.name || String(svcData.staffName || ""),
+          percentage: 100,
+          amount: lineTotal,
+        },
+      ],
+    }
+  }
+  return { staffId, staffContributions: [] }
 }
 
 async function buildSaleLinesFromAppointmentPayload(
@@ -335,7 +666,6 @@ async function buildSaleLinesFromAppointmentPayload(
     for (const svcData of appointmentData.services as any[]) {
       const service = services.find((s) => (s._id || s.id) === svcData.serviceId)
       if (!service) continue
-      const staffMember = staff.find((s) => (s._id || s.id) === svcData.staffId)
       const qty = Math.max(1, Math.floor(Number(svcData.quantity) || 1))
       const unitPrice = Number(svcData.price) || Number(service.price) || 0
       const baseAmount = unitPrice * qty
@@ -349,26 +679,21 @@ async function buildSaleLinesFromAppointmentPayload(
         applyTax,
         priceInclusive
       )
+      const { staffId, staffContributions } = normalizeCheckoutServiceStaffContributions(
+        svcData,
+        staff,
+        lineTotal
+      )
       serviceItemsToAdd.push({
         id: `${Date.now()}-${Math.random()}`,
         serviceId: service._id || service.id,
-        staffId: svcData.staffId || "",
+        staffId,
         quantity: qty,
         price: unitPrice,
         discount: discPct,
         total: lineTotal,
-        staffContributions:
-          svcData.staffId && staffMember
-            ? [
-                {
-                  staffId: svcData.staffId,
-                  staffName: staffMember.name || svcData.staffName || "",
-                  percentage: 100,
-                  amount: lineTotal,
-                },
-              ]
-            : [],
-        appointmentLineLocked: true,
+        staffContributions,
+        appointmentLineLocked: Boolean(svcData.appointmentLineLocked),
       })
     }
   } else if (appointmentData.serviceId) {
@@ -623,6 +948,12 @@ export type ServiceCheckoutTenderSplit = {
   selectedWalletId: string
 }
 
+export type BillEditRefundProcessing = {
+  amount: number
+  mode: "wallet" | "cash"
+  returnedProducts: { productId: string; name: string; quantity: number }[]
+}
+
 export async function completeServiceCheckoutInline(opts: {
   saleData: Record<string, unknown>
   /** Ignored when `tenderSplit` is set (amounts come from split). */
@@ -639,6 +970,17 @@ export async function completeServiceCheckoutInline(opts: {
   checkoutPaymentConfiguration: unknown
   /** After staff confirms in UI: credit cash overpayment to prepaid (cash-only tenders; server enforces). */
   creditBillChangeToWallet?: boolean
+  /** When set, updates an existing sale instead of creating a new bill. */
+  existingSaleId?: string
+  existingBillNo?: string
+  editReason?: string
+  /** Product-return refund when revised bill total is below amount already paid. */
+  refundProcessing?: BillEditRefundProcessing
+  /** Original paid amount before refund (bill edit). */
+  originalRecordedPaid?: number
+  /** Payment-step data already loaded in checkout — skips duplicate wallet/reward API calls. */
+  prefetchedRedemption?: ServiceCheckoutPrefetchedRedemption
+  invoicePrefix?: string
 }): Promise<CompleteServiceCheckoutInlineResult> {
   const {
     saleData: appointmentData,
@@ -654,31 +996,67 @@ export async function completeServiceCheckoutInline(opts: {
     checkoutTaxSettings: ts,
     checkoutPaymentConfiguration: payRaw,
     creditBillChangeToWallet: creditBillChangeOpt,
+    existingSaleId,
+    existingBillNo,
+    editReason,
+    refundProcessing,
+    originalRecordedPaid,
+    prefetchedRedemption,
+    invoicePrefix,
   } = opts
+
+  const isBillUpdate = Boolean(existingSaleId?.trim())
+  const isRefundBillEdit = isBillUpdate && !!refundProcessing
 
   const paymentMethod: CheckoutPaymentMethodChoice = paymentMethodOpt ?? "cash"
 
   try {
     let membershipPlans = catalogMembershipPlans
-    if (Array.isArray(appointmentData.memberships) && appointmentData.memberships.length > 0 && membershipPlans.length === 0) {
-      const plansRes = await MembershipAPI.getPlans({ isActive: true })
-      if (plansRes.success && Array.isArray(plansRes.data)) {
-        membershipPlans = plansRes.data.filter((p: any) => p.isActive !== false)
-      }
-    }
     let prepaidPlans = catalogPrepaidPlans
-    if (Array.isArray(appointmentData.prepaidPlans) && appointmentData.prepaidPlans.length > 0 && prepaidPlans.length === 0) {
-      const pwRes = await ClientWalletAPI.listPlans({ status: "active" })
-      if (pwRes.success && pwRes.data?.plans) {
-        prepaidPlans = pwRes.data.plans
-      }
-    }
     let catalogPackages = catalogPackagesInput
-    if (Array.isArray(appointmentData.packages) && appointmentData.packages.length > 0 && catalogPackages.length === 0) {
-      const pkgRes = await PackagesAPI.list({ status: "ACTIVE", limit: 500 })
-      if (pkgRes.success && pkgRes.data?.packages) {
-        catalogPackages = pkgRes.data.packages
-      }
+
+    const catalogLoads: Promise<void>[] = []
+    if (
+      Array.isArray(appointmentData.memberships) &&
+      appointmentData.memberships.length > 0 &&
+      membershipPlans.length === 0
+    ) {
+      catalogLoads.push(
+        MembershipAPI.getPlans({ isActive: true }).then((plansRes) => {
+          if (plansRes.success && Array.isArray(plansRes.data)) {
+            membershipPlans = plansRes.data.filter((p: any) => p.isActive !== false)
+          }
+        })
+      )
+    }
+    if (
+      Array.isArray(appointmentData.prepaidPlans) &&
+      appointmentData.prepaidPlans.length > 0 &&
+      prepaidPlans.length === 0
+    ) {
+      catalogLoads.push(
+        ClientWalletAPI.listPlans({ status: "active" }).then((pwRes) => {
+          if (pwRes.success && pwRes.data?.plans) {
+            prepaidPlans = pwRes.data.plans
+          }
+        })
+      )
+    }
+    if (
+      Array.isArray(appointmentData.packages) &&
+      appointmentData.packages.length > 0 &&
+      catalogPackages.length === 0
+    ) {
+      catalogLoads.push(
+        PackagesAPI.list({ status: "ACTIVE", limit: 500 }).then((pkgRes) => {
+          if (pkgRes.success && pkgRes.data?.packages) {
+            catalogPackages = pkgRes.data.packages
+          }
+        })
+      )
+    }
+    if (catalogLoads.length > 0) {
+      await Promise.all(catalogLoads)
     }
 
     const built = await buildSaleLinesFromAppointmentPayload(
@@ -813,28 +1191,20 @@ export async function completeServiceCheckoutInline(opts: {
         ? Math.round(eligibleRedemptionSubtotal(redemptionLineItems, payCfgMerged, "reward"))
         : 0
 
-    const rs = await RewardPointsAPI.getSettings()
-    const rewardPointsSettings = rs.success ? rs.data : null
-    let loyaltyBalance = 0
     const cid = getCustomerId(customer)
-    if (cid && isLikelyMongoObjectId(cid)) {
-      const cres = await ClientsAPI.getById(cid)
-      if (cres.success && cres.data) {
-        loyaltyBalance = Number((cres.data as any).rewardPointsBalance) || 0
-      }
-    }
-
-    let walletSettings: { allowCouponStacking?: boolean; combineMultipleWallets?: boolean } | null = null
-    const ws = await ClientWalletAPI.getSettings()
-    if (ws.success && ws.data) walletSettings = ws.data as any
-
-    let clientWalletsUsable: any[] = []
-    if (cid && isLikelyMongoObjectId(cid)) {
-      const wres = await ClientWalletAPI.getClientWallets(cid)
-      if (wres.success && wres.data?.wallets) {
-        clientWalletsUsable = filterWalletsForQuickSaleDisplay(wres.data.wallets as any[])
-      }
-    }
+    const needsRedemptionLoad = checkoutNeedsRedemptionContext({
+      paymentMethod,
+      tenderSplit,
+      creditBillChangeToWallet: creditBillChangeOpt,
+      prefetchedRedemption,
+    })
+    const {
+      rewardPointsSettings,
+      loyaltyBalance,
+      walletSettings,
+      clientWalletsUsable: loadedClientWalletsUsable,
+    } = await loadRedemptionContext(cid, needsRedemptionLoad, prefetchedRedemption)
+    let clientWalletsUsable = loadedClientWalletsUsable
 
     let clientWallets = clientWalletsUsable
     if (walletSettings?.combineMultipleWallets && clientWalletsUsable.length > 1) {
@@ -1070,16 +1440,23 @@ export async function completeServiceCheckoutInline(opts: {
       }
     }
 
-    const { payments, changeToCredit, recordedPaidTotal } = buildRecordedPaymentsForCheckout({
-      cashAmount,
-      cardAmount,
-      onlineAmount,
-      walletPayAmount,
-      saleDueTotal,
-      creditOverpaymentToWallet: creditChangeEffective,
-    })
+    const { payments, changeToCredit, recordedPaidTotal } = isRefundBillEdit
+      ? {
+          payments: [] as { type: string; amount: number }[],
+          changeToCredit: 0,
+          recordedPaidTotal: Math.max(0, Number(originalRecordedPaid) || 0),
+        }
+      : buildRecordedPaymentsForCheckout({
+          cashAmount,
+          cardAmount,
+          onlineAmount,
+          walletPayAmount,
+          saleDueTotal,
+          creditOverpaymentToWallet: creditChangeEffective,
+        })
 
     if (
+      !isRefundBillEdit &&
       creditChangeEffective &&
       totalPaid > saleDueTotal + 1e-6 &&
       Math.abs(recordedPaidTotal - saleDueTotal) > 0.02
@@ -1091,7 +1468,7 @@ export async function completeServiceCheckoutInline(opts: {
       }
     }
 
-    if (totalPaid > roundedTotal + 0.05) {
+    if (!isRefundBillEdit && totalPaid > roundedTotal + 0.05) {
       if (!creditChangeEffective) {
         if (!isCashOnlyCheckout) {
           return {
@@ -1519,7 +1896,12 @@ export async function completeServiceCheckoutInline(opts: {
         ? { staffId: receiptItems[0].staffId, staffName: receiptItems[0].staffName }
         : null
 
-    const receiptNumber = await generateReceiptNumber()
+    const receiptNumber = isBillUpdate
+      ? String(existingBillNo || appointmentData.billNo || "").trim()
+      : await generateReceiptNumber(invoicePrefix)
+    if (isBillUpdate && !receiptNumber) {
+      return { ok: false, error: "Bill number is missing for update" }
+    }
     const tipStaff = tipStaffId ? staff.find((s) => (s._id || s.id) === tipStaffId) : null
 
     const salePayload: Record<string, unknown> = {
@@ -1653,8 +2035,15 @@ export async function completeServiceCheckoutInline(opts: {
       discountType: isValueDiscountActive ? "fixed" : "percentage",
       paymentStatus: {
         totalAmount: calculatedTotal + tip,
-        paidAmount: recordedPaidTotal,
-        remainingAmount: calculatedTotal + tip - recordedPaidTotal,
+        paidAmount: isRefundBillEdit
+          ? Math.max(0, Number(originalRecordedPaid) || recordedPaidTotal)
+          : recordedPaidTotal,
+        remainingAmount:
+          calculatedTotal +
+          tip -
+          (isRefundBillEdit
+            ? Math.max(0, Number(originalRecordedPaid) || recordedPaidTotal)
+            : recordedPaidTotal),
         dueDate: new Date(),
       },
       status:
@@ -1702,116 +2091,33 @@ export async function completeServiceCheckoutInline(opts: {
         : {}),
     }
 
-    const result = await SalesAPI.create(salePayload as any)
+    const updateBody: Record<string, unknown> = {
+      ...salePayload,
+      editReason: (editReason || "Bill edited via checkout").trim(),
+    }
+    if (isRefundBillEdit && refundProcessing) {
+      delete updateBody.payments
+      const paid = Math.max(0, Number(originalRecordedPaid) || 0)
+      const newTotal = calculatedTotal + tip
+      const computedRefund = Math.max(0, Math.round((paid - newTotal) * 100) / 100)
+      if (computedRefund <= 0.005) {
+        return { ok: false, error: "No refund is due on this bill." }
+      }
+      updateBody.refundProcessing = {
+        ...refundProcessing,
+        amount: computedRefund,
+        editReason: (editReason || "Product return refund").trim(),
+      }
+    }
+
+    const result = isBillUpdate
+      ? await SalesAPI.update(String(existingSaleId), updateBody)
+      : await SalesAPI.create(salePayload as any)
     if (!result.success) {
       return { ok: false, error: result.error || "Failed to create sale" }
     }
 
     const saleDoc = result.data
-
-    if (
-      appointmentLinkageIntact &&
-      linkedAppointmentId &&
-      (recordedPaidTotal >= calculatedTotal + tip || (saleDoc as any)?.status === "completed")
-    ) {
-      try {
-        const idsToComplete = resolveAppointmentIdsToComplete(linkedAppointmentIds, linkedAppointmentId)
-        await Promise.all(idsToComplete.map((id) => AppointmentsAPI.update(id, { status: "completed" })))
-      } catch {
-        /* non-fatal */
-      }
-    }
-
-    if (
-      walletPayAmount > 0 &&
-      selectedWalletId &&
-      saleDoc?._id &&
-      isLikelyMongoObjectId(getCustomerId(customer) || undefined)
-    ) {
-      const serviceNames = validServiceItems.map((it: any) => {
-        const svc = services.find((s) => (s._id || s.id) === it.serviceId)
-        return svc?.name || "Service"
-      })
-      const couponApplied = isGlobalDiscountActive || isValueDiscountActive || built.discountPercentage > 0 || built.discountValue > 0
-      try {
-        const rw = await ClientWalletAPI.redeem({
-          walletId: selectedWalletId,
-          amount: walletPayAmount,
-          saleId: String(saleDoc._id),
-          serviceNames,
-          couponApplied,
-        })
-        if (!rw.success) {
-          console.warn("[inline-checkout] wallet redeem:", rw.message)
-        }
-      } catch (e) {
-        console.warn("[inline-checkout] wallet redeem error", e)
-      }
-    }
-
-    if (changeToCredit > 0.005 && saleDoc?._id && isLikelyMongoObjectId(cid || undefined)) {
-      try {
-        if (clientWalletsUsable.length > 0) {
-          const walletIdForCredit = pickWalletIdForChangeCredit(clientWalletsUsable, selectedWalletId)
-          if (walletIdForCredit) {
-            await ClientWalletAPI.creditChange({
-              walletId: walletIdForCredit,
-              amount: changeToCredit,
-              saleId: String(saleDoc._id),
-              billNo: receiptNumber,
-            })
-          }
-        } else {
-          await ClientWalletAPI.creditChangeOpenWallet({
-            clientId: cid!,
-            amount: changeToCredit,
-            saleId: String(saleDoc._id),
-            billNo: receiptNumber,
-          })
-        }
-      } catch (e) {
-        console.warn("[inline-checkout] change credit", e)
-      }
-    }
-
-    if (validPrepaidPlanItems.length > 0 && saleDoc?._id && isLikelyMongoObjectId(cid || undefined)) {
-      try {
-        for (const row of validPrepaidPlanItems) {
-          const qty = Math.max(1, Math.floor(row.quantity || 1))
-          for (let q = 0; q < qty; q++) {
-            await ClientWalletAPI.issue({
-              clientId: cid!,
-              planId: row.planId,
-              amountPaid: row.price,
-              saleId: String(saleDoc._id),
-            })
-          }
-        }
-      } catch (e) {
-        console.warn("[inline-checkout] prepaid issue", e)
-      }
-    }
-
-    if (validPackageItems.length > 0 && saleDoc?._id && isLikelyMongoObjectId(cid || undefined)) {
-      try {
-        const paymentTowardGoods = Math.min(recordedPaidTotal, calculatedTotal)
-        const paymentRatio =
-          calculatedTotal > 0 ? Math.min(1, Math.max(0, paymentTowardGoods / calculatedTotal)) : 1
-        for (const row of validPackageItems) {
-          const qty = Math.max(1, Math.floor(row.quantity || 1))
-          const perUnitPaid = Math.round(((Number(row.price) || 0) * paymentRatio) * 100) / 100
-          for (let q = 0; q < qty; q++) {
-            await PackagesAPI.sell(row.packageId, {
-              client_id: cid!,
-              amount_paid: perUnitPaid,
-              sold_by_staff_id: row.staffId || undefined,
-            })
-          }
-        }
-      } catch (e) {
-        console.warn("[inline-checkout] package sell", e)
-      }
-    }
 
     addReceipt({
       id: Date.now().toString(),
@@ -1847,17 +2153,31 @@ export async function completeServiceCheckoutInline(opts: {
       shareToken: (saleDoc as any)?.shareToken,
     } as any)
 
-    if (validProductItems.length > 0) {
-      try {
-        await ProductsAPI.getAll({ limit: 1000 })
-      } catch {
-        /* noop */
-      }
-    }
-
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent("appointments-refresh"))
-    }
+    void runPostCheckoutSideEffects({
+      isBillUpdate,
+      appointmentLinkageIntact,
+      linkedAppointmentId,
+      linkedAppointmentIds,
+      recordedPaidTotal,
+      calculatedTotal,
+      tip,
+      saleDoc,
+      walletPayAmount,
+      selectedWalletId,
+      customer: customer!,
+      validServiceItems,
+      services,
+      isGlobalDiscountActive,
+      isValueDiscountActive,
+      built,
+      changeToCredit,
+      clientWalletsUsable,
+      cid,
+      receiptNumber,
+      validPrepaidPlanItems,
+      validPackageItems,
+      validProductItems,
+    })
 
     return { ok: true, billNo: receiptNumber, saleId: String(saleDoc._id) }
   } catch (e: unknown) {

@@ -1,15 +1,18 @@
 "use client"
 
-import React, { useState, useEffect } from "react"
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { Button } from "@/components/ui/button"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Input } from "@/components/ui/input"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { X, ChevronDown, Check } from "lucide-react"
+import { cn } from "@/lib/utils"
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import { X, Plus } from "lucide-react"
+  STAFF_SHARE_VALIDATION_MESSAGE,
+  buildStaffContributions,
+  equalStaffSharePercentages,
+  isStaffShareValid,
+} from "@/lib/staff-share-utils"
 
 export interface StaffContribution {
   staffId: string
@@ -22,170 +25,318 @@ interface MultiStaffSelectorProps {
   staffList: Array<{ _id?: string; id?: string; name: string; role?: string }>
   serviceTotal?: number
   onStaffContributionsChange: (contributions: StaffContribution[]) => void
+  onValidationChange?: (valid: boolean) => void
   initialContributions?: StaffContribution[]
   disabled?: boolean
-  /** When true, Select is compact (half width). Expands when multiple staff added. */
   compact?: boolean
-  /** Flex ratio for Select Staff (e.g. 1.5). Used with addStaffFlex. */
   selectStaffFlex?: number
-  /** Flex ratio for Add Staff button (e.g. 0.5). Used with selectStaffFlex. */
   addStaffFlex?: number
+  hideShareEditor?: boolean
+  placeholder?: string
+  popoverContentClassName?: string
+  /** Portal target inside Sheet/Dialog (see CategoryCombobox). Falls back to an in-tree anchor. */
+  portalContainer?: HTMLElement | null
+  /** When set, staff share row (2+ staff) renders in this host instead of below the trigger. */
+  shareRowHost?: HTMLElement | null
+  /** When true with hideShareEditor, show % inputs inside the staff dropdown for selected staff (2+). */
+  shareEditorInDropdown?: boolean
+}
+
+function staffKey(staff: { _id?: string; id?: string }) {
+  return staff._id || staff.id || ""
 }
 
 export function MultiStaffSelector({
   staffList,
   serviceTotal = 0,
   onStaffContributionsChange,
+  onValidationChange,
   initialContributions = [],
   disabled = false,
   compact = false,
   selectStaffFlex,
-  addStaffFlex
+  addStaffFlex: _addStaffFlex,
+  hideShareEditor = false,
+  placeholder = "Select staff",
+  popoverContentClassName,
+  portalContainer: portalContainerProp,
+  shareRowHost,
+  shareEditorInDropdown = false,
 }: MultiStaffSelectorProps) {
-  const [selectedStaffIds, setSelectedStaffIds] = useState<string[]>(
-    initialContributions.map(c => c.staffId)
+  const sharesManuallyEdited = useRef(false)
+  const onChangeRef = useRef(onStaffContributionsChange)
+  onChangeRef.current = onStaffContributionsChange
+  const [portalContainerLocal, setPortalContainerLocal] = useState<HTMLElement | null>(null)
+  const portalContainer = portalContainerProp ?? portalContainerLocal
+  const [open, setOpen] = useState(false)
+  const [selectedStaffIds, setSelectedStaffIds] = useState<string[]>(() =>
+    initialContributions.map((c) => c.staffId).filter(Boolean)
   )
-  // Equal split: (line total after line discount) / N → each staff’s revenue share (backend persists amount from %).
-  const contributions: StaffContribution[] = selectedStaffIds.map(staffId => {
-    const staff = staffList.find(s => (s._id || s.id) === staffId)
-    const n = selectedStaffIds.length
-    return {
-      staffId,
-      staffName: staff?.name || 'Unknown Staff',
-      percentage: n > 0 ? 100 / n : 0,
-      amount: n > 0 ? serviceTotal / n : 0,
+  const [percentages, setPercentages] = useState<number[]>(() => {
+    const ids = initialContributions.map((c) => c.staffId).filter(Boolean)
+    if (ids.length === 0) return []
+    if (initialContributions.some((c) => Number(c.percentage) > 0)) {
+      return initialContributions.map((c) => Number(c.percentage) || 0)
     }
+    return equalStaffSharePercentages(ids.length)
   })
 
-  // Notify parent component when selections change
-  useEffect(() => {
-    onStaffContributionsChange(contributions)
-  }, [selectedStaffIds, serviceTotal])
+  const applyEqualSplit = useCallback((ids: string[]) => {
+    setPercentages(equalStaffSharePercentages(ids.length))
+  }, [])
 
-  const handleAddStaff = (staffId: string) => {
-    if (!selectedStaffIds.includes(staffId)) {
-      setSelectedStaffIds(prev => [...prev, staffId])
-    }
-  }
-
-  const removeStaff = (staffId: string) => {
-    setSelectedStaffIds(prev => prev.filter(id => id !== staffId))
-  }
-
-  const availableStaff = staffList.filter(staff => 
-    !selectedStaffIds.includes(staff._id || staff.id || '')
+  const contributions = useMemo(
+    () => buildStaffContributions(selectedStaffIds, staffList, percentages, serviceTotal),
+    [selectedStaffIds, staffList, percentages, serviceTotal]
   )
 
-  const isCompact = compact && selectedStaffIds.length <= 1
+  const shareValid = useMemo(() => {
+    if (selectedStaffIds.length === 0) return false
+    if (selectedStaffIds.length === 1) return true
+    return isStaffShareValid(contributions)
+  }, [selectedStaffIds.length, contributions])
 
-  const StaffBadge = ({ staffId }: { staffId: string }) => {
-    const staff = staffList.find(s => (s._id || s.id) === staffId)
-    const contribution = contributions.find(c => c.staffId === staffId)
-    return (
-      <div className="flex items-center bg-green-50 border border-green-200 rounded-full px-2 py-0.5 text-xs shrink-0 whitespace-nowrap">
-        <div className="w-1.5 h-1.5 bg-green-500 rounded-full mr-1"></div>
-        <span className="font-medium text-green-800 mr-1">{staff?.name}</span>
-        <span className="text-green-600 mr-1">
-          {contribution?.percentage?.toFixed(0)}%
-        </span>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={() => removeStaff(staffId)}
-          disabled={disabled}
-          className="h-3 w-3 p-0 hover:bg-red-100 hover:text-red-600 ml-1"
-        >
-          <X className="h-2 w-2" />
-        </Button>
-      </div>
-    )
-  }
+  const lastEmittedRef = useRef<string>("")
+  const skipInitialEmptyEmitRef = useRef(true)
 
-  const selectStyle = selectStaffFlex != null ? { flex: selectStaffFlex } : (isCompact ? undefined : { flex: 1 })
-  const addStaffStyle = addStaffFlex != null ? { flex: addStaffFlex } : undefined
-
-  const primaryStaffId = selectedStaffIds[0] || ""
-  const showAllAsPills = selectedStaffIds.length >= 2
-
-  const handlePrimaryChange = (value: string) => {
-    if (!value || value === "__clear__") {
-      setSelectedStaffIds([])
+  useEffect(() => {
+    const payload = JSON.stringify(contributions)
+    if (payload === lastEmittedRef.current) return
+    if (skipInitialEmptyEmitRef.current && contributions.length === 0) {
+      skipInitialEmptyEmitRef.current = false
+      lastEmittedRef.current = payload
       return
     }
-    setSelectedStaffIds([value])
+    lastEmittedRef.current = payload
+    onChangeRef.current(contributions)
+  }, [contributions])
+
+  useEffect(() => {
+    onValidationChange?.(shareValid)
+  }, [shareValid, onValidationChange])
+
+  const toggleStaff = (staffId: string, checked: boolean) => {
+    if (disabled) return
+    if (checked) {
+      if (selectedStaffIds.includes(staffId)) return
+      const nextIds = [...selectedStaffIds, staffId]
+      setSelectedStaffIds(nextIds)
+      if (!sharesManuallyEdited.current) {
+        applyEqualSplit(nextIds)
+      } else {
+        setPercentages((prev) => [...prev, 0])
+      }
+      return
+    }
+    const idx = selectedStaffIds.indexOf(staffId)
+    if (idx < 0) return
+    const nextIds = selectedStaffIds.filter((id) => id !== staffId)
+    setSelectedStaffIds(nextIds)
+    setPercentages((prev) => prev.filter((_, i) => i !== idx))
+    if (!sharesManuallyEdited.current && nextIds.length > 0) {
+      applyEqualSplit(nextIds)
+    }
   }
 
-  return (
-    <div className="flex items-center gap-1 flex-nowrap min-w-0 w-full">
-      {/* 0 staff: Select with placeholder. 1 staff: Select showing name. 2+ staff: all as green pills */}
-      {showAllAsPills ? (
-        <div className="flex items-center gap-1 min-w-0 flex-1 overflow-x-auto overflow-y-hidden" style={selectStyle}>
-          {selectedStaffIds.map((staffId) => (
-            <StaffBadge key={staffId} staffId={staffId} />
-          ))}
-        </div>
-      ) : (
-        <div
-          className={isCompact && !selectStaffFlex ? "min-w-0 max-w-[140px] shrink-0" : "min-w-0"}
-          style={selectStyle}
-        >
-          <Select
-            value={primaryStaffId}
-            onValueChange={handlePrimaryChange}
-            disabled={disabled}
-          >
-            <SelectTrigger className="h-8 text-xs">
-              <SelectValue placeholder="Select staff" />
-            </SelectTrigger>
-            <SelectContent>
-              {primaryStaffId && (
-                <SelectItem value="__clear__">
-                  <span className="text-muted-foreground">— Clear —</span>
-                </SelectItem>
-              )}
-              {staffList.map((staff) => {
-                const staffId = staff._id || staff.id
-                return (
-                  <SelectItem key={staffId} value={staffId || ''}>
-                    {staff.name}
-                  </SelectItem>
-                )
-              })}
-            </SelectContent>
-          </Select>
-        </div>
-      )}
+  const removeStaff = (staffId: string) => toggleStaff(staffId, false)
 
-      {/* Add Staff: dropdown to add more (same row) */}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
+  const handlePercentageChange = (index: number, raw: string) => {
+    sharesManuallyEdited.current = true
+    const value = raw === "" ? 0 : Math.min(100, Math.max(0, parseFloat(raw) || 0))
+    setPercentages((prev) => prev.map((p, i) => (i === index ? value : p)))
+  }
+
+  const showShareEditor = !hideShareEditor && selectedStaffIds.length >= 2
+  const showShareInDropdown =
+    shareEditorInDropdown && hideShareEditor && selectedStaffIds.length >= 2
+
+  const sharePercentInput = (index: number, staffName: string, className?: string) => (
+    <div
+      className={cn(
+        "inline-flex h-6 shrink-0 items-center justify-end rounded-md border border-input bg-background px-1",
+        className
+      )}
+      onClick={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <span className="shrink-0 text-[10px] leading-none text-muted-foreground" aria-hidden>
+        %
+      </span>
+      <Input
+        type="number"
+        min={0}
+        max={100}
+        step={1}
+        disabled={disabled}
+        value={Number.isFinite(percentages[index]) ? percentages[index] : 0}
+        onChange={(e) => handlePercentageChange(index, e.target.value)}
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        className="h-5 w-7 min-w-0 border-0 bg-transparent p-0 pl-0.5 text-right text-[11px] font-medium leading-none tabular-nums shadow-none outline-none [appearance:textfield] focus-visible:border-0 focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+        aria-label={`${staffName} share percentage`}
+      />
+    </div>
+  )
+
+  const triggerLabel = useMemo(() => {
+    if (selectedStaffIds.length === 0) return null
+    if (selectedStaffIds.length === 1) {
+      const staff = staffList.find((s) => staffKey(s) === selectedStaffIds[0])
+      return staff?.name || "Staff"
+    }
+    return `${selectedStaffIds.length} staff selected`
+  }, [selectedStaffIds, staffList])
+
+  const triggerStyle =
+    selectStaffFlex != null ? { flex: selectStaffFlex } : compact ? undefined : { flex: 1 }
+
+  const shareRow = showShareEditor ? (
+    <div className="space-y-1">
+      <div
+        className={cn(
+          "flex items-center gap-2 text-xs",
+          compact ? "flex-nowrap overflow-x-auto pb-0.5" : "flex-wrap"
+        )}
+      >
+        {contributions.map((c, index) => (
+          <div
+            key={c.staffId}
+            className="inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-200/90 bg-emerald-50/95 py-0.5 pl-2.5 pr-1 text-[11px] font-medium text-emerald-900 shadow-sm"
+          >
+            <span className="max-w-[6.5rem] truncate">{c.staffName}</span>
+            <div className="inline-flex h-5 min-w-[2.5rem] items-center rounded-full border border-emerald-200/70 bg-background/95 px-1">
+              <span
+                className="shrink-0 text-[9px] leading-none text-emerald-600/90"
+                aria-hidden
+              >
+                %
+              </span>
+              <Input
+                type="number"
+                min={0}
+                max={100}
+                step={1}
+                disabled={disabled}
+                value={Number.isFinite(percentages[index]) ? percentages[index] : 0}
+                onChange={(e) => handlePercentageChange(index, e.target.value)}
+                className="h-4 w-7 min-w-0 border-0 bg-transparent p-0 pl-0.5 text-right text-[11px] font-semibold leading-none tabular-nums text-emerald-800 shadow-none outline-none [appearance:textfield] focus-visible:border-0 focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                aria-label={`${c.staffName} share percentage`}
+              />
+            </div>
+            {!disabled && (
+              <button
+                type="button"
+                className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-emerald-700/80 transition-colors hover:bg-emerald-100 hover:text-emerald-900"
+                onClick={() => removeStaff(c.staffId)}
+                aria-label={`Remove ${c.staffName}`}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+      {!shareValid && (
+        <p className={cn("text-red-600", compact ? "text-[11px]" : "text-xs")}>
+          {STAFF_SHARE_VALIDATION_MESSAGE}
+        </p>
+      )}
+    </div>
+  ) : null
+
+  const shareRowInline = shareRowHost ? null : shareRow
+  const shareRowPortaled =
+    shareRowHost && shareRow ? createPortal(shareRow, shareRowHost) : null
+
+  return (
+    <div
+      className={cn(
+        "min-w-0 w-full",
+        !shareRowHost && (compact ? "space-y-1" : "space-y-2")
+      )}
+    >
+      {!portalContainerProp ? <div ref={setPortalContainerLocal} aria-hidden /> : null}
+      <Popover open={open} onOpenChange={setOpen} modal={false}>
+        <PopoverTrigger asChild>
           <Button
             type="button"
             variant="outline"
-            size="sm"
-            disabled={disabled || availableStaff.length === 0}
-            className="h-8 px-2 text-xs shrink-0"
-            style={addStaffStyle}
+            disabled={disabled || staffList.length === 0}
+            aria-expanded={open}
+            aria-haspopup="listbox"
+            className={cn(
+              "h-8 w-full justify-between gap-2 px-2 py-1.5 text-left font-normal",
+              !compact && "min-h-8"
+            )}
+            style={triggerStyle}
           >
-            <Plus className="h-3 w-3 mr-1" />
-            Add Staff
+            <span className="min-w-0 flex-1 truncate text-xs">
+              {triggerLabel ? (
+                triggerLabel
+              ) : (
+                <span className="text-muted-foreground">{placeholder}</span>
+              )}
+            </span>
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-50" />
           </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="max-h-60 overflow-auto">
-          {availableStaff.map((staff) => {
-            const staffId = staff._id || staff.id
-            return (
-              <DropdownMenuItem
-                key={staffId}
-                onClick={() => handleAddStaff(staffId || '')}
-              >
-                {staff.name}
-              </DropdownMenuItem>
-            )
-          })}
-        </DropdownMenuContent>
-      </DropdownMenu>
+        </PopoverTrigger>
+        <PopoverContent
+          container={portalContainer ?? undefined}
+          className={cn("w-[min(100vw-2rem,280px)] p-2 !z-[9999]", popoverContentClassName)}
+          align="start"
+          side="bottom"
+          sideOffset={4}
+          onOpenAutoFocus={(e) => e.preventDefault()}
+          onCloseAutoFocus={(e) => e.preventDefault()}
+        >
+          <div className="max-h-56 space-y-0.5 overflow-y-auto" role="listbox" aria-multiselectable>
+            {staffList.map((staff) => {
+              const id = staffKey(staff)
+              if (!id) return null
+              const checked = selectedStaffIds.includes(id)
+              const shareIndex = selectedStaffIds.indexOf(id)
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  role="option"
+                  aria-selected={checked}
+                  className="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+                  onClick={() => toggleStaff(id, !checked)}
+                >
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border border-primary",
+                      checked && "bg-primary text-primary-foreground"
+                    )}
+                  >
+                    {checked ? <Check className="h-3 w-3" /> : null}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-left">{staff.name}</span>
+                  {showShareInDropdown && checked && shareIndex >= 0
+                    ? sharePercentInput(shareIndex, staff.name, "ml-auto w-11 justify-end")
+                    : showShareInDropdown
+                      ? <span className="ml-auto w-11 shrink-0" aria-hidden />
+                      : null}
+                </button>
+              )
+            })}
+          </div>
+          {showShareInDropdown && !shareValid ? (
+            <p className="mt-2 border-t border-border/60 pt-2 text-[11px] text-red-600">
+              {STAFF_SHARE_VALIDATION_MESSAGE}
+            </p>
+          ) : null}
+        </PopoverContent>
+      </Popover>
+
+      {shareRowInline}
+      {shareRowPortaled}
+
+      {compact && selectedStaffIds.length >= 2 && hideShareEditor && !shareValid && (
+        <p className="text-[11px] text-red-600">{STAFF_SHARE_VALIDATION_MESSAGE}</p>
+      )}
     </div>
   )
 }

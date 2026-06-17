@@ -110,6 +110,12 @@ const businessSchema = new mongoose.Schema({
         time: { type: String, default: '20:00' }, // HH:mm format
         recipientStaffIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Staff' }]
       },
+      // Staff incentive summary — sent on the 1st for the previous calendar month
+      staffIncentiveSummary: {
+        enabled: { type: Boolean, default: true },
+        time: { type: String, default: '08:00' },
+        recipientStaffIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Staff' }]
+      },
       // Appointment Notifications
       appointmentNotifications: {
         enabled: { type: Boolean, default: true },

@@ -18,6 +18,7 @@ import { BranchManagementAPI, type BranchListItem } from "@/lib/api"
 import { switchToBranch } from "@/components/branch-switcher/branch-switcher"
 import { getBranchColor } from "@/lib/branch-color"
 import { formatDate } from "./branch-format"
+import { useAuth } from "@/lib/auth-context"
 
 export function BranchesTable({
   branches,
@@ -29,6 +30,8 @@ export function BranchesTable({
   onChanged: () => void
 }) {
   const [busyId, setBusyId] = useState<string | null>(null)
+  const { user } = useAuth()
+  const isImpersonating = !!user?.isImpersonation
 
   const handleToggle = async (b: BranchListItem) => {
     if (busyId) return
@@ -61,6 +64,7 @@ export function BranchesTable({
   }
 
   const handleSwitch = async (b: BranchListItem) => {
+    if (isImpersonating) return
     if (busyId || b.isCurrent) return
     setBusyId(b.id)
     const ok = await switchToBranch(b.id)
@@ -133,7 +137,7 @@ export function BranchesTable({
                 <TableCell>{formatDate(b.createdAt)}</TableCell>
                 <TableCell className="text-right">
                   <div className="flex items-center justify-end gap-2">
-                    {b.isActive && !b.isCurrent && (
+                    {b.isActive && !b.isCurrent && !isImpersonating && (
                       <Button
                         variant="outline"
                         size="sm"

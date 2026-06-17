@@ -128,6 +128,21 @@ export interface Receipt {
   invoiceDeleted?: boolean
   /** When set, excess cash over bill was credited to prepaid wallet instead of cash back (POS). ₹ amount. */
   billChangeCreditedToWallet?: number
+  /** Product-return overpayment credited to prepaid wallet (not returned as cash). */
+  walletRefundCredited?: number
+  /** Product-return refunds issued after bill edit (amount + mode). */
+  refundHistory?: Array<{
+    amount: number
+    mode: string
+    date?: string
+    editReason?: string
+    dateLabel?: string | null
+  }>
+  paymentStatus?: {
+    paidAmount?: number
+    totalAmount?: number
+    remainingAmount?: number
+  }
 }
 
 export interface ReceiptStaffContribution {

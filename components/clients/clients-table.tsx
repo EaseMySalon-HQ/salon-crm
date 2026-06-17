@@ -873,7 +873,11 @@ export function ClientsTable({ clients }: ClientsTableProps) {
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => router.push(`/billing/${bill.billNo || bill._id}?mode=edit`)}
+                            onClick={() =>
+                              router.push(
+                                `/billing/${bill.billNo || bill._id}?mode=edit&returnTo=${encodeURIComponent("/clients")}`
+                              )
+                            }
                             title="Edit Bill"
                             className="h-8"
                           >

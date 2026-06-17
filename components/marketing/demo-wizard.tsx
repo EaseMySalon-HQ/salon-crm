@@ -291,6 +291,7 @@ export function DemoWizard() {
           city: values.city,
           branches: values.branches,
           preferredTime,
+          services: values.services,
           message,
           website: values.website || "",
         }),

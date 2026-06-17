@@ -6,6 +6,7 @@
 const { getFeature, getAddon } = require('../config/plans');
 const { resolvePlanConfig } = require('./plan-resolver');
 const { normalizePlanId } = require('./plan-id');
+const { expandPlanFeatureBundles } = require('./plan-feature-bundles');
 
 /**
  * Get effective features for a business
@@ -67,7 +68,8 @@ function hasFeature(business, featureId) {
     return false;
   }
 
-  const effectiveFeatures = getEffectiveFeatures(business);
+  const planId = business.plan?.planId;
+  const effectiveFeatures = expandPlanFeatureBundles(getEffectiveFeatures(business), planId);
   return effectiveFeatures.includes(featureId);
 }
 

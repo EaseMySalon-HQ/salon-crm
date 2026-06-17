@@ -7,6 +7,7 @@ const { normalizePlanId, CANONICAL_PLAN_IDS, isCanonicalPlanId } = require('../l
 const { getPlanInfo, getEffectiveFeatures, hasFeature } = require('../lib/entitlements');
 const planResolver = require('../lib/plan-resolver');
 const entitlementsCache = require('../lib/entitlements-cache');
+const { normalizePlanFeaturesForStorage } = require('../lib/plan-feature-bundles');
 const {
   normalizeCategories,
   serializeMatrixDocument,
@@ -211,7 +212,7 @@ router.post('/templates', authenticateAdmin, setupMainDatabase, checkAdminPermis
       description: description || '',
       monthlyPrice: normalizeOptionalPrice(monthlyPrice),
       yearlyPrice: normalizeOptionalPrice(yearlyPrice),
-      features: features || [],
+      features: normalizePlanFeaturesForStorage(features || []),
       limits: limits || {
         locations: 1,
         staff: Infinity,
@@ -312,7 +313,9 @@ router.put('/templates/:planId', authenticateAdmin, setupMainDatabase, checkAdmi
     if (description !== undefined) doc.description = description;
     if (monthlyPrice !== undefined) doc.monthlyPrice = normalizeOptionalPrice(monthlyPrice);
     if (yearlyPrice !== undefined) doc.yearlyPrice = normalizeOptionalPrice(yearlyPrice);
-    if (features !== undefined) doc.features = features;
+    if (features !== undefined) {
+      doc.features = normalizePlanFeaturesForStorage(features);
+    }
     if (limits !== undefined) doc.limits = limits;
     if (support !== undefined) doc.support = support;
     if (isDefault !== undefined) doc.isDefault = isDefault;

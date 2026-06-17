@@ -18,6 +18,13 @@ import { useToast } from "@/hooks/use-toast"
 import { adminRequestHeaders } from "@/lib/admin-request-headers"
 import { formatAdminPlanMonthlyPrice, parseAdminPlanPriceInput } from "@/lib/admin-plan-price"
 import { isCanonicalPlanId } from "@/lib/plan-ids"
+import {
+  GMB_BUNDLE_ID,
+  hasGmbBundle,
+  normalizePlanFeaturesForStorage,
+  preparePlanFeaturesForAdminUi,
+  toggleGmbBundle,
+} from "@/lib/plan-feature-bundles"
 
 interface Plan {
   id: string
@@ -79,6 +86,7 @@ const FEATURE_ENFORCEMENT: Record<string, "gated" | "core" | "partial" | "planne
   custom_integrations: "planned",
   approval_workflows: "planned",
   whatsapp_integration: "gated",
+  gmb: "partial",
 }
 
 const ENFORCEMENT_BADGE: Record<string, { label: string; className: string }> = {
@@ -134,7 +142,7 @@ export function PlanTemplateManager() {
         const data = await response.json()
         if (data.success) {
           setPlans(data.data.plans)
-          setFeatures(data.data.features)
+          setFeatures(preparePlanFeaturesForAdminUi(data.data.features))
         }
       }
     } catch (error) {
@@ -180,7 +188,7 @@ export function PlanTemplateManager() {
       description: plan.description,
       monthlyPrice: plan.monthlyPrice,
       yearlyPrice: plan.yearlyPrice,
-      features: [...plan.features],
+      features: normalizePlanFeaturesForStorage([...plan.features]),
       limits: { ...plan.limits },
       support: { ...plan.support },
     })
@@ -226,6 +234,17 @@ export function PlanTemplateManager() {
   }
 
   const toggleFeature = (featureId: string) => {
+    if (featureId === GMB_BUNDLE_ID) {
+      setFormData({
+        ...formData,
+        features: toggleGmbBundle(
+          formData.features,
+          !hasGmbBundle(formData.features)
+        ),
+      })
+      return
+    }
+
     const currentFeatures = formData.features
     if (currentFeatures.includes(featureId)) {
       setFormData({
@@ -260,7 +279,7 @@ export function PlanTemplateManager() {
           description: formData.description,
           monthlyPrice: formData.monthlyPrice,
           yearlyPrice: formData.yearlyPrice,
-          features: formData.features,
+          features: normalizePlanFeaturesForStorage(formData.features),
           limits: formData.limits,
           support: formData.support,
         }),
@@ -496,10 +515,14 @@ export function PlanTemplateManager() {
                         {categoryFeatures.map((feature) => {
                           const enforcement = FEATURE_ENFORCEMENT[feature.id] || "planned"
                           const badge = ENFORCEMENT_BADGE[enforcement]
+                          const isChecked =
+                            feature.id === GMB_BUNDLE_ID
+                              ? hasGmbBundle(formData.features)
+                              : formData.features.includes(feature.id)
                           return (
                             <div key={feature.id} className="flex items-center space-x-2">
                               <Switch
-                                checked={formData.features.includes(feature.id)}
+                                checked={isChecked}
                                 onCheckedChange={() => toggleFeature(feature.id)}
                               />
                               <Label className="text-sm cursor-pointer flex items-center gap-1.5">
