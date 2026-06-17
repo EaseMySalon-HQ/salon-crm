@@ -92,6 +92,7 @@ export function BranchSwitcher({ businessName, isLoadingName = false }: BranchSw
   const displayName = currentBranch?.name || businessName
 
   const handleSwitchBranch = async (branch: AuthBranchOption) => {
+    if (user?.isImpersonation) return
     if (switchingBranchId || String(branch.id) === String(user?.branchId)) return
     setSwitchingBranchId(branch.id)
     const ok = await switchToBranch(branch.id)

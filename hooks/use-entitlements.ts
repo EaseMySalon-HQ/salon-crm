@@ -2,6 +2,7 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useAuth } from "@/lib/auth-context"
+import { GMB_BUNDLE_ID, hasGmbBundle } from "@/lib/plan-feature-bundles"
 
 interface PlanInfo {
   planId: string
@@ -105,6 +106,9 @@ export function useEntitlements(): Entitlements {
 
   const hasFeature = (featureId: string): boolean => {
     if (!planInfo) return false
+    if (featureId === GMB_BUNDLE_ID) {
+      return hasGmbBundle(planInfo.features)
+    }
     return planInfo.features.includes(featureId)
   }
 

@@ -45,7 +45,9 @@ function ProtectedLayoutContent({
     <div className="flex h-screen min-w-0 flex-col overflow-hidden">
       {user?.isImpersonation && (
         <div className="bg-amber-500 text-amber-950 px-4 py-2 flex items-center justify-between gap-4 shrink-0 sticky top-0 z-50">
-          <span className="text-sm font-medium">You are impersonating this business</span>
+          <span className="text-sm font-medium">
+            You are impersonating this business — exit impersonation to switch to another branch
+          </span>
           <Button
             variant="outline"
             size="sm"

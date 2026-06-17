@@ -23,8 +23,7 @@ const PLANS = {
       'cash_register',
       'staff_management',
       'basic_reports',
-      'gmb_connect',
-      'gmb_reviews_read',
+      'gmb',
     ],
     limits: {
       locations: 1,
@@ -58,9 +57,7 @@ const PLANS = {
       'incentive_management',
       'reward_points',
       'feedback_management',
-      'gmb_connect',
-      'gmb_reviews_read',
-      'gmb_reviews_reply',
+      'gmb',
     ],
     limits: {
       locations: 1,
@@ -104,12 +101,7 @@ const PLANS = {
       'custom_integrations',
       'approval_workflows',
       'whatsapp_integration',
-      'gmb_connect',
-      'gmb_reviews_read',
-      'gmb_reviews_reply',
-      'gmb_health',
-      'gmb_sync',
-      'gmb_conversion_tracking',
+      'gmb',
     ],
     limits: {
       locations: 3,
@@ -273,47 +265,12 @@ const FEATURES = {
     description: 'Meta WABA — templates, campaigns, inbox, and Business API connect',
     category: 'pro',
   },
-  gmb_connect: {
-    id: 'gmb_connect',
-    name: 'Google Business Connect',
-    description: 'Connect Google Business Profile via OAuth',
+  gmb: {
+    id: 'gmb',
+    name: 'Google Business Profile',
+    description:
+      'Connect, reviews, health dashboard, SEO insights, services sync, and conversion tracking',
     category: 'growth',
-  },
-  gmb_reviews_read: {
-    id: 'gmb_reviews_read',
-    name: 'GMB Reviews (Read)',
-    description: 'View synced Google reviews in dashboard',
-    category: 'growth',
-  },
-  gmb_reviews_reply: {
-    id: 'gmb_reviews_reply',
-    name: 'GMB Reviews (Reply)',
-    description: 'Reply to Google reviews from dashboard',
-    category: 'growth',
-  },
-  gmb_health: {
-    id: 'gmb_health',
-    name: 'GMB Health Dashboard',
-    description: 'Google Business Profile health score and recommendations',
-    category: 'pro',
-  },
-  gmb_sync: {
-    id: 'gmb_sync',
-    name: 'GMB Services & Hours Sync',
-    description: 'Sync salon catalog and hours to Google Business Profile',
-    category: 'pro',
-  },
-  gmb_insights: {
-    id: 'gmb_insights',
-    name: 'GMB Local SEO Insights',
-    description: 'Google discovery metrics, auto posts, and AI ad triggers',
-    category: 'pro',
-  },
-  gmb_conversion_tracking: {
-    id: 'gmb_conversion_tracking',
-    name: 'GMB Conversion Tracking',
-    description: 'Track bookings and revenue from Google Business Profile',
-    category: 'pro',
   },
 };
 

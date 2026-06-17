@@ -1,3 +1,11 @@
+import {
+  GMB_BUNDLE_ID,
+  GMB_LEGACY_IDS,
+  hasGmbBundle,
+} from "@/lib/plan-feature-bundles"
+
+const GMB_LEGACY_SET = new Set<string>(GMB_LEGACY_IDS)
+
 export interface PlanFeatureOverrides {
   features: string[]
   disabledFeatures: string[]
@@ -8,7 +16,7 @@ export interface PlanFeatureOverrides {
 export function isPlanFeatureEnabled(
   featureId: string,
   planFeatures: string[],
-  overrides: Pick<PlanFeatureOverrides, 'features' | 'disabledFeatures'>,
+  overrides: Pick<PlanFeatureOverrides, "features" | "disabledFeatures">,
 ): boolean {
   const isInPlan = planFeatures.includes(featureId)
   const isGranted = overrides.features.includes(featureId)
@@ -57,6 +65,44 @@ export function togglePlanFeatureOverride(
   return overrides
 }
 
+export function isGmbBundleEnabled(
+  planFeatures: string[],
+  overrides: Pick<PlanFeatureOverrides, "features" | "disabledFeatures">,
+): boolean {
+  if (overrides.disabledFeatures.includes(GMB_BUNDLE_ID)) return false
+  if (overrides.features.includes(GMB_BUNDLE_ID)) return true
+  if (planFeatures.includes(GMB_BUNDLE_ID)) return true
+  return GMB_LEGACY_IDS.some((id) => isPlanFeatureEnabled(id, planFeatures, overrides))
+}
+
+export function toggleGmbBundleOverride(
+  planFeatures: string[],
+  overrides: PlanFeatureOverrides,
+): PlanFeatureOverrides {
+  const enabled = isGmbBundleEnabled(planFeatures, overrides)
+  if (enabled) {
+    if (planFeatures.includes(GMB_BUNDLE_ID) || hasGmbBundle(planFeatures)) {
+      return togglePlanFeatureOverride(GMB_BUNDLE_ID, planFeatures, overrides)
+    }
+    let next = overrides
+    for (const id of GMB_LEGACY_IDS) {
+      if (isPlanFeatureEnabled(id, planFeatures, next)) {
+        next = togglePlanFeatureOverride(id, planFeatures, next)
+      }
+    }
+    return next
+  }
+  if (!hasGmbBundle(planFeatures)) {
+    return togglePlanFeatureOverride(GMB_BUNDLE_ID, planFeatures, overrides)
+  }
+  return {
+    ...overrides,
+    disabledFeatures: overrides.disabledFeatures.filter(
+      (id) => id !== GMB_BUNDLE_ID && !GMB_LEGACY_SET.has(id),
+    ),
+  }
+}
+
 export function buildPlanFeatureOverridesFromBusiness(
   planFeatures: string[],
   effectiveFeatures: string[],
@@ -70,8 +116,8 @@ export function buildPlanFeatureOverridesFromBusiness(
       ? [...storedOverrides.disabledFeatures]
       : planFeatures.filter((id) => !effectiveFeatures.includes(id)),
     expiresAt: storedOverrides?.expiresAt
-      ? new Date(storedOverrides.expiresAt).toISOString().split('T')[0]
-      : '',
-    notes: storedOverrides?.notes || '',
+      ? new Date(storedOverrides.expiresAt).toISOString().split("T")[0]
+      : "",
+    notes: storedOverrides?.notes || "",
   }
 }

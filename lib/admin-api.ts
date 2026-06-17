@@ -319,6 +319,7 @@ export interface PlatformLeadRow {
   status: PlatformLeadStatus
   gender?: string
   interestedIn?: string
+  interestedServices?: string[]
   assignedAdminId?: { _id: string; name?: string; firstName?: string; lastName?: string; email?: string } | string
   followUpDate?: string
   notes?: string

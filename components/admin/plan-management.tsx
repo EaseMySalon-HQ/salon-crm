@@ -16,10 +16,13 @@ import { Textarea } from "@/components/ui/textarea"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/hooks/use-toast"
 import { adminRequestHeaders } from "@/lib/admin-request-headers"
+import { preparePlanFeaturesForAdminUi, GMB_BUNDLE_ID, hasGmbBundle } from "@/lib/plan-feature-bundles"
 import { planBadgeClass } from "@/lib/plan-ids"
 import {
   buildPlanFeatureOverridesFromBusiness,
+  isGmbBundleEnabled,
   isPlanFeatureEnabled,
+  toggleGmbBundleOverride,
   togglePlanFeatureOverride,
 } from "@/lib/admin-plan-feature-overrides"
 
@@ -129,7 +132,7 @@ export function PlanManagement() {
         const data = await response.json()
         if (data.success) {
           setPlans(data.data.plans)
-          setFeatures(data.data.features)
+          setFeatures(preparePlanFeaturesForAdminUi(data.data.features))
         }
       }
     } catch (error) {
@@ -268,7 +271,10 @@ export function PlanManagement() {
     const planFeatures = plans.find((p) => p.id === formData.planId)?.features || []
     setFormData({
       ...formData,
-      overrides: togglePlanFeatureOverride(featureId, planFeatures, formData.overrides),
+      overrides:
+        featureId === GMB_BUNDLE_ID
+          ? toggleGmbBundleOverride(planFeatures, formData.overrides)
+          : togglePlanFeatureOverride(featureId, planFeatures, formData.overrides),
     })
   }
 
@@ -538,10 +544,16 @@ export function PlanManagement() {
                 </p>
                 <div className="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto border rounded p-4">
                   {features.map((feature) => {
-                    const isInPlan = selectedPlanFeatures.includes(feature.id)
+                    const isInPlan =
+                      feature.id === GMB_BUNDLE_ID
+                        ? hasGmbBundle(selectedPlanFeatures)
+                        : selectedPlanFeatures.includes(feature.id)
                     const isGranted = formData.overrides.features.includes(feature.id)
                     const isDisabled = formData.overrides.disabledFeatures.includes(feature.id)
-                    const isEnabled = isPlanFeatureEnabled(feature.id, selectedPlanFeatures, formData.overrides)
+                    const isEnabled =
+                      feature.id === GMB_BUNDLE_ID
+                        ? isGmbBundleEnabled(selectedPlanFeatures, formData.overrides)
+                        : isPlanFeatureEnabled(feature.id, selectedPlanFeatures, formData.overrides)
 
                     return (
                       <div key={feature.id} className="flex items-center space-x-2">

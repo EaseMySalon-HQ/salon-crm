@@ -334,6 +334,7 @@ const SETTINGS_PLAN_FEATURES: Partial<Record<SettingsSectionId, string>> = {
   feedback: "feedback_management",
   "reward-points": "reward_points",
   "whatsapp-integration": "whatsapp_integration",
+  "google-business": "gmb",
 }
 
 function itemMatchesQuery(item: SettingsItem, q: string): boolean {

@@ -19,6 +19,10 @@
 
 const { getPlanConfig, getAllPlans } = require('../config/plans');
 const { normalizePlanId, LEGACY_PLAN_IDS, LEGACY_PLAN_ID_ALIASES } = require('./plan-id');
+const {
+  GMB_LEGACY_IDS,
+  normalizePlanFeaturesForStorage,
+} = require('./plan-feature-bundles');
 const databaseManager = require('../config/database-manager');
 const modelFactory = require('../models/model-factory');
 const { logger } = require('../utils/logger');
@@ -252,7 +256,19 @@ async function syncBuiltInPlanTemplates() {
         }
         const staticFeatures = Array.isArray(plan.features) ? plan.features : [];
         const existingFeatures = Array.isArray(existing.features) ? existing.features : [];
-        const missingFeatures = staticFeatures.filter((f) => !existingFeatures.includes(f));
+        const normalizedExisting = normalizePlanFeaturesForStorage(existingFeatures);
+        const legacyGmbPresent = GMB_LEGACY_IDS.some((id) => existingFeatures.includes(id));
+        if (legacyGmbPresent || existingFeatures.includes('gmb_advanced')) {
+          await PlanTemplate.updateOne(
+            { id: plan.id },
+            { $set: { features: normalizedExisting } },
+          );
+          featuresMerged = true;
+          logger.info(
+            `plan-resolver: collapsed legacy GMB features into gmb on "${plan.id}"`,
+          );
+        }
+        const missingFeatures = staticFeatures.filter((f) => !normalizedExisting.includes(f));
         if (missingFeatures.length > 0) {
           await PlanTemplate.updateOne(
             { id: plan.id },

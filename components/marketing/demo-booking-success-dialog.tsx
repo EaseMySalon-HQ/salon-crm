@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils"
 export type DemoBookingSuccessSummary = {
   name: string
   salon: string
-  email: string
+  email?: string
   preferredTime?: string
 }
 
@@ -118,9 +118,18 @@ export function DemoBookingSuccessDialog({
         {/* Body */}
         <div className="space-y-5 bg-white px-6 py-6">
           <p className="text-center text-sm text-slate-600">
-            Our team will reach out at{" "}
-            <span className="font-medium text-slate-900">{summary?.email}</span> within{" "}
-            <span className="font-medium text-slate-900">1 business day</span>.
+            {summary?.email ? (
+              <>
+                Our team will reach out at{" "}
+                <span className="font-medium text-slate-900">{summary.email}</span> within{" "}
+                <span className="font-medium text-slate-900">1 business day</span>.
+              </>
+            ) : (
+              <>
+                Our team will reach out within{" "}
+                <span className="font-medium text-slate-900">1 business day</span>.
+              </>
+            )}
           </p>
 
           <ul className="space-y-3">

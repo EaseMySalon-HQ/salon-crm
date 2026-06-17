@@ -52,3 +52,22 @@ type PlatformLeadAssigneeShape = {
   lastName?: string
   email?: string
 }
+
+type PlatformLeadServicesShape = {
+  interestedServices?: string[]
+  notes?: string
+}
+
+/** Services from demo booking — uses stored array or legacy notes format. */
+export function getPlatformLeadInterestedServices(lead: PlatformLeadServicesShape): string[] {
+  if (lead.interestedServices?.length) return lead.interestedServices
+
+  const notes = lead.notes || ""
+  const match = notes.match(/^Services interested in:\s*(.+?)(?:\n\n|$)/m)
+  if (!match) return []
+
+  return match[1]
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+}

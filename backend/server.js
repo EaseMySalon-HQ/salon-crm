@@ -954,6 +954,13 @@ app.post('/api/auth/switch-branch', authenticateToken, async (req, res) => {
       return res.status(403).json({ success: false, error: 'Branch switching is owner-only' });
     }
 
+    if (req.user.isImpersonation) {
+      return res.status(403).json({
+        success: false,
+        error: 'Branch switching is disabled during impersonation. Exit impersonation to select another business.',
+      });
+    }
+
     const databaseManager = require('./config/database-manager');
     const mainConnection = await databaseManager.getMainConnection();
     const Business = mainConnection.model('Business', require('./models/Business').schema);
@@ -1010,6 +1017,10 @@ app.post('/api/auth/switch-branch', authenticateToken, async (req, res) => {
 app.get('/api/auth/my-branches', authenticateToken, async (req, res) => {
   try {
     if (!req.user || req.user.authSubject !== 'user') {
+      return res.json({ success: true, data: { branches: [] } });
+    }
+
+    if (req.user.isImpersonation) {
       return res.json({ success: true, data: { branches: [] } });
     }
 
@@ -1394,7 +1405,13 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
           role: userDoc.role,
           branchId: userDoc.branchId,
         };
-        const newToken = signTenantAccess(userForToken);
+        if (rdecoded.isImpersonation && rdecoded.branchId) {
+          userForToken.branchId = rdecoded.branchId;
+          userForToken.isImpersonation = true;
+          userForToken.impersonatedBy = rdecoded.impersonatedBy;
+        }
+        const accessTtl = rdecoded.isImpersonation ? '1h' : undefined;
+        const newToken = signTenantAccess(userForToken, accessTtl);
         setTenantAuthCookies(res, { accessToken: newToken, refreshToken: newRefreshToken });
         const csrfToken = setCsrfCookie(res);
         return res.json({ success: true, csrfToken });
@@ -1510,7 +1527,7 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
         _id: userDoc._id,
         email: userDoc.email,
         role: userDoc.role,
-        branchId: userDoc.branchId,
+        branchId: decoded.isImpersonation && decoded.branchId ? decoded.branchId : userDoc.branchId,
       };
       if (decoded.isImpersonation) {
         userForToken.isImpersonation = true;
