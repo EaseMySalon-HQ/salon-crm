@@ -48,6 +48,21 @@ const paymentHistorySchema = new mongoose.Schema({
   collectedBy: { type: String, default: '' }
 }, { _id: false });
 
+const refundHistorySchema = new mongoose.Schema({
+  date: { type: Date, required: true, default: Date.now },
+  amount: { type: Number, required: true, min: 0 },
+  mode: { type: String, enum: ['Cash', 'Wallet'], required: true },
+  refundedBy: { type: String, default: '' },
+  refundedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  editReason: { type: String, default: '' },
+  returnedProducts: [{
+    productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
+    name: { type: String, default: '' },
+    quantity: { type: Number, default: 0, min: 0 },
+  }],
+  walletTransactionId: { type: mongoose.Schema.Types.ObjectId, ref: 'ClientWalletTransaction', default: null },
+}, { _id: true });
+
 const saleTipLineSchema = new mongoose.Schema({
   staffId: { type: mongoose.Schema.Types.ObjectId, ref: 'Staff', required: true },
   staffName: { type: String, default: '' },
@@ -89,6 +104,9 @@ const saleSchema = new mongoose.Schema({
   
   // Payment history for tracking all payments made
   paymentHistory: [paymentHistorySchema],
+
+  /** Refunds issued when bill total drops below amount collected (e.g. product returns). */
+  refundHistory: [refundHistorySchema],
   
   // Bill details
   netTotal: { type: Number, required: true },
@@ -145,6 +163,8 @@ const saleSchema = new mongoose.Schema({
   loyaltyReversedAt: { type: Date, default: null },
   /** When customer paid cash above bill due and excess was credited to prepaid wallet (POS). Amount in ₹. */
   billChangeCreditedToWallet: { type: Number, default: undefined, min: 0 },
+  /** Product-return overpayment credited to prepaid wallet (not returned as cash). Amount in ₹. */
+  walletRefundCredited: { type: Number, default: undefined, min: 0 },
   /** Checkout totals bifurcation for receipt display (discounts, subtotals). */
   receiptTotalsBreakdown: { type: mongoose.Schema.Types.Mixed, default: null },
 }, {

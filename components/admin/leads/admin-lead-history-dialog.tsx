@@ -5,7 +5,7 @@ import { format } from "date-fns"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
-import { ChevronDown, ChevronUp, Clock, FileText, Phone, User } from "lucide-react"
+import { ChevronDown, ChevronUp, Clock, FileText, Phone, Sparkles, User } from "lucide-react"
 import {
   AdminLeadsAPI,
   type PlatformLeadActivityRow,
@@ -16,6 +16,7 @@ import {
   LEAD_STATUS_COLORS,
   adminAssigneeName,
   formatLeadStatus,
+  getPlatformLeadInterestedServices,
   hasAdminLeadPermission,
 } from "@/lib/admin-lead-permissions"
 import { useAdminAuth } from "@/lib/admin-auth-context"
@@ -64,6 +65,7 @@ export function AdminLeadHistoryDialog({
   const [submitting, setSubmitting] = useState(false)
   const [activityTimelineOpen, setActivityTimelineOpen] = useState(false)
   const canEdit = hasAdminLeadPermission(admin, "update")
+  const interestedServices = getPlatformLeadInterestedServices(lead)
 
   const form = useForm<z.infer<typeof statusUpdateSchema>>({
     resolver: zodResolver(statusUpdateSchema),
@@ -152,6 +154,23 @@ export function AdminLeadHistoryDialog({
           {lead.preferredDemoTime && (
             <div className="text-slate-600">Preferred: {lead.preferredDemoTime}</div>
           )}
+          <div className="sm:col-span-2">
+            <div className="flex items-center gap-2 mb-2">
+              <Sparkles className="h-4 w-4 text-muted-foreground" />
+              <span className="text-sm font-medium text-muted-foreground">Interested Services</span>
+            </div>
+            {interestedServices.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {interestedServices.map((service) => (
+                  <Badge key={service} variant="secondary" className="text-sm px-3 py-1.5 font-normal">
+                    {service}
+                  </Badge>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground italic">No services selected</p>
+            )}
+          </div>
           {lead.interestedIn && (
             <div className="sm:col-span-2 flex gap-2 text-slate-600">
               <FileText className="h-4 w-4 shrink-0 mt-0.5" />

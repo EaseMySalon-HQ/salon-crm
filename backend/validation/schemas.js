@@ -530,6 +530,7 @@ const publicDemoLeadSchema = z
     branches: z.string().trim().max(32).optional(),
     preferredTime: z.string().trim().max(80).optional(),
     message: z.string().trim().min(10).max(4000),
+    services: z.array(z.string().trim().min(1).max(120)).max(20).optional(),
     /** Honeypot — must be empty; non-empty still validates but is ignored server-side */
     website: z.string().max(200).optional(),
   })

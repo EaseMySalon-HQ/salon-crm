@@ -40,7 +40,7 @@ export const adminNavGroups: NavGroup[] = [
     items: [
       { title: "Businesses", href: "/admin/businesses", icon: Building2 },
       { title: "Leads", href: "/admin/leads", icon: Phone },
-      { title: "Settings", href: "/admin/notifications", icon: Bell },
+      { title: "Notifications & Alerts", href: "/admin/notifications", icon: Bell },
     ],
   },
   {

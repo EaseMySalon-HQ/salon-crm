@@ -19,6 +19,10 @@
 
 const { getPlanConfig, getAllPlans } = require('../config/plans');
 const { normalizePlanId, LEGACY_PLAN_IDS, LEGACY_PLAN_ID_ALIASES } = require('./plan-id');
+const {
+  GMB_LEGACY_IDS,
+  normalizePlanFeaturesForStorage,
+} = require('./plan-feature-bundles');
 const databaseManager = require('../config/database-manager');
 const modelFactory = require('../models/model-factory');
 const { logger } = require('../utils/logger');
@@ -231,6 +235,7 @@ async function syncBuiltInPlanTemplates() {
     const mainConnection = await databaseManager.getMainConnection();
     const { PlanTemplate } = modelFactory.createMainModels(mainConnection);
     const builtIn = getAllPlans();
+    let featuresMerged = false;
 
     await ensureStarterTemplate(PlanTemplate);
 
@@ -248,6 +253,31 @@ async function syncBuiltInPlanTemplates() {
             },
           );
           logger.info(`plan-resolver: reactivated plan template "${plan.id}"`);
+        }
+        const staticFeatures = Array.isArray(plan.features) ? plan.features : [];
+        const existingFeatures = Array.isArray(existing.features) ? existing.features : [];
+        const normalizedExisting = normalizePlanFeaturesForStorage(existingFeatures);
+        const legacyGmbPresent = GMB_LEGACY_IDS.some((id) => existingFeatures.includes(id));
+        if (legacyGmbPresent || existingFeatures.includes('gmb_advanced')) {
+          await PlanTemplate.updateOne(
+            { id: plan.id },
+            { $set: { features: normalizedExisting } },
+          );
+          featuresMerged = true;
+          logger.info(
+            `plan-resolver: collapsed legacy GMB features into gmb on "${plan.id}"`,
+          );
+        }
+        const missingFeatures = staticFeatures.filter((f) => !normalizedExisting.includes(f));
+        if (missingFeatures.length > 0) {
+          await PlanTemplate.updateOne(
+            { id: plan.id },
+            { $addToSet: { features: { $each: missingFeatures } } },
+          );
+          featuresMerged = true;
+          logger.info(
+            `plan-resolver: added ${missingFeatures.length} feature(s) to "${plan.id}": ${missingFeatures.join(', ')}`,
+          );
         }
         continue;
       }
@@ -272,6 +302,14 @@ async function syncBuiltInPlanTemplates() {
     );
     if (deactivated.modifiedCount > 0) {
       logger.info(`plan-resolver: deactivated ${deactivated.modifiedCount} legacy plan template(s)`);
+    }
+
+    if (featuresMerged) {
+      try {
+        require('./entitlements-cache').invalidateAll();
+      } catch {
+        /* non-fatal */
+      }
     }
   } catch (error) {
     logger.warn('plan-resolver: syncBuiltInPlanTemplates failed:', error.message);

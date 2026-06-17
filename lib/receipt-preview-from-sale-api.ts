@@ -1,6 +1,7 @@
 import type { Receipt } from "@/lib/data"
 import { buildReceiptPaymentsWithLegacyFallback } from "@/lib/sale-payment-lines"
 import { formatSaleTimeForDisplay } from "@/lib/sale-datetime-format"
+import { mapSaleRefundHistoryForReceipt } from "@/lib/receipt-refunds"
 
 function mapSaleTipLinesForReceipt(raw: unknown): Array<{ staffName: string; amount: number }> | undefined {
   if (!Array.isArray(raw) || raw.length === 0) return undefined
@@ -124,6 +125,28 @@ export function receiptPreviewReceiptFromSaleApi(saleData: any): Receipt {
       Number(saleData.billChangeCreditedToWallet) > 0.005
         ? Number(saleData.billChangeCreditedToWallet)
         : undefined,
+    walletRefundCredited:
+      saleData.walletRefundCredited != null &&
+      Number(saleData.walletRefundCredited) > 0.005
+        ? Number(saleData.walletRefundCredited)
+        : undefined,
+    refundHistory: mapSaleRefundHistoryForReceipt(saleData.refundHistory),
+    paymentStatus: saleData.paymentStatus
+      ? {
+          paidAmount:
+            saleData.paymentStatus.paidAmount != null
+              ? Number(saleData.paymentStatus.paidAmount)
+              : undefined,
+          totalAmount:
+            saleData.paymentStatus.totalAmount != null
+              ? Number(saleData.paymentStatus.totalAmount)
+              : undefined,
+          remainingAmount:
+            saleData.paymentStatus.remainingAmount != null
+              ? Number(saleData.paymentStatus.remainingAmount)
+              : undefined,
+        }
+      : undefined,
   } as Receipt
 }
 
@@ -158,6 +181,9 @@ export function receiptPreviewFromBillPageData(data: {
   taxBreakdown?: Receipt["taxBreakdown"]
   shareToken?: string
   billChangeCreditedToWallet?: number
+  walletRefundCredited?: number
+  refundHistory?: unknown
+  paymentStatus?: any
 }): Receipt {
   return receiptPreviewReceiptFromSaleApi({
     _id: data.id,
@@ -189,5 +215,8 @@ export function receiptPreviewFromBillPageData(data: {
     taxBreakdown: data.taxBreakdown,
     shareToken: data.shareToken,
     billChangeCreditedToWallet: data.billChangeCreditedToWallet,
+    walletRefundCredited: data.walletRefundCredited,
+    refundHistory: data.refundHistory,
+    paymentStatus: data.paymentStatus,
   })
 }

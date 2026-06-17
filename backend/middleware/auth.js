@@ -159,6 +159,11 @@ const authenticateToken = (req, res, next) => {
         role: user.role
       });
 
+      // Impersonation: JWT branchId is the admin-selected business — never the owner's persisted branch.
+      if (decoded.isImpersonation && decoded.branchId) {
+        user.branchId = decoded.branchId;
+      }
+
       // Ensure the user object has all required fields
       // isOwner: only User created at business creation (main DB, has branchId); Staff are never owner
       let isOwner = false;

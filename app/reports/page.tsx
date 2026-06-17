@@ -86,7 +86,7 @@ function ReportsTabsBody() {
   }
 
   return (
-    <div className="bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
+    <div className="bg-white">
       <div className="mb-8">
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
           <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 px-8 py-6">
@@ -95,34 +95,8 @@ function ReportsTabsBody() {
                 <BarChart3 className="h-7 w-7 text-blue-600" />
               </div>
               <div>
-                <h1 className="text-3xl font-bold text-slate-800 mb-1">Business Reports</h1>
-                <p className="text-slate-600 text-base">
-                  Generate and view detailed business reports for informed decision making
-                </p>
+                <h1 className="text-3xl font-bold text-slate-800">Business Reports</h1>
               </div>
-            </div>
-          </div>
-
-          <div className="px-8 py-4 bg-white border-t border-slate-100">
-            <div className="flex items-center gap-8 text-sm text-slate-600 flex-wrap">
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 bg-blue-500 rounded-full" />
-                <span>Sales performance analysis</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 bg-emerald-500 rounded-full" />
-                <span>Membership overview</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 bg-indigo-500 rounded-full" />
-                <span>Expense tracking & insights</span>
-              </div>
-              {canViewStaffCommission && (
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 bg-purple-500 rounded-full" />
-                  <span>Staff performance analytics</span>
-                </div>
-              )}
             </div>
           </div>
         </div>

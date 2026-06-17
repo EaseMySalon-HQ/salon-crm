@@ -57,6 +57,11 @@ const platformLeadSchema = new mongoose.Schema({
     type: String,
     default: '',
   },
+  /** Service categories selected on the website demo booking form */
+  interestedServices: {
+    type: [String],
+    default: [],
+  },
   assignedAdminId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Admin',

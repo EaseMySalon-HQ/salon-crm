@@ -69,6 +69,10 @@ router.get('/settings', authenticateToken, setupMainDatabase, async (req, res) =
         day: 'sunday',
         time: '20:00'
       },
+      staffIncentiveSummary: {
+        enabled: true,
+        time: '08:00'
+      },
       appointmentNotifications: {
         enabled: true,
         newAppointment: true,
@@ -103,6 +107,7 @@ router.get('/settings', authenticateToken, setupMainDatabase, async (req, res) =
       ...settings,
       dailySummary: { ...defaultSettings.dailySummary, ...(settings.dailySummary || {}) },
       weeklySummary: { ...defaultSettings.weeklySummary, ...(settings.weeklySummary || {}) },
+      staffIncentiveSummary: { ...defaultSettings.staffIncentiveSummary, ...(settings.staffIncentiveSummary || {}) },
       appointmentNotifications: { ...defaultSettings.appointmentNotifications, ...(settings.appointmentNotifications || {}) },
       receiptNotifications: { ...defaultSettings.receiptNotifications, ...(settings.receiptNotifications || {}) },
       exportNotifications: { ...defaultSettings.exportNotifications, ...(settings.exportNotifications || {}) },
@@ -561,6 +566,13 @@ router.put('/settings', authenticateToken, setupMainDatabase, requireAdminOrMana
               enabled: incomingEmailSettings.weeklySummary?.hasOwnProperty('enabled')
                 ? incomingEmailSettings.weeklySummary.enabled
                 : existingEmailSettings.weeklySummary?.enabled ?? false
+            },
+            staffIncentiveSummary: {
+              ...(existingEmailSettings.staffIncentiveSummary || {}),
+              ...(incomingEmailSettings.staffIncentiveSummary || {}),
+              enabled: incomingEmailSettings.staffIncentiveSummary?.hasOwnProperty('enabled')
+                ? incomingEmailSettings.staffIncentiveSummary.enabled
+                : existingEmailSettings.staffIncentiveSummary?.enabled ?? false
             },
             appointmentNotifications: {
               ...(existingEmailSettings.appointmentNotifications || {}),
@@ -1108,6 +1120,7 @@ router.get('/staff', authenticateToken, setupBusinessDatabase, async (req, res) 
         preferences: s.emailNotifications?.preferences || {
           dailySummary: true,
           weeklySummary: true,
+          staffIncentiveSummary: true,
           appointmentAlerts: true,
           receiptAlerts: true,
           exportAlerts: true,
@@ -1120,6 +1133,7 @@ router.get('/staff', authenticateToken, setupBusinessDatabase, async (req, res) 
         preferences: {
           dailySummary: false,
           weeklySummary: false,
+          staffIncentiveSummary: false,
           appointmentAlerts: false,
           receiptAlerts: false,
           exportAlerts: false,
@@ -1151,6 +1165,7 @@ router.get('/staff', authenticateToken, setupBusinessDatabase, async (req, res) 
           preferences: {
             dailySummary: true,
             weeklySummary: true,
+            staffIncentiveSummary: true,
             appointmentAlerts: true,
             receiptAlerts: true,
             exportAlerts: true,
@@ -1183,6 +1198,7 @@ router.get('/staff', authenticateToken, setupBusinessDatabase, async (req, res) 
             preferences: {
               dailySummary: true,
               weeklySummary: true,
+              staffIncentiveSummary: true,
               appointmentAlerts: true,
               receiptAlerts: true,
               exportAlerts: true,
@@ -1265,6 +1281,7 @@ router.put('/staff/:id', authenticateToken, setupBusinessDatabase, requireAdminO
         const adminPreferences = {
           dailySummary: req.body.preferences?.dailySummary !== false,
           weeklySummary: req.body.preferences?.weeklySummary !== false,
+          staffIncentiveSummary: req.body.preferences?.staffIncentiveSummary !== false,
           appointmentAlerts: req.body.preferences?.appointmentAlerts !== false,
           receiptAlerts: req.body.preferences?.receiptAlerts !== false,
           exportAlerts: req.body.preferences?.exportAlerts !== false,
@@ -1289,6 +1306,13 @@ router.put('/staff/:id', authenticateToken, setupBusinessDatabase, requireAdminO
             .map(s => s._id);
           if (adminPreferences.weeklySummary && businessOwner.email) {
             weeklySummaryRecipients.push(businessOwner._id);
+          }
+
+          const staffIncentiveRecipients = allStaff
+            .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.staffIncentiveSummary && s.email)
+            .map(s => s._id);
+          if (adminPreferences.staffIncentiveSummary && businessOwner.email) {
+            staffIncentiveRecipients.push(businessOwner._id);
           }
           
           const appointmentRecipients = allStaff
@@ -1335,6 +1359,8 @@ router.put('/staff/:id', authenticateToken, setupBusinessDatabase, requireAdminO
               'settings.emailNotificationSettings.dailySummary.recipientStaffIds': dailySummaryRecipients,
               'settings.emailNotificationSettings.weeklySummary.enabled': weeklySummaryRecipients.length > 0,
               'settings.emailNotificationSettings.weeklySummary.recipientStaffIds': weeklySummaryRecipients,
+              'settings.emailNotificationSettings.staffIncentiveSummary.enabled': staffIncentiveRecipients.length > 0,
+              'settings.emailNotificationSettings.staffIncentiveSummary.recipientStaffIds': staffIncentiveRecipients,
               'settings.emailNotificationSettings.appointmentNotifications.enabled': appointmentRecipients.length > 0,
               'settings.emailNotificationSettings.appointmentNotifications.newAppointments': appointmentRecipients.length > 0,
               'settings.emailNotificationSettings.appointmentNotifications.recipientStaffIds': appointmentRecipients,
@@ -1425,6 +1451,9 @@ router.put('/staff/:id', authenticateToken, setupBusinessDatabase, requireAdminO
     const weeklySummaryRecipients = allStaff
       .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.weeklySummary && s.email)
       .map(s => s._id);
+    const staffIncentiveRecipients = allStaff
+      .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.staffIncentiveSummary && s.email)
+      .map(s => s._id);
     const appointmentRecipients = allStaff
       .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.appointmentAlerts && s.email)
       .map(s => s._id);
@@ -1451,6 +1480,8 @@ router.put('/staff/:id', authenticateToken, setupBusinessDatabase, requireAdminO
         'settings.emailNotificationSettings.dailySummary.recipientStaffIds': dailySummaryRecipients,
         'settings.emailNotificationSettings.weeklySummary.enabled': weeklySummaryRecipients.length > 0,
         'settings.emailNotificationSettings.weeklySummary.recipientStaffIds': weeklySummaryRecipients,
+        'settings.emailNotificationSettings.staffIncentiveSummary.enabled': staffIncentiveRecipients.length > 0,
+        'settings.emailNotificationSettings.staffIncentiveSummary.recipientStaffIds': staffIncentiveRecipients,
         'settings.emailNotificationSettings.appointmentNotifications.enabled': appointmentRecipients.length > 0,
         'settings.emailNotificationSettings.appointmentNotifications.newAppointments': appointmentRecipients.length > 0,
         'settings.emailNotificationSettings.appointmentNotifications.recipientStaffIds': appointmentRecipients,

@@ -110,6 +110,21 @@ function splitLineRevenueByStaff(item, saleFallback) {
   return [];
 }
 
+function getAttributedRevenueForStaff(item, staffId, staffName, saleFallback) {
+  const targetId = staffId != null ? String(staffId) : '';
+  const splits = splitLineRevenueByStaff(item, saleFallback);
+  const row = splits.find(
+    (s) =>
+      String(s.staffId) === targetId ||
+      (staffName != null && s.staffName === staffName)
+  );
+  return row?.revenue ?? 0;
+}
+
+function staffIsAttributedToLineItem(item, staffId, staffName, saleFallback) {
+  return getAttributedRevenueForStaff(item, staffId, staffName, saleFallback) > 0;
+}
+
 /**
  * Same rules as staff-performance-report `applySaleToStaffPerformanceMaps`: only staffIds in
  * `allowedStaffIdSet` receive credit. Revenue is tax-exclusive per line.
@@ -248,6 +263,8 @@ function aggregateStaffDailyFromSales(sales, staffId, allowedStaffIdSet, options
 module.exports = {
   getLineGrossTotal,
   getLinePreTaxTotal,
+  getAttributedRevenueForStaff,
+  staffIsAttributedToLineItem,
   splitLineRevenueByStaff,
   aggregateStaffAnalyticsFromSales,
   aggregateStaffDailyFromSales,

@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react"
-import { Download, Filter, TrendingUp, DollarSign, Users, MoreHorizontal, Eye, Pencil, Trash2, Receipt, AlertCircle, FileText, FileSpreadsheet, ChevronDown, Edit, RefreshCw, CalendarIcon, HelpCircle, Wallet, CreditCard, Banknote, ArrowUpRight, Mail, ReceiptText } from "lucide-react"
+import { Download, Filter, TrendingUp, DollarSign, Users, MoreHorizontal, Eye, Pencil, Trash2, Receipt, AlertCircle, FileText, FileSpreadsheet, ChevronDown, Edit, CalendarIcon, HelpCircle, Wallet, CreditCard, Banknote, ArrowUpRight, Mail, ReceiptText } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -77,6 +77,8 @@ interface SalesRecord {
   editedAt?: Date | string
   items?: Array<{ type: string; [key: string]: unknown }>
   billChangeCreditedToWallet?: number
+  walletRefundCredited?: number
+  refundHistory?: Array<{ mode?: string; amount?: number }>
 }
 
 function expandSaleTipAllocations(sale: SalesRecord): { staffId: string; staffName: string; amount: number }[] {
@@ -145,6 +147,14 @@ function mapApiSaleToRecord(sale: Record<string, unknown>): SalesRecord {
     editedAt: sale.editedAt as Date | string | undefined,
     billChangeCreditedToWallet:
       sale.billChangeCreditedToWallet != null ? Number(sale.billChangeCreditedToWallet) : undefined,
+    walletRefundCredited:
+      sale.walletRefundCredited != null ? Number(sale.walletRefundCredited) : undefined,
+    refundHistory: Array.isArray(sale.refundHistory)
+      ? (sale.refundHistory as Record<string, unknown>[]).map((entry) => ({
+          mode: entry.mode != null ? String(entry.mode) : undefined,
+          amount: entry.amount != null ? Number(entry.amount) : undefined,
+        }))
+      : undefined,
     loyaltyPointsRedeemed:
       sale.loyaltyPointsRedeemed != null ? Number(sale.loyaltyPointsRedeemed) : undefined,
     loyaltyDiscountAmount:
@@ -380,13 +390,10 @@ export function SalesReport() {
   )
 
   const handleEditBill = (sale: SalesRecord) => {
-    router.push(`/billing/${sale.billNo}?mode=edit`)
+    router.push(
+      `/billing/${sale.billNo}?mode=edit&returnTo=${encodeURIComponent(buildReportsReturnPath())}`
+    )
   }
-
-  const handleExchangeBill = (sale: SalesRecord) => {
-    router.push(`/billing/${sale.billNo}?mode=exchange`)
-  }
-
 
   // Default date range: today (IST); sales load via server-side filters + pagination
   useEffect(() => {
@@ -1568,7 +1575,9 @@ export function SalesReport() {
   }
 
   const handleEditSale = (sale: SalesRecord) => {
-    router.push(`/billing/${sale.billNo}?mode=edit`)
+    router.push(
+      `/billing/${sale.billNo}?mode=edit&returnTo=${encodeURIComponent(buildReportsReturnPath())}`
+    )
   }
 
   const handleDeleteSale = (sale: SalesRecord) => {
@@ -2521,16 +2530,6 @@ export function SalesReport() {
               )}
             </div>
             <div className="flex items-center gap-3">
-              {(reportType === "sales" || reportType === "staff-tip") && (
-                <Button
-                  onClick={() => router.push('/reports/unpaid-bills')}
-                  variant="outline"
-                  className="border-red-200 text-red-700 hover:bg-red-50 hover:border-red-300"
-                >
-                  <AlertCircle className="h-4 w-4 mr-2" />
-                  View Unpaid Bills
-                </Button>
-              )}
               {(reportType === "sales" || reportType === "staff-tip" || reportType === "summary" || reportType === "service-list" || reportType === "product-list" || reportType === "appointment-list" || reportType === "deleted-invoice" || reportType === "unpaid-part-paid" || reportType === "cash-movement" || reportType === "gst") && canExport && (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
@@ -3730,7 +3729,7 @@ export function SalesReport() {
                         </TooltipTrigger>
                         <TooltipContent className="max-w-xs">
                           <p className="text-sm">
-                            Change credited to prepaid wallet or other non-bill adjustments at checkout.
+                            Change credited to prepaid wallet, product-return wallet refunds, or other non-bill adjustments.
                           </p>
                         </TooltipContent>
                       </Tooltip>
@@ -3849,12 +3848,6 @@ export function SalesReport() {
                               <DropdownMenuItem onClick={() => handleEditBill(sale)} className="hover:bg-amber-50">
                                 <Edit className="mr-2 h-4 w-4 text-amber-600" />
                                 <span className="text-slate-700">Edit Bill</span>
-                              </DropdownMenuItem>
-                            )}
-                            {canEditSale && sale.items && sale.items.some((item: any) => item.type === 'product') && (
-                              <DropdownMenuItem onClick={() => handleExchangeBill(sale)} className="hover:bg-blue-50">
-                                <RefreshCw className="mr-2 h-4 w-4 text-blue-600" />
-                                <span className="text-slate-700">Exchange Products</span>
                               </DropdownMenuItem>
                             )}
                             {canDeleteSale && (

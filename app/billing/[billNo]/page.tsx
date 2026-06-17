@@ -5,6 +5,7 @@ import { useParams, useSearchParams, useRouter } from "next/navigation"
 import { ProtectedRoute } from "@/components/auth/protected-route"
 import { ProtectedLayout } from "@/components/layout/protected-layout"
 import { QuickSale } from "@/components/appointments/quick-sale"
+import { BillServiceCheckoutEditor } from "@/components/bills/bill-service-checkout-editor"
 import { SalesAPI } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
 
@@ -19,11 +20,11 @@ export default function BillingPage() {
   const billNo = params.billNo as string
   const mode = (searchParams.get("mode") as BillingMode) || "edit"
   const [initialSale, setInitialSale] = useState<any>(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(mode === "exchange")
 
   useEffect(() => {
     const loadSale = async () => {
-      if (!billNo) {
+      if (!billNo || mode !== "exchange") {
         setLoading(false)
         return
       }
@@ -55,16 +56,20 @@ export default function BillingPage() {
       }
     }
 
-    if (billNo && (mode === "edit" || mode === "exchange")) {
-      loadSale()
-    } else {
-      setLoading(false)
-    }
+    void loadSale()
   }, [billNo, mode, router, toast])
 
-  // Edit / Exchange both mutate an existing bill, so require sales.edit.
-  // Create mode falls back to sales.create (matches quick-sale entry).
   const requiredFeature = mode === "create" ? "create" : "edit"
+
+  if (mode === "edit") {
+    return (
+      <ProtectedRoute requiredModule="sales" requiredFeature={requiredFeature}>
+        <ProtectedLayout requiredModule="sales" requiredFeature={requiredFeature}>
+          <BillServiceCheckoutEditor billNo={billNo} />
+        </ProtectedLayout>
+      </ProtectedRoute>
+    )
+  }
 
   return (
     <ProtectedRoute requiredModule="sales" requiredFeature={requiredFeature}>
@@ -74,4 +79,3 @@ export default function BillingPage() {
     </ProtectedRoute>
   )
 }
-

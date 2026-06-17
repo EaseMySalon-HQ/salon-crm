@@ -23,6 +23,7 @@ const PLANS = {
       'cash_register',
       'staff_management',
       'basic_reports',
+      'gmb',
     ],
     limits: {
       locations: 1,
@@ -56,6 +57,7 @@ const PLANS = {
       'incentive_management',
       'reward_points',
       'feedback_management',
+      'gmb',
     ],
     limits: {
       locations: 1,
@@ -99,6 +101,7 @@ const PLANS = {
       'custom_integrations',
       'approval_workflows',
       'whatsapp_integration',
+      'gmb',
     ],
     limits: {
       locations: 3,
@@ -262,6 +265,13 @@ const FEATURES = {
     description: 'Meta WABA — templates, campaigns, inbox, and Business API connect',
     category: 'pro',
   },
+  gmb: {
+    id: 'gmb',
+    name: 'Google Business Profile',
+    description:
+      'Connect, reviews, health dashboard, SEO insights, services sync, and conversion tracking',
+    category: 'growth',
+  },
 };
 
 /**
@@ -279,6 +289,13 @@ const ADDONS = {
     name: 'SMS Notifications',
     description: 'Send SMS notifications (billed per message from wallet)',
     defaultQuota: 0,
+  },
+  googleBusiness: {
+    id: 'googleBusiness',
+    name: 'Google Business Profile Booster',
+    description: 'AI auto-reply, review requests, auto posts, insights, and ad triggers',
+    defaultQuota: 0,
+    monthlyPriceInr: 499,
   },
 };
 

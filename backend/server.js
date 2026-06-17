@@ -470,6 +470,8 @@ app.use('/api/feedback', require('./routes/feedback'));
 app.use('/api/appointments', require('./routes/appointments-scheduling'));
 app.use('/api/branch-management', require('./routes/branch-management'));
 app.use('/api/inventory/transfers', require('./routes/inventory-transfers'));
+app.use('/api/gmb', require('./routes/gmb'));
+app.use('/api/admin/gmb-config', require('./routes/admin-gmb-config'));
 
 const {
   signTenantAccess,
@@ -952,6 +954,13 @@ app.post('/api/auth/switch-branch', authenticateToken, async (req, res) => {
       return res.status(403).json({ success: false, error: 'Branch switching is owner-only' });
     }
 
+    if (req.user.isImpersonation) {
+      return res.status(403).json({
+        success: false,
+        error: 'Branch switching is disabled during impersonation. Exit impersonation to select another business.',
+      });
+    }
+
     const databaseManager = require('./config/database-manager');
     const mainConnection = await databaseManager.getMainConnection();
     const Business = mainConnection.model('Business', require('./models/Business').schema);
@@ -1008,6 +1017,10 @@ app.post('/api/auth/switch-branch', authenticateToken, async (req, res) => {
 app.get('/api/auth/my-branches', authenticateToken, async (req, res) => {
   try {
     if (!req.user || req.user.authSubject !== 'user') {
+      return res.json({ success: true, data: { branches: [] } });
+    }
+
+    if (req.user.isImpersonation) {
       return res.json({ success: true, data: { branches: [] } });
     }
 
@@ -1392,7 +1405,13 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
           role: userDoc.role,
           branchId: userDoc.branchId,
         };
-        const newToken = signTenantAccess(userForToken);
+        if (rdecoded.isImpersonation && rdecoded.branchId) {
+          userForToken.branchId = rdecoded.branchId;
+          userForToken.isImpersonation = true;
+          userForToken.impersonatedBy = rdecoded.impersonatedBy;
+        }
+        const accessTtl = rdecoded.isImpersonation ? '1h' : undefined;
+        const newToken = signTenantAccess(userForToken, accessTtl);
         setTenantAuthCookies(res, { accessToken: newToken, refreshToken: newRefreshToken });
         const csrfToken = setCsrfCookie(res);
         return res.json({ success: true, csrfToken });
@@ -1508,7 +1527,7 @@ app.post('/api/auth/refresh', setupMainDatabase, async (req, res) => {
         _id: userDoc._id,
         email: userDoc.email,
         role: userDoc.role,
-        branchId: userDoc.branchId,
+        branchId: decoded.isImpersonation && decoded.branchId ? decoded.branchId : userDoc.branchId,
       };
       if (decoded.isImpersonation) {
         userForToken.isImpersonation = true;
@@ -4501,6 +4520,9 @@ app.post('/api/services', authenticateToken, setupBusinessDatabase, requirePermi
       if (resolved.bundleRetailPrice != null) doc.bundleRetailPrice = resolved.bundleRetailPrice;
       const newService = new Service(doc);
       const savedService = await newService.save();
+      void require('./lib/gmb-sync-hook')
+        .syncServicesIfEnabled(req.user.branchId, req.businessModels)
+        .catch((e) => logger.warn('[gmb] post-bundle-create sync:', e?.message || e));
       return res.status(201).json({ success: true, data: savedService });
     }
 
@@ -4534,6 +4556,10 @@ app.post('/api/services', authenticateToken, setupBusinessDatabase, requirePermi
     });
 
     const savedService = await newService.save();
+
+    void require('./lib/gmb-sync-hook')
+      .syncServicesIfEnabled(req.user.branchId, req.businessModels)
+      .catch((e) => logger.warn('[gmb] post-service-create sync:', e?.message || e));
 
     res.status(201).json({
       success: true,
@@ -4677,6 +4703,10 @@ app.put('/api/services/:id', authenticateToken, setupBusinessDatabase, requirePe
         error: 'Service not found'
       });
     }
+
+    void require('./lib/gmb-sync-hook')
+      .syncServicesIfEnabled(req.user.branchId, req.businessModels)
+      .catch((e) => logger.warn('[gmb] post-service-update sync:', e?.message || e));
 
     res.json({
       success: true,
@@ -9891,8 +9921,14 @@ app.get('/api/appointments', authenticateToken, setupBusinessDatabase, async (re
 app.post('/api/appointments', authenticateToken, setupBusinessDatabase, requirePermission('appointments', 'create'), async (req, res) => {
   try {
     const { Appointment, Service: BusinessService, BookingHold } = req.businessModels;
-    const { clientId, clientName, date, time, services, totalDuration, totalAmount, notes, leadSource, status = 'scheduled', bookingGroupId: existingBookingGroupId, schedulingMode: rawSchedulingMode, allowParallelBooking: rawAllowParallel } = req.body;
+    const { clientId, clientName, date, time, services, totalDuration, totalAmount, notes, leadSource, status = 'scheduled', bookingGroupId: existingBookingGroupId, schedulingMode: rawSchedulingMode, allowParallelBooking: rawAllowParallel, utmSource, utmMedium, utmCampaign, estimatedRevenue } = req.body;
     const schedulingMode = rawSchedulingMode === 'custom' ? 'custom' : 'sequential';
+    const gmbUtmFields = {
+      ...(utmSource ? { utmSource: String(utmSource) } : {}),
+      ...(utmMedium ? { utmMedium: String(utmMedium) } : {}),
+      ...(utmCampaign ? { utmCampaign: String(utmCampaign) } : {}),
+      ...(estimatedRevenue != null ? { estimatedRevenue: Number(estimatedRevenue) } : {}),
+    };
     const allowParallelBooking = rawAllowParallel === true;
 
     if (!clientId || !date || !time || !services || services.length === 0) {
@@ -10068,6 +10104,7 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, requireP
           bookingGroupId: bookingGroupIdFor(r.serviceDate),
           schedulingMode: 'custom',
           ...(allowParallelBooking ? { allowStaffOverlap: true } : {}),
+          ...gmbUtmFields,
         };
 
         if (r.raw.staffAssignments && Array.isArray(r.raw.staffAssignments)) {
@@ -10193,6 +10230,7 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, requireP
           bookingGroupId: bookingGroupIdFor(serviceDate),
           staffLocked: !!service.staffLocked,
           ...(allowParallelBooking ? { allowStaffOverlap: true } : {}),
+          ...gmbUtmFields,
         };
 
         if (service.staffAssignments && Array.isArray(service.staffAssignments)) {
@@ -14053,6 +14091,46 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requirePermi
           : Number(existingSale.loyaltyDiscountAmount) || 0,
     };
 
+    let billEditRefundResult = null;
+    if (updateData.refundProcessing) {
+      const billRefundSvc = require('./services/bill-refund-service');
+      const tipAmount = Number(existingSale.tip) || 0;
+      const newTotalAmount =
+        Number(updateData.grossTotal ?? existingSale.grossTotal ?? 0) + tipAmount;
+      const overpaidAmount = Math.max(
+        0,
+        Math.round((oldPaidAmount - newTotalAmount) * 100) / 100,
+      );
+      if (
+        !Number.isFinite(Number(updateData.refundProcessing.amount)) ||
+        Number(updateData.refundProcessing.amount) <= 0
+      ) {
+        updateData.refundProcessing.amount = overpaidAmount;
+      }
+      try {
+        billEditRefundResult = await billRefundSvc.processBillEditRefund({
+          sale: existingSale,
+          refundProcessing: updateData.refundProcessing,
+          newTotalAmount,
+          previousPaidAmount: oldPaidAmount,
+          branchId: req.user.branchId,
+          businessModels: req.businessModels,
+          staffUser: req.user,
+        });
+      } catch (refundErr) {
+        logger.warn('[bill-refund] Failed:', refundErr?.message || refundErr);
+        if (useTransactions && session) {
+          try {
+            await session.abortTransaction();
+          } catch {
+            /* ignore */
+          }
+        }
+        if (session) session.endSession();
+        return res.status(refundErr.status || 400).json({ success: false, error: refundErr.message });
+      }
+    }
+
     const {
       mergePaymentConfiguration: mergePayCfgPut,
       eligibleRedemptionSubtotal: eligibleRedemptionSubtotalPut,
@@ -14060,7 +14138,7 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requirePermi
     } = require('./lib/payment-redemption-eligibility');
     const { BusinessSettings: BizSettingsRedeemPut } = req.businessModels;
     let eligibleRewardPut = null;
-    if (BizSettingsRedeemPut) {
+    if (BizSettingsRedeemPut && !updateData.refundProcessing) {
       const payDocPut = await BizSettingsRedeemPut.findOne().select('paymentConfiguration').lean();
       const payCfgPut = mergePayCfgPut(payDocPut?.paymentConfiguration);
       const itemsForRedeemPut = Array.isArray(existingSale.items) ? existingSale.items : [];
@@ -14090,7 +14168,9 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requirePermi
     }
 
     try {
-      rewardPointsSvcPut.validateSaleLoyaltyBeforeSave(mergedLoyaltyBody, rpSettingsPut, eligibleRewardPut);
+      if (!updateData.refundProcessing) {
+        rewardPointsSvcPut.validateSaleLoyaltyBeforeSave(mergedLoyaltyBody, rpSettingsPut, eligibleRewardPut);
+      }
     } catch (loyErr) {
       return res.status(loyErr.status || 400).json({ success: false, error: loyErr.message });
     }
@@ -14187,9 +14267,9 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requirePermi
               },
               inventoryChanges: inventoryChangesForHistory,
               paymentAdjustments: {
-                refundAmount: 0,
+                refundAmount: billEditRefundResult?.refundAmount ?? 0,
                 additionalAmount: 0,
-                refundMethods: [],
+                refundMethods: billEditRefundResult?.refundMethods ?? [],
               },
             },
           ],
@@ -18588,6 +18668,14 @@ const server = app.listen(PORT, '0.0.0.0', async () => {
     logger.debug('⏰ WhatsApp campaign scheduler started');
   } catch (err) {
     logger.warn('⚠️  WhatsApp campaign scheduler could not be started:', err?.message || err);
+  }
+
+  // Google Business Profile integration jobs
+  try {
+    const { setupGmbJobs } = require('./jobs/gmb-jobs-bootstrap');
+    setupGmbJobs();
+  } catch (err) {
+    logger.warn('⚠️  GMB jobs could not be scheduled:', err?.message || err);
   }
   
   // Initialize email service on server start

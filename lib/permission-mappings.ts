@@ -82,6 +82,7 @@ export const SETTINGS_PERMISSION_MAP: Record<string, string> = {
   products: "products",
   "channel-usage": "notification_settings",
   "whatsapp-integration": "notification_settings",
+  "google-business": "business_settings",
   recharge: "plan_billing",
   feedback: "feedback",
 }

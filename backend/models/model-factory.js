@@ -58,6 +58,13 @@ class ModelFactory {
       Sale: this.getModel('Sale', require('./Sale').schema, connection),
 
       Feedback: this.getModel('Feedback', require('./Feedback').schema, connection),
+
+      GmbReview: this.getModel('GmbReview', require('./GmbReview').schema, connection),
+      GmbPost: this.getModel('GmbPost', require('./GmbPost').schema, connection),
+      GmbHealthSnapshot: this.getModel('GmbHealthSnapshot', require('./GmbHealthSnapshot').schema, connection),
+      GmbSyncLog: this.getModel('GmbSyncLog', require('./GmbSyncLog').schema, connection),
+      GmbReviewRequestLog: this.getModel('GmbReviewRequestLog', require('./GmbReviewRequestLog').schema, connection),
+      GmbAdTrigger: this.getModel('GmbAdTrigger', require('./GmbAdTrigger').schema, connection),
       
       // Receipt model
       Receipt: this.getModel('Receipt', require('./Receipt').schema, connection),
@@ -214,7 +221,10 @@ class ModelFactory {
       WhatsAppAuditLog: this.getModel('WhatsAppAuditLog', require('./WhatsAppAuditLog').schema, connection),
       WhatsAppTemplate: this.getModel('WhatsAppTemplate', require('./WhatsAppTemplate').schema, connection),
       WhatsAppCampaign: this.getModel('WhatsAppCampaign', require('./WhatsAppCampaign').schema, connection),
-      WhatsAppMetaConfig: this.getModel('WhatsAppMetaConfig', require('./WhatsAppMetaConfig').schema, connection)
+      WhatsAppMetaConfig: this.getModel('WhatsAppMetaConfig', require('./WhatsAppMetaConfig').schema, connection),
+
+      GmbAccount: this.getModel('GmbAccount', require('./GmbAccount').schema, connection),
+      GmbMetaConfig: this.getModel('GmbMetaConfig', require('./GmbMetaConfig').schema, connection),
     };
   }
 

@@ -21,6 +21,7 @@ interface StaffMember {
     preferences?: {
       dailySummary?: boolean
       weeklySummary?: boolean
+      staffIncentiveSummary?: boolean
       appointmentAlerts?: boolean
       receiptAlerts?: boolean
       exportAlerts?: boolean
@@ -51,6 +52,7 @@ export function StaffEmailPreferencesModal({
     allowReportsDelivery: false,
     dailySummary: false,
     weeklySummary: false,
+    staffIncentiveSummary: false,
     appointmentAlerts: false,
     receiptAlerts: false,
     exportAlerts: false,
@@ -65,6 +67,7 @@ export function StaffEmailPreferencesModal({
         allowReportsDelivery: staff.emailNotifications.preferences?.allowReportsDelivery || false,
         dailySummary: staff.emailNotifications.preferences?.dailySummary || false,
         weeklySummary: staff.emailNotifications.preferences?.weeklySummary || false,
+        staffIncentiveSummary: staff.emailNotifications.preferences?.staffIncentiveSummary || false,
         appointmentAlerts: staff.emailNotifications.preferences?.appointmentAlerts || false,
         receiptAlerts: staff.emailNotifications.preferences?.receiptAlerts || false,
         exportAlerts: staff.emailNotifications.preferences?.exportAlerts || false,
@@ -77,6 +80,7 @@ export function StaffEmailPreferencesModal({
         allowReportsDelivery: false,
         dailySummary: false,
         weeklySummary: false,
+        staffIncentiveSummary: false,
         appointmentAlerts: false,
         receiptAlerts: false,
         exportAlerts: false,
@@ -96,6 +100,7 @@ export function StaffEmailPreferencesModal({
         preferences: {
           dailySummary: preferences.dailySummary,
           weeklySummary: preferences.weeklySummary,
+          staffIncentiveSummary: preferences.staffIncentiveSummary,
           appointmentAlerts: preferences.appointmentAlerts,
           receiptAlerts: preferences.receiptAlerts,
           exportAlerts: preferences.exportAlerts,
@@ -220,6 +225,18 @@ export function StaffEmailPreferencesModal({
                       checked={preferences.weeklySummary}
                       onCheckedChange={(checked) =>
                         setPreferences(prev => ({ ...prev, weeklySummary: checked }))
+                      }
+                    />
+                  </div>
+                  <div className="flex items-center justify-between p-3 border rounded-lg">
+                    <div>
+                      <Label>Staff Incentive Summary</Label>
+                      <p className="text-xs text-slate-500 mt-1">Sent on the 1st of each month for the previous month</p>
+                    </div>
+                    <Switch
+                      checked={preferences.staffIncentiveSummary}
+                      onCheckedChange={(checked) =>
+                        setPreferences(prev => ({ ...prev, staffIncentiveSummary: checked }))
                       }
                     />
                   </div>

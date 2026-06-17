@@ -3,6 +3,7 @@
 import type { Receipt } from "@/lib/data"
 import { getReceiptGrandTotal } from "@/lib/receipt-grand-total"
 import { getReceiptSettlementSummary } from "@/lib/receipt-settlement-summary"
+import { buildReceiptRefundsSectionHtml } from "@/lib/receipt-refunds"
 import { getReceiptPaymentStamp } from "@/lib/receipt-payment-stamp"
 import { formatCurrency, getCurrencySymbol } from "@/lib/currency"
 import { formatReceiptDiscountPercent } from "@/lib/receipt-discount-format"
@@ -255,7 +256,7 @@ export function ReceiptGenerator({ receipt, businessSettings }: ReceiptGenerator
             out += `
             <div class="total-line" style="margin-top: ${s.showReceivedAndAdjusted ? "8px" : "10px"}; padding-top: 6px; border-top: ${s.showReceivedAndAdjusted ? "1px solid #bbb" : "1px dashed #bbb"}; font-weight: 600;">
               <span>Total Paid (Bill):</span>
-              <span>${formatCurrency(s.paidTowardBill, businessSettings)}</span>
+              <span>${formatCurrency(s.effectivePaidTowardBill, businessSettings)}</span>
             </div>`
             return out
           })()}
@@ -292,6 +293,10 @@ export function ReceiptGenerator({ receipt, businessSettings }: ReceiptGenerator
             )
             .join("")}
         </div>
+        ${buildReceiptRefundsSectionHtml(
+          getReceiptSettlementSummary(receipt).refundLines,
+          (amount) => formatCurrency(amount, businessSettings),
+        )}
 
         <div class="footer">
           <div>Thank you for visiting!</div>

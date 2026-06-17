@@ -44,6 +44,13 @@ const FEATURE = {
   CUSTOM_INTEGRATIONS: 'custom_integrations',
   WHATSAPP_INTEGRATION: 'whatsapp_integration',
   MULTI_LOCATION: 'multi_location',
+  GMB_CONNECT: 'gmb_connect',
+  GMB_REVIEWS_READ: 'gmb_reviews_read',
+  GMB_REVIEWS_REPLY: 'gmb_reviews_reply',
+  GMB_HEALTH: 'gmb_health',
+  GMB_SYNC: 'gmb_sync',
+  GMB_INSIGHTS: 'gmb_insights',
+  GMB_CONVERSION_TRACKING: 'gmb_conversion_tracking',
 };
 
 /**
@@ -126,6 +133,12 @@ const FEATURE_ROUTE_RULES = [
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     pathPattern: /^\/api\/branch-management(\/|$)/,
     description: 'Multi-branch admin dashboard, add/deactivate branches, cross-branch reports',
+  },
+  {
+    feature: FEATURE.GMB_CONNECT,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    pathPattern: /^\/api\/gmb(\/|$)/,
+    description: 'Google Business Profile OAuth connect and settings',
   },
 ];
 
