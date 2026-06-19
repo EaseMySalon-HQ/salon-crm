@@ -28,6 +28,7 @@ function isCsrfEnabled() {
 const SKIP_PREFIXES = [
   '/api/public/feedback',
   '/api/public/demo-lead',
+  '/api/public/booking',
   '/api/public/sales/bill',
   '/api/auth/login',
   '/api/auth/staff-login',

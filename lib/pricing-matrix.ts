@@ -59,6 +59,7 @@ export const PRICING_PLANS: PricingPlan[] = [
       {
         title: "Growth tools",
         items: [
+          { label: "Online booking (public link)", state: "locked" },
           { label: "Feedback management", state: "locked" },
           { label: "Loyalty & rewards", state: "locked" },
           { label: "WhatsApp (WABA) integration", state: "locked" },
@@ -90,6 +91,7 @@ export const PRICING_PLANS: PricingPlan[] = [
           { label: "Membership Program", state: "included" },
           { label: "Referral program", state: "included" },
           { label: "Incentive management (commission profiles)", state: "included" },
+          { label: "Online booking (public link)", state: "included" },
         ],
       },
       {
@@ -146,6 +148,13 @@ export const FEATURE_CATEGORIES: FeatureCategory[] = [
       { feature: "Appointment booking", starter: "yes", growth: "yes", pro: "yes" },
       { feature: "Calendar management", starter: "yes", growth: "yes", pro: "yes" },
       { feature: "Walk-in management", starter: "yes", growth: "yes", pro: "yes" },
+      {
+        feature: "Online booking (public link)",
+        hint: "Shareable booking page for client self-scheduling",
+        starter: "no",
+        growth: "yes",
+        pro: "yes",
+      },
       {
         feature: "Booking via WhatsApp",
         hint: "Clients book directly in chat",

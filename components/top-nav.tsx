@@ -36,6 +36,13 @@ import { BranchSwitcher } from "@/components/branch-switcher/branch-switcher"
 import { useToast } from "@/hooks/use-toast"
 import type { Client } from "@/lib/client-store"
 import { ensureLocalSharedClient, isSharedPreviewClient } from "@/lib/shared-client-import"
+import {
+  FathersDayNavBackground,
+  NavBannerBackground,
+  NavBannerMessage,
+} from "@/components/top-nav/fathers-day-banner"
+import { useNavBannerActive, useNavBannerConfig } from "@/hooks/use-nav-banner-config"
+import { cn } from "@/lib/utils"
 
 function searchHitToClient(c: any): Client {
   const id = String(c._id || c.id || "")
@@ -374,11 +381,24 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
     }
   }
 
+  const fathersDayNav = useNavBannerActive()
+  const { data: navBannerConfig } = useNavBannerConfig()
+
   return (
-    <header className="sticky top-0 z-30 shrink-0 border-b border-gray-200/60 bg-gradient-to-r from-white via-slate-50 to-blue-50/30 backdrop-blur-sm w-full px-8 py-4 shadow-sm">
-      <div className="flex items-center justify-between">
+    <header
+      className={cn(
+        "fathers-day-nav sticky top-0 z-30 w-full shrink-0 overflow-hidden px-8 py-4 shadow-sm backdrop-blur-sm",
+        fathersDayNav
+          ? "relative border-b border-amber-400/25"
+          : "border-b border-gray-200/60 bg-gradient-to-r from-white via-slate-50 to-blue-50/30"
+      )}
+    >
+      {fathersDayNav && navBannerConfig ? (
+        <NavBannerBackground theme={navBannerConfig.theme} />
+      ) : null}
+      <div className="relative z-10 flex items-center justify-between gap-3">
         {/* Left — business name + messaging wallet balance */}
-        <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0 flex-1">
           <BranchSwitcher businessName={businessName} isLoadingName={isLoadingBusinessName} />
 
           <button
@@ -400,6 +420,10 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
               )}
             </span>
           </button>
+
+          <div className="md:hidden">
+            {fathersDayNav && navBannerConfig ? <NavBannerMessage config={navBannerConfig} /> : null}
+          </div>
 
           {planRenewalExpiringToday ? (
             <p
@@ -423,8 +447,12 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
           ) : null}
         </div>
 
+        <div className="pointer-events-none absolute left-1/2 top-1/2 z-10 hidden -translate-x-1/2 -translate-y-1/2 md:block">
+          {fathersDayNav && navBannerConfig ? <NavBannerMessage config={navBannerConfig} /> : null}
+        </div>
+
         {/* Right side - Quick Add, Notifications, and User */}
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+        <div className="flex items-center justify-end gap-2 sm:gap-3 min-w-0 flex-1">
           {/* Session Status */}
           <SessionStatus showAlways={false} />
 
@@ -561,16 +589,17 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
               aria-label="WhatsApp inbox"
               title="WhatsApp inbox"
               onClick={() => router.push("/whatsapp/inbox")}
-              className={`relative p-2.5 transition-all duration-300 transform hover:scale-105 hover:shadow-md rounded-lg group ${
+              className={`relative rounded-lg p-2.5 transition-all duration-300 transform hover:scale-105 hover:shadow-md group ${
                 isInboxActive
-                  ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                  : "hover:bg-gradient-to-r hover:from-emerald-50 hover:to-green-50"
+                  ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-100"
+                  : "bg-emerald-50/95 text-emerald-700 hover:bg-emerald-100 border border-emerald-200/80"
               }`}
             >
               <MessageCircle
                 className={`h-4 w-4 transition-colors duration-300 ${
-                  isInboxActive ? "text-emerald-700" : "text-gray-600 group-hover:text-emerald-600"
+                  isInboxActive ? "text-emerald-700" : "text-emerald-600 group-hover:text-emerald-700"
                 }`}
+                strokeWidth={2}
               />
               {inboxBadgeLabel ? (
                 <Badge
@@ -591,9 +620,9 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
                 size="sm"
                 aria-haspopup="menu"
                 aria-label="Alerts and notifications"
-                className="relative p-2.5 hover:bg-gradient-to-r hover:from-amber-50 hover:to-yellow-50 transition-all duration-300 transform hover:scale-105 hover:shadow-md rounded-lg group"
+                className="group relative rounded-lg border border-amber-200/80 bg-amber-50/95 p-2.5 transition-all duration-300 transform hover:scale-105 hover:bg-amber-100 hover:shadow-md"
               >
-                <Bell className="h-4 w-4 text-gray-600 group-hover:text-amber-600 transition-colors duration-300" />
+                <Bell className="h-4 w-4 text-amber-600 transition-colors duration-300 group-hover:text-amber-700" strokeWidth={2} />
                 {!notificationsPending && badgeLabel ? (
                   <Badge
                     variant="destructive"

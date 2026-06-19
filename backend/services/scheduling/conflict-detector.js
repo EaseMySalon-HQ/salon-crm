@@ -38,6 +38,7 @@ function overlapQueryForStaff(branchId, staffId, start, end, excludeAppointmentI
  * @param {object} ctx — {
  *   branchId, staffId, start: Date, end: Date,
  *   excludeAppointmentId?, excludeAppointmentIds?: string[],
+ *   excludeHoldIds?: string[],
  *   skipHoldCheck?: boolean
  * }
  * @returns {Promise<{ conflict: boolean, reason?: string, details?: object }>}
@@ -92,13 +93,22 @@ async function detectStaffConflict(models, ctx) {
   const now = new Date();
   /** Staff portal books without soft holds; TTL holds are for future online booking flows. */
   if (BookingHold && !ctx.skipHoldCheck) {
-    const hold = await BookingHold.findOne({
+    const holdQ = {
       branchId,
       staffId,
       expiresAt: { $gt: now },
       startAt: { $lt: end },
       endAt: { $gt: start }
-    }).lean();
+    };
+    const excludeHolds = (ctx.excludeHoldIds || [])
+      .map((id) => String(id).trim())
+      .filter((id) => mongoose.Types.ObjectId.isValid(id));
+    if (excludeHolds.length === 1) {
+      holdQ._id = { $ne: new mongoose.Types.ObjectId(excludeHolds[0]) };
+    } else if (excludeHolds.length > 1) {
+      holdQ._id = { $nin: excludeHolds.map((id) => new mongoose.Types.ObjectId(id)) };
+    }
+    const hold = await BookingHold.findOne(holdQ).lean();
     if (hold) {
       return { conflict: true, reason: 'hold_active', details: { holdId: hold._id } };
     }

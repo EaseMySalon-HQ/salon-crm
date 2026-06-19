@@ -12,6 +12,7 @@ import {
   saleRecordIsPartialPayment,
   getAppointmentEditAppearanceStatus,
   getAppointmentIdsForCardStatusUpdate,
+  isOnlineBookingAppointment,
 } from "./appointment-calendar-helpers"
 
 describe("saleRecordIsPartialPayment", () => {
@@ -175,6 +176,21 @@ describe("getAppointmentIdsForCardStatusUpdate", () => {
 
   it("service_started updates only the acted-on card", () => {
     expect(getAppointmentIdsForCardStatusUpdate(loaded[0], loaded, "service_started")).toEqual(["a1"])
+  })
+})
+
+describe("isOnlineBookingAppointment", () => {
+  it("matches leadSource online_booking", () => {
+    expect(isOnlineBookingAppointment({ leadSource: "online_booking" })).toBe(true)
+  })
+
+  it("matches createdBy online_booking", () => {
+    expect(isOnlineBookingAppointment({ createdBy: "online_booking" })).toBe(true)
+  })
+
+  it("ignores walk-in and staff-created appointments", () => {
+    expect(isOnlineBookingAppointment({ leadSource: "Walk-in", createdBy: "Jane" })).toBe(false)
+    expect(isOnlineBookingAppointment(null)).toBe(false)
   })
 })
 

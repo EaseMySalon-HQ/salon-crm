@@ -71,6 +71,8 @@ import {
   canChangeAppointmentStatusViaContextMenu,
   getAppointmentIdsForCardStatusUpdate,
   appointmentsOnSameVisitDate,
+  isOnlineBookingAppointment,
+  ONLINE_BOOKING_PILL_CLASS,
   type AppointmentCardContextStatus,
 } from "@/lib/appointment-calendar-helpers"
 import {
@@ -3032,8 +3034,15 @@ export const AppointmentsCalendarGrid = forwardRef<
                               <Heart className="h-3.5 w-3.5 fill-rose-500 text-rose-600 drop-shadow-sm" aria-hidden />
                             </div>
                           )}
-                          <div className="text-slate-500 text-[12px] tabular-nums truncate leading-tight">
-                            {timeRangeStr} · {displayDurationMinutes} min
+                          <div className="flex min-w-0 items-center gap-1.5 text-slate-500 text-[12px] tabular-nums leading-tight">
+                            <span className="truncate">
+                              {timeRangeStr} · {displayDurationMinutes} min
+                            </span>
+                            {isOnlineBookingAppointment(a) && (
+                              <span className={ONLINE_BOOKING_PILL_CLASS} title="Booked online">
+                                Online
+                              </span>
+                            )}
                           </div>
                           <div
                             className={`font-semibold text-slate-800 text-[14px] truncate leading-tight mt-1 ${staffLockedCard ? "pr-7" : ""}`}
@@ -3935,6 +3944,15 @@ export const AppointmentsCalendarGrid = forwardRef<
                                   Paid
                                 </Badge>
                               )}
+                            {isOnlineBookingAppointment(a) && (
+                              <Badge
+                                variant="outline"
+                                className="text-xs shrink-0 border-violet-300 text-violet-800 bg-violet-50"
+                                title="Booked online"
+                              >
+                                Online
+                              </Badge>
+                            )}
                           </div>
                           <Badge variant="outline" className="text-indigo-700 border-indigo-300 bg-indigo-50 shrink-0">
                             {appointment.time}

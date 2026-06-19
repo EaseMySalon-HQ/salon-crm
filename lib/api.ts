@@ -202,8 +202,7 @@ function logApiResponseError(error: AxiosError | any) {
     const urlStr = String(errorInfo.url || error?.config?.url || '')
     const isAuthProbe =
       errorInfo.status === 401 &&
-      (urlStr.includes('/auth/profile') ||
-        (isLoginPage && urlStr.includes('/auth/refresh')))
+      (urlStr.includes('/auth/profile') || urlStr.includes('/auth/refresh'))
     if ((isLoginPage || isPublicRoute) && isAuthProbe) {
       // Silent: expected 401 when probing for existing session on the login page
     } else if (errorInfo.status === 404) {
@@ -372,7 +371,9 @@ apiClient.interceptors.response.use(
         url.includes('/auth/login') ||
         url.includes('/auth/staff-login') ||
         url.includes('/auth/logout')
-      if (!skipRefresh && isTokenAuthFailure(status, errorMsg)) {
+      const pathname = typeof window !== 'undefined' ? window.location.pathname : ''
+      const onPublicRoute = !!pathname && isPublicClientRoute(pathname)
+      if (!skipRefresh && !onPublicRoute && isTokenAuthFailure(status, errorMsg)) {
         config.__retryAfterRefresh = true
         const refreshed = await refreshAuthTokenOnce()
         if (refreshed) {
@@ -783,6 +784,35 @@ export interface DayHours {
   open: string
   close: string
   closed: boolean
+}
+
+export interface AppointmentSettingsData {
+  code: string
+  name: string
+  timezone: string
+  allowOnlineBooking: boolean
+  /** False when the current subscription plan does not include online_booking. */
+  onlineBookingAvailable?: boolean
+  slotDuration: 15 | 30
+  advanceBookingDays: number
+  bufferTime: number
+  cancellationWindowHours: number
+  operatingHours: Record<WeekDay, DayHours>
+  bookingTagline?: string
+  showcaseImages?: string[]
+  bookingHeroTheme?: import("@/lib/booking-hero-themes").BookingHeroThemeId
+}
+
+export interface AppointmentSettingsUpdatePayload {
+  allowOnlineBooking?: boolean
+  slotDuration?: 15 | 30
+  advanceBookingDays?: number
+  bufferTime?: number
+  cancellationWindowHours?: number
+  operatingHours?: Partial<Record<WeekDay, Partial<DayHours>>>
+  bookingTagline?: string
+  showcaseImages?: string[]
+  bookingHeroTheme?: import("@/lib/booking-hero-themes").BookingHeroThemeId
 }
 
 export interface BranchConfig {
@@ -2889,12 +2919,14 @@ export class SettingsAPI {
     return response.data
   }
 
-  static async getAppointmentSettings(): Promise<ApiResponse<any>> {
+  static async getAppointmentSettings(): Promise<ApiResponse<AppointmentSettingsData>> {
     const response = await apiClient.get('/settings/appointments')
     return response.data
   }
 
-  static async updateAppointmentSettings(data: any): Promise<ApiResponse<any>> {
+  static async updateAppointmentSettings(
+    data: AppointmentSettingsUpdatePayload
+  ): Promise<ApiResponse<AppointmentSettingsData>> {
     const response = await apiClient.put('/settings/appointments', data)
     return response.data
   }
@@ -4498,6 +4530,32 @@ export class WhatsAppInboxAPI {
     const response = await apiClient.get(`/whatsapp/v2/inbox/templates/${encodeURIComponent(name)}`, {
       params: { language },
     })
+    return response.data
+  }
+}
+
+export class PlatformAPI {
+  static async getNavBanner(): Promise<
+    ApiResponse<{
+      active: {
+        theme: string
+        enabled: boolean
+        expiresAt: string
+        headline: string
+        tagline: string
+      } | null
+      banners: Record<
+        string,
+        {
+          enabled: boolean
+          expiresAt: string
+          headline: string
+          tagline: string
+        }
+      >
+    }>
+  > {
+    const response = await apiClient.get("/platform/nav-banner")
     return response.data
   }
 }

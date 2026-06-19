@@ -266,7 +266,19 @@ const adminSettingsSchema = new mongoose.Schema({
         sms: { type: Boolean, default: false },
         inApp: { type: Boolean, default: true }
       }
-    }
+    },
+    /** Seasonal top-nav banners keyed by theme (admin Notifications → Banner). */
+    navBanners: {
+      type: mongoose.Schema.Types.Mixed,
+      default: () => ({
+        fathers_day: {
+          enabled: false,
+          expiresAt: '',
+          headline: "Happy Father's Day",
+          tagline: 'Treat Dad to a grooming session',
+        },
+      }),
+    },
   },
   
   // API & Integration
@@ -327,6 +339,14 @@ adminSettingsSchema.statics.getSettings = async function() {
   // Ensure WhatsApp settings structure exists with proper defaults
   if (!settings.notifications) {
     settings.notifications = {};
+  }
+  const { migrateLegacyNavBanner, buildDefaultNavBannersSettings } = require('../lib/nav-banner-config');
+  if (!settings.notifications.navBanners) {
+    settings.notifications = migrateLegacyNavBanner(settings.notifications);
+    if (!settings.notifications.navBanners) {
+      settings.notifications.navBanners = buildDefaultNavBannersSettings();
+    }
+    await settings.save();
   }
   if (!settings.notifications.whatsapp) {
     settings.notifications.whatsapp = {
@@ -624,6 +644,12 @@ adminSettingsSchema.statics.updateSettings = async function(category, updates) {
   // pick up the diff through deepMerge on a freshly-initialised subdoc.
   if (category === 'invoice') {
     settings.markModified('invoice');
+  }
+
+  // notifications.navBanners is Schema.Types.Mixed — assign + markModified (deepMerge alone does not persist).
+  if (category === 'notifications' && Object.prototype.hasOwnProperty.call(updates, 'navBanners')) {
+    settings.notifications.navBanners = JSON.parse(JSON.stringify(updates.navBanners));
+    settings.markModified('notifications.navBanners');
   }
 
   await settings.save();
