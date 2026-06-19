@@ -455,6 +455,7 @@ app.use(
 );
 app.use('/api/channel-usage', require('./routes/channel-usage'));
 app.use('/api/wallet', require('./routes/wallet'));
+app.use('/api/platform', require('./routes/platform-ui'));
 app.use('/api/client-wallet', require('./routes/client-wallet'));
 app.use('/api/reward-points', require('./routes/reward-points'));
 app.use('/api/plan', require('./routes/plan-checkout'));
@@ -464,6 +465,8 @@ app.use('/api/bookings', require('./routes/bookings'));
 app.use('/api/packages', require('./routes/packages'));
 app.use('/api/public/feedback', require('./routes/public-feedback'));
 app.use('/api/public/demo-lead', require('./routes/public-demo-lead'));
+app.use('/api/public/booking/:code', require('./routes/public-booking'));
+app.use('/api/settings/appointments', require('./routes/settings-appointments'));
 app.use('/api/public/pricing-matrix', require('./routes/public-pricing-matrix'));
 app.use('/api/public/plans', require('./routes/public-plans'));
 app.use('/api/feedback', require('./routes/feedback'));

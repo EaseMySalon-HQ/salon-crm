@@ -57,6 +57,7 @@ const PLANS = {
       'incentive_management',
       'reward_points',
       'feedback_management',
+      'online_booking',
       'gmb',
     ],
     limits: {
@@ -101,6 +102,7 @@ const PLANS = {
       'custom_integrations',
       'approval_workflows',
       'whatsapp_integration',
+      'online_booking',
       'gmb',
     ],
     limits: {
@@ -215,6 +217,12 @@ const FEATURES = {
     id: 'feedback_management',
     name: 'Feedback Management',
     description: 'Post-visit feedback collection, NPS, and review follow-up',
+    category: 'growth',
+  },
+  online_booking: {
+    id: 'online_booking',
+    name: 'Online Booking',
+    description: 'Public booking page and shareable link for client self-scheduling',
     category: 'growth',
   },
   custom_receipt_templates: {

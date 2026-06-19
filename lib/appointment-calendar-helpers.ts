@@ -22,6 +22,22 @@ export function isHiddenAppointment(apt: { status?: string } | null | undefined)
   return INACTIVE_STATUSES.has(apt.status)
 }
 
+export const ONLINE_BOOKING_MARKER = "online_booking"
+
+/** True when the appointment was created via the public online booking flow. */
+export function isOnlineBookingAppointment(
+  apt: { leadSource?: string | null; createdBy?: string | null } | null | undefined
+): boolean {
+  if (!apt) return false
+  const norm = (v: unknown) => String(v ?? "").trim().toLowerCase()
+  const marker = ONLINE_BOOKING_MARKER
+  return norm(apt.leadSource) === marker || norm(apt.createdBy) === marker
+}
+
+/** Compact pill for calendar appointment cards (grid + list). */
+export const ONLINE_BOOKING_PILL_CLASS =
+  "text-[10px] font-semibold leading-none text-violet-800 bg-violet-50 px-1.5 py-0.5 rounded-md border border-violet-200 shrink-0"
+
 /**
  * Normalizes `_id` values from API responses for URLs and comparisons.
  * Occasionally nested `{ _id }` objects or BSON-like `.toString()` ids slip through —

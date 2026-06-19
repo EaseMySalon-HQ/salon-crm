@@ -17,7 +17,8 @@ import {
   Settings,
   TestTube,
   Send,
-  MessageCircle
+  MessageCircle,
+  Palette,
 } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { adminRequestHeaders } from "@/lib/admin-request-headers"
@@ -25,6 +26,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { ChevronDown, HelpCircle } from "lucide-react"
 import { WhatsAppAdminSettings, EMPTY_WHATSAPP_TEMPLATE_SLOTS } from "./whatsapp-admin-settings"
+import { NavBannerAdminSettings } from "./nav-banner-admin-settings"
+import { DEFAULT_NAV_BANNERS, normalizeNavBannersSettings } from "@/lib/nav-banner"
 
 const TEMPLATE_VARIABLES = [
   "{businessCode}", "{days}", "{alertType}", "{message}", "{clientName}", "{receiptNumber}",
@@ -190,7 +193,8 @@ const DEFAULT_NOTIFICATION_SETTINGS = {
     templates: { ...EMPTY_WHATSAPP_TEMPLATE_SLOTS },
     templateVariables: {},
     templateJavaScriptCodes: {}
-  }
+  },
+    navBanners: { ...DEFAULT_NAV_BANNERS },
 }
 
 function mergeWithDefaults(prop?: any) {
@@ -230,7 +234,8 @@ function mergeWithDefaults(prop?: any) {
             ...(prop.whatsapp.templateJavaScriptCodes || {}),
           },
         }
-      : def.whatsapp
+      : def.whatsapp,
+    navBanners: normalizeNavBannersSettings(prop.navBanners, prop.navBanner),
   }))
 }
 
@@ -479,9 +484,9 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
 
   return (
     <Tabs defaultValue="email" className="w-full">
-      {/* Segmented control: Email | WhatsApp | SMS */}
+      {/* Segmented control: Email | WhatsApp | SMS | Banner */}
       <div className="inline-flex p-1 rounded-lg bg-slate-100 border border-slate-200/80 mb-6">
-        <TabsList className="grid w-full grid-cols-3 h-auto p-0 bg-transparent border-0 rounded-lg gap-0 min-w-[240px]">
+        <TabsList className="grid w-full grid-cols-4 h-auto p-0 bg-transparent border-0 rounded-lg gap-0 min-w-[320px]">
           <TabsTrigger
             value="email"
             className="rounded-md px-4 py-2.5 text-sm font-medium data-[state=active]:bg-white data-[state=active]:text-slate-900 data-[state=active]:shadow-sm border-0"
@@ -502,6 +507,13 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
           >
             <MessageSquare className="h-4 w-4 mr-2" />
             SMS
+          </TabsTrigger>
+          <TabsTrigger
+            value="banner"
+            className="rounded-md px-4 py-2.5 text-sm font-medium text-slate-600 data-[state=active]:bg-white data-[state=active]:text-slate-900 data-[state=active]:shadow-sm border-0"
+          >
+            <Palette className="h-4 w-4 mr-2" />
+            Banner
           </TabsTrigger>
         </TabsList>
       </div>
@@ -1364,6 +1376,10 @@ export function NotificationSettings({ settings: propSettings, onSettingsChange 
             </Button>
           </CardContent>
         </Card>
+      </TabsContent>
+
+      <TabsContent value="banner" className="space-y-6 mt-6">
+        <NavBannerAdminSettings settings={settings} onSettingChange={handleSettingChange} />
       </TabsContent>
     </Tabs>
   )

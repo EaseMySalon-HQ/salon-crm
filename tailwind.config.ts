@@ -8,10 +8,18 @@ const config: Config = {
     "./pages/**/*.{js,ts,jsx,tsx,mdx}",
     "./components/**/*.{js,ts,jsx,tsx,mdx}",
     "./app/**/*.{js,ts,jsx,tsx,mdx}",
+    "./lib/**/*.{js,ts,jsx,tsx,mdx}",
     "*.{js,ts,jsx,tsx,mdx}"
   ],
   theme: {
   	extend: {
+  		gridTemplateColumns: {
+  			'booking-split': 'minmax(0, 1fr) minmax(280px, 420px)',
+  			'booking-split-compact': 'minmax(0, 1fr) minmax(252px, 280px)',
+  			'booking-categories': 'minmax(11rem, 18rem) minmax(0, 1fr)',
+  			'booking-categories-compact': 'minmax(8.75rem, 10.5rem) minmax(0, 1fr)',
+  			'booking-categories-xl': 'minmax(12rem, 20rem) minmax(0, 1fr)',
+  		},
   		colors: {
   			background: 'hsl(var(--background))',
   			foreground: 'hsl(var(--foreground))',

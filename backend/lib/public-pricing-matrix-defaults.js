@@ -7,6 +7,13 @@ const DEFAULT_PUBLIC_PRICING_MATRIX_CATEGORIES = [
       { feature: 'Calendar management', starter: 'yes', growth: 'yes', pro: 'yes' },
       { feature: 'Walk-in management', starter: 'yes', growth: 'yes', pro: 'yes' },
       {
+        feature: 'Online booking (public link)',
+        hint: 'Shareable booking page for client self-scheduling',
+        starter: 'no',
+        growth: 'yes',
+        pro: 'yes',
+      },
+      {
         feature: 'Booking via WhatsApp',
         hint: 'Clients book directly in chat',
         starter: 'yes',

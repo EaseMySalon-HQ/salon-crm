@@ -43,6 +43,7 @@ const FEATURE = {
   FEEDBACK_MANAGEMENT: 'feedback_management',
   CUSTOM_INTEGRATIONS: 'custom_integrations',
   WHATSAPP_INTEGRATION: 'whatsapp_integration',
+  ONLINE_BOOKING: 'online_booking',
   MULTI_LOCATION: 'multi_location',
   GMB_CONNECT: 'gmb_connect',
   GMB_REVIEWS_READ: 'gmb_reviews_read',
@@ -109,6 +110,12 @@ const FEATURE_ROUTE_RULES = [
     methods: ['GET', 'PATCH', 'POST', 'PUT'],
     pathPattern: /^\/api\/feedback(\/|$)/,
     description: 'Tenant feedback dashboard, stats, and status updates',
+  },
+  {
+    feature: FEATURE.ONLINE_BOOKING,
+    methods: ['GET', 'POST'],
+    pathPattern: /^\/api\/public\/booking(\/|$)/,
+    description: 'Public client self-booking page API',
   },
   {
     feature: FEATURE.CUSTOM_RECEIPT_TEMPLATES,

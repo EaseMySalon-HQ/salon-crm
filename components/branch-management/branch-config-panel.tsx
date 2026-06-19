@@ -34,8 +34,6 @@ type FormState = {
   phone: string
   email: string
   address: { street: string; city: string; state: string; zipCode: string }
-  allowOnlineBooking: boolean
-  cancellationWindowHours: number
   revenueTargetMonthly: number
   operatingHours: Record<WeekDay, DayHours>
 }
@@ -46,8 +44,6 @@ function toForm(config: BranchConfig): FormState {
     phone: config.phone,
     email: config.email,
     address: { ...config.address },
-    allowOnlineBooking: config.allowOnlineBooking,
-    cancellationWindowHours: config.cancellationWindowHours ?? 24,
     revenueTargetMonthly: config.revenueTargetMonthly ?? 0,
     operatingHours: config.operatingHours,
   }
@@ -109,8 +105,6 @@ export function BranchConfigPanel({
         phone: form.phone.trim(),
         email: form.email.trim() || undefined,
         address: { ...form.address },
-        allowOnlineBooking: form.allowOnlineBooking,
-        cancellationWindowHours: form.cancellationWindowHours,
         revenueTargetMonthly: form.revenueTargetMonthly,
         operatingHours: form.operatingHours,
       }
@@ -173,31 +167,6 @@ export function BranchConfigPanel({
 
       <Card className="border-slate-200/80 shadow-sm">
         <CardHeader>
-          <CardTitle className="text-base font-semibold text-slate-800">Online booking</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <label className="flex items-center justify-between gap-4">
-            <span className="text-sm text-slate-600">
-              Allow clients to book appointments online for this branch.
-            </span>
-            <Switch
-              checked={form.allowOnlineBooking}
-              onCheckedChange={(v) => update({ allowOnlineBooking: v })}
-            />
-          </label>
-          <Field label="Cancellation window (hours before appointment)">
-            <Input
-              type="number"
-              min={0}
-              value={form.cancellationWindowHours}
-              onChange={(e) => update({ cancellationWindowHours: Number(e.target.value) || 0 })}
-            />
-          </Field>
-        </CardContent>
-      </Card>
-
-      <Card className="border-slate-200/80 shadow-sm">
-        <CardHeader>
           <CardTitle className="text-base font-semibold text-slate-800">Revenue target</CardTitle>
         </CardHeader>
         <CardContent>
@@ -220,6 +189,10 @@ export function BranchConfigPanel({
           <CardTitle className="text-base font-semibold text-slate-800">Operating hours</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
+          <p className="text-xs text-slate-500">
+            For online booking and client-facing availability, each branch can also configure hours in Settings →
+            Appointment settings.
+          </p>
           {DAYS.map(({ key, label }) => {
             const day = form.operatingHours[key]
             return (
