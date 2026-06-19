@@ -7,6 +7,7 @@ import { SETTINGS_MODULES } from "@/lib/permission-mappings"
 import { SessionTimeoutManager } from "@/components/auth/session-timeout-manager"
 import { AUTH_LOGOUT_EVENT, clearAuthStorage } from "@/lib/auth-utils"
 import { setCsrfTokenPersisted } from "@/lib/csrf"
+import { isPublicClientRoute } from "@/lib/public-routes"
 
 /** Multi-branch picker hand-off (login -> /select-branch). Session-scoped, cleared after selection. */
 export const BRANCH_PREAUTH_STORAGE_KEY = "salon-ems-preauth"
@@ -151,12 +152,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
          * `session_expired_client` audit noise for admins who never had a tenant session.
          */
         const isAdminRoute = pathname === '/admin' || pathname.startsWith('/admin/')
-        const isPublicRoute = pathname === '/login' ||
-                             pathname === '/select-branch' ||
-                             pathname === '/forgot-password' ||
-                             pathname === '/reset-password' ||
-                             pathname.includes('/receipt/public/') ||
-                             pathname.includes('/public/')
+        const isPublicRoute =
+          pathname === '/select-branch' || isPublicClientRoute(pathname)
         if (isAdminRoute || isPublicRoute) {
           setIsLoading(false)
           return

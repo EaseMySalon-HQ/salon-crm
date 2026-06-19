@@ -1,47 +1,80 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
+import { Calendar, Globe, Lock, Settings } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Switch } from "@/components/ui/switch"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { useToast } from "@/components/ui/use-toast"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/lib/auth-context"
-import { Settings, Lock } from "lucide-react"
+import { useEntitlements } from "@/hooks/use-entitlements"
+import { SettingsAPI, type AppointmentSettingsData, type WeekDay, type DayHours } from "@/lib/api"
+import { PublicBookingLink } from "@/components/settings/public-booking-link"
+import { BookingShowcaseManager } from "@/components/settings/booking-showcase-manager"
+import { prepareShowcaseImagesForSave } from "@/lib/compress-showcase-image"
+import { DEFAULT_BOOKING_HERO_THEME } from "@/lib/booking-hero-themes"
+
+const DAYS: { key: WeekDay; label: string }[] = [
+  { key: "monday", label: "Monday" },
+  { key: "tuesday", label: "Tuesday" },
+  { key: "wednesday", label: "Wednesday" },
+  { key: "thursday", label: "Thursday" },
+  { key: "friday", label: "Friday" },
+  { key: "saturday", label: "Saturday" },
+  { key: "sunday", label: "Sunday" },
+]
+
+const defaultHours = (): Record<WeekDay, DayHours> => ({
+  monday: { open: "09:00", close: "18:00", closed: false },
+  tuesday: { open: "09:00", close: "18:00", closed: false },
+  wednesday: { open: "09:00", close: "18:00", closed: false },
+  thursday: { open: "09:00", close: "18:00", closed: false },
+  friday: { open: "09:00", close: "18:00", closed: false },
+  saturday: { open: "09:00", close: "18:00", closed: false },
+  sunday: { open: "09:00", close: "18:00", closed: true },
+})
 
 export function AppointmentSettings() {
   const { hasPermission } = useAuth()
+  const { hasFeature } = useEntitlements()
   const canEdit = hasPermission("appointment_settings", "edit")
-  const [settings, setSettings] = useState({
-    bookingWindow: "30",
-    slotDuration: "30",
-    bufferTime: "15",
-    maxAdvanceBooking: "60",
-    allowOnlineBooking: true,
-    requireDeposit: false,
-    sendReminders: true,
-    reminderTime: "24",
-    allowCancellation: true,
-    cancellationWindow: "24",
-  })
-  const [isLoading, setIsLoading] = useState(false)
+  const onlineBookingOnPlan = hasFeature("online_booking")
+  const [settings, setSettings] = useState<AppointmentSettingsData | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [isSaving, setIsSaving] = useState(false)
   const { toast } = useToast()
 
-  const handleSave = async () => {
+  useEffect(() => {
+    void loadSettings()
+  }, [])
+
+  const loadSettings = async () => {
     setIsLoading(true)
     try {
-      // Simulate API call
-      await new Promise((resolve) => setTimeout(resolve, 1000))
-      toast({
-        title: "Appointment settings saved",
-        description: "Your appointment configuration has been updated.",
-      })
+      const response = await SettingsAPI.getAppointmentSettings()
+      if (response.success && response.data) {
+        setSettings({
+          ...response.data,
+          operatingHours: { ...defaultHours(), ...response.data.operatingHours },
+          bookingTagline: response.data.bookingTagline ?? "",
+          showcaseImages: response.data.showcaseImages ?? [],
+          bookingHeroTheme: response.data.bookingHeroTheme ?? DEFAULT_BOOKING_HERO_THEME,
+        })
+      } else {
+        throw new Error(response.error || "Failed to load settings")
+      }
     } catch (error) {
       toast({
         title: "Error",
-        description: "Failed to save appointment settings. Please try again.",
+        description: error instanceof Error ? error.message : "Failed to load appointment settings",
         variant: "destructive",
       })
     } finally {
@@ -49,225 +82,329 @@ export function AppointmentSettings() {
     }
   }
 
+  const update = (patch: Partial<AppointmentSettingsData>) => {
+    setSettings((prev) => (prev ? { ...prev, ...patch } : prev))
+  }
+
+  const updateDay = (day: WeekDay, patch: Partial<DayHours>) => {
+    setSettings((prev) =>
+      prev
+        ? {
+            ...prev,
+            operatingHours: {
+              ...prev.operatingHours,
+              [day]: { ...prev.operatingHours[day], ...patch },
+            },
+          }
+        : prev
+    )
+  }
+
+  const handleSave = async () => {
+    if (!settings) return
+    setIsSaving(true)
+    try {
+      let showcaseImages = settings.showcaseImages ?? []
+      if (showcaseImages.length > 0) {
+        try {
+          showcaseImages = await prepareShowcaseImagesForSave(showcaseImages)
+        } catch {
+          throw new Error(
+            "One or more showcase photos are too large. Remove them or upload smaller images."
+          )
+        }
+      }
+
+      const response = await SettingsAPI.updateAppointmentSettings({
+        allowOnlineBooking: settings.allowOnlineBooking,
+        slotDuration: settings.slotDuration,
+        advanceBookingDays: settings.advanceBookingDays,
+        bufferTime: settings.bufferTime,
+        cancellationWindowHours: settings.cancellationWindowHours,
+        operatingHours: settings.operatingHours,
+        bookingTagline: settings.bookingTagline ?? "",
+        showcaseImages,
+        bookingHeroTheme: settings.bookingHeroTheme ?? DEFAULT_BOOKING_HERO_THEME,
+      })
+      if (!response.success) {
+        throw new Error(response.error || "Failed to save")
+      }
+      setSettings(response.data)
+      toast({
+        title: "Appointment settings saved",
+        description: settings.allowOnlineBooking
+          ? "Online booking is live — share your booking link with clients."
+          : "Your appointment configuration has been updated.",
+      })
+    } catch (error) {
+      type FieldErrors = { fieldErrors?: Record<string, Array<string>> }
+      const err = error as Error & { response?: { data?: { details?: FieldErrors } } }
+      const fieldErrors = err.response?.data?.details?.fieldErrors
+      const firstFieldMsg =
+        fieldErrors &&
+        Object.values(fieldErrors)
+          .flat()
+          .find(Boolean)
+      toast({
+        title: "Error",
+        description:
+          firstFieldMsg ||
+          (error instanceof Error ? error.message : "Failed to save appointment settings"),
+        variant: "destructive",
+      })
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  if (isLoading || !settings) {
+    return (
+      <div className="space-y-6">
+        <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
+          <p className="text-sm text-slate-500">Loading appointment settings…</p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+      <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
         <div className="p-6">
-          <div className="flex items-center gap-4 mb-2">
-            <div className="p-2 bg-blue-50 rounded-lg">
+          <div className="mb-2 flex items-center gap-4">
+            <div className="rounded-lg bg-violet-50 p-2">
+              <Calendar className="h-5 w-5 text-violet-600" />
+            </div>
+            <div>
+              <h2 className="text-2xl font-bold text-slate-800">Appointment settings</h2>
+              <p className="text-slate-600">Online booking, scheduling rules, and working hours</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Online booking */}
+      <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
+        <div className="p-6">
+          <div className="mb-6 flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-r from-indigo-100 to-purple-100">
+              <Globe className="h-5 w-5 text-indigo-600" />
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold text-slate-800">Online booking</h3>
+              <p className="text-sm text-slate-600">Let clients book services from your public page</p>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div className="flex items-center justify-between rounded-xl bg-slate-50 p-4">
+              <div className="space-y-1 pr-4">
+                <Label className="text-sm font-medium text-slate-700">Allow online booking</Label>
+                <p className="text-sm text-slate-600">
+                  {onlineBookingOnPlan
+                    ? "Enable your public booking page for this salon"
+                    : "Upgrade to Growth or Pro to enable the public booking page"}
+                </p>
+              </div>
+              <Switch
+                checked={settings.allowOnlineBooking}
+                onCheckedChange={(checked) => update({ allowOnlineBooking: checked })}
+                disabled={!canEdit || !onlineBookingOnPlan}
+              />
+            </div>
+
+            {!onlineBookingOnPlan && (
+              <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                Online Booking is not included in your current plan. Contact support or upgrade to unlock the shareable booking link.
+              </p>
+            )}
+
+            {settings.allowOnlineBooking && settings.code && onlineBookingOnPlan && (
+              <PublicBookingLink code={settings.code} />
+            )}
+          </div>
+        </div>
+      </div>
+
+      {settings.allowOnlineBooking && onlineBookingOnPlan && (
+        <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
+          <div className="p-6">
+            <div className="mb-6 flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-r from-violet-100 to-fuchsia-100">
+                <Globe className="h-5 w-5 text-violet-600" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-slate-800">Booking page showcase</h3>
+                <p className="text-sm text-slate-600">Hero background, tagline, and photo carousel for your public booking page</p>
+              </div>
+            </div>
+            <BookingShowcaseManager
+              tagline={settings.bookingTagline ?? ""}
+              images={settings.showcaseImages ?? []}
+              heroTheme={settings.bookingHeroTheme ?? DEFAULT_BOOKING_HERO_THEME}
+              disabled={!canEdit}
+              onTaglineChange={(bookingTagline) => update({ bookingTagline })}
+              onImagesChange={(showcaseImages) => update({ showcaseImages })}
+              onHeroThemeChange={(bookingHeroTheme) => update({ bookingHeroTheme })}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Booking rules */}
+      <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
+        <div className="p-6">
+          <div className="mb-6 flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-r from-blue-100 to-indigo-100">
               <Settings className="h-5 w-5 text-blue-600" />
             </div>
             <div>
-              <h2 className="text-2xl font-bold text-slate-800">Appointment Settings</h2>
-              <p className="text-slate-600">Configure booking rules, time slots, and availability</p>
+              <h3 className="text-lg font-semibold text-slate-800">Booking rules</h3>
+              <p className="text-sm text-slate-600">Slot intervals and how far ahead clients can book</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+            <div className="space-y-3">
+              <Label className="text-sm font-medium text-slate-700">Time slot interval</Label>
+              <Select
+                value={String(settings.slotDuration)}
+                onValueChange={(value) => update({ slotDuration: Number(value) as 15 | 30 })}
+                disabled={!canEdit}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="15">15 minutes</SelectItem>
+                  <SelectItem value="30">30 minutes</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-3">
+              <Label htmlFor="advanceBookingDays" className="text-sm font-medium text-slate-700">
+                Advance booking window (days)
+              </Label>
+              <Input
+                id="advanceBookingDays"
+                type="number"
+                min={1}
+                max={365}
+                value={settings.advanceBookingDays}
+                onChange={(e) =>
+                  update({ advanceBookingDays: Math.max(1, Number(e.target.value) || 30) })
+                }
+                disabled={!canEdit}
+              />
+            </div>
+            <div className="space-y-3">
+              <Label htmlFor="bufferTime" className="text-sm font-medium text-slate-700">
+                Buffer between appointments (minutes)
+              </Label>
+              <Select
+                value={String(settings.bufferTime)}
+                onValueChange={(value) => update({ bufferTime: Number(value) })}
+                disabled={!canEdit}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="0">No buffer</SelectItem>
+                  <SelectItem value="15">15 minutes</SelectItem>
+                  <SelectItem value="30">30 minutes</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-3">
+              <Label htmlFor="cancellationWindow" className="text-sm font-medium text-slate-700">
+                Cancellation window (hours before appointment)
+              </Label>
+              <Input
+                id="cancellationWindow"
+                type="number"
+                min={0}
+                value={settings.cancellationWindowHours}
+                onChange={(e) =>
+                  update({ cancellationWindowHours: Math.max(0, Number(e.target.value) || 0) })
+                }
+                disabled={!canEdit}
+              />
             </div>
           </div>
         </div>
       </div>
 
-      <div className="grid gap-6">
-        {/* Booking Configuration Card */}
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-          <div className="p-6">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-10 h-10 bg-gradient-to-r from-blue-100 to-indigo-100 rounded-lg flex items-center justify-center">
-                <Settings className="h-5 w-5 text-blue-600" />
-              </div>
-              <div>
-                <h3 className="text-lg font-semibold text-slate-800">Booking Configuration</h3>
-                <p className="text-slate-600 text-sm">Set up your appointment booking parameters</p>
-              </div>
+      {/* Operating hours */}
+      <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
+        <div className="p-6">
+          <div className="mb-6 flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-r from-emerald-100 to-teal-100">
+              <Calendar className="h-5 w-5 text-emerald-600" />
             </div>
-            
-            <div className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="space-y-3">
-                  <Label htmlFor="slotDuration" className="text-sm font-medium text-slate-700">Default Slot Duration (minutes)</Label>
-                  <Select
-                    value={settings.slotDuration}
-                    onValueChange={(value) => setSettings({ ...settings, slotDuration: value })}
-                  >
-                    <SelectTrigger className="border-slate-200 focus:border-blue-500 focus:ring-blue-500">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="15">15 minutes</SelectItem>
-                      <SelectItem value="30">30 minutes</SelectItem>
-                      <SelectItem value="45">45 minutes</SelectItem>
-                      <SelectItem value="60">60 minutes</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-3">
-                  <Label htmlFor="bufferTime" className="text-sm font-medium text-slate-700">Buffer Time (minutes)</Label>
-                  <Select
-                    value={settings.bufferTime}
-                    onValueChange={(value) => setSettings({ ...settings, bufferTime: value })}
-                  >
-                    <SelectTrigger className="border-slate-200 focus:border-blue-500 focus:ring-blue-500">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="0">No buffer</SelectItem>
-                      <SelectItem value="15">15 minutes</SelectItem>
-                      <SelectItem value="30">30 minutes</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="space-y-3">
-                  <Label htmlFor="bookingWindow" className="text-sm font-medium text-slate-700">Booking Window (days)</Label>
-                  <Input
-                    id="bookingWindow"
-                    type="number"
-                    value={settings.bookingWindow}
-                    onChange={(e) => setSettings({ ...settings, bookingWindow: e.target.value })}
-                    className="border-slate-200 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </div>
-                <div className="space-y-3">
-                  <Label htmlFor="maxAdvanceBooking" className="text-sm font-medium text-slate-700">Max Advance Booking (days)</Label>
-                  <Input
-                    id="maxAdvanceBooking"
-                    type="number"
-                    value={settings.maxAdvanceBooking}
-                    onChange={(e) => setSettings({ ...settings, maxAdvanceBooking: e.target.value })}
-                    className="border-slate-200 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </div>
-              </div>
+            <div>
+              <h3 className="text-lg font-semibold text-slate-800">Working hours</h3>
+              <p className="text-sm text-slate-600">
+                Used for online booking availability and client-facing slots
+              </p>
             </div>
           </div>
-        </div>
 
-        {/* Online Booking Card */}
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-          <div className="p-6">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-10 h-10 bg-gradient-to-r from-indigo-100 to-purple-100 rounded-lg flex items-center justify-center">
-                <Settings className="h-5 w-5 text-indigo-600" />
-              </div>
-              <div>
-                <h3 className="text-lg font-semibold text-slate-800">Online Booking</h3>
-                <p className="text-slate-600 text-sm">Configure online booking preferences</p>
-              </div>
-            </div>
-            
-            <div className="space-y-4">
-              <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl">
-                <div className="space-y-1">
-                  <Label className="text-sm font-medium text-slate-700">Allow Online Booking</Label>
-                  <p className="text-sm text-slate-600">Enable customers to book online</p>
+          <div className="space-y-3">
+            {DAYS.map(({ key, label }) => {
+              const day = settings.operatingHours[key]
+              return (
+                <div key={key} className="flex flex-wrap items-center gap-3">
+                  <span className="w-24 text-sm font-medium text-slate-700">{label}</span>
+                  <label className="flex items-center gap-2 text-xs text-slate-500">
+                    <Switch
+                      checked={!day.closed}
+                      onCheckedChange={(v) => updateDay(key, { closed: !v })}
+                      disabled={!canEdit}
+                    />
+                    {day.closed ? "Closed" : "Open"}
+                  </label>
+                  {!day.closed && (
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="time"
+                        value={day.open}
+                        onChange={(e) => updateDay(key, { open: e.target.value })}
+                        className="h-8 w-28 text-xs"
+                        disabled={!canEdit}
+                      />
+                      <span className="text-xs text-slate-400">to</span>
+                      <Input
+                        type="time"
+                        value={day.close}
+                        onChange={(e) => updateDay(key, { close: e.target.value })}
+                        className="h-8 w-28 text-xs"
+                        disabled={!canEdit}
+                      />
+                    </div>
+                  )}
                 </div>
-                <Switch
-                  checked={settings.allowOnlineBooking}
-                  onCheckedChange={(checked) => setSettings({ ...settings, allowOnlineBooking: checked })}
-                />
-              </div>
-              
-              <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl">
-                <div className="space-y-1">
-                  <Label className="text-sm font-medium text-slate-700">Require Deposit</Label>
-                  <p className="text-sm text-slate-600">Require payment for online bookings</p>
-                </div>
-                <Switch
-                  checked={settings.requireDeposit}
-                  onCheckedChange={(checked) => setSettings({ ...settings, requireDeposit: checked })}
-                />
-              </div>
-            </div>
+              )
+            })}
           </div>
-        </div>
-
-        {/* Reminders & Cancellations Card */}
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-          <div className="p-6">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-10 h-10 bg-gradient-to-r from-emerald-100 to-teal-100 rounded-lg flex items-center justify-center">
-                <Settings className="h-5 w-5 text-emerald-600" />
-              </div>
-              <div>
-                <h3 className="text-lg font-semibold text-slate-800">Reminders & Cancellations</h3>
-                <p className="text-slate-600 text-sm">Configure reminder and cancellation policies</p>
-              </div>
-            </div>
-            
-            <div className="space-y-4">
-              <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl">
-                <div className="space-y-1">
-                  <Label className="text-sm font-medium text-slate-700">Send Reminders</Label>
-                  <p className="text-sm text-slate-600">Automatically send appointment reminders</p>
-                </div>
-                <Switch
-                  checked={settings.sendReminders}
-                  onCheckedChange={(checked) => setSettings({ ...settings, sendReminders: checked })}
-                />
-              </div>
-              
-              {settings.sendReminders && (
-                <div className="space-y-3">
-                  <Label htmlFor="reminderTime" className="text-sm font-medium text-slate-700">Reminder Time (hours before)</Label>
-                  <Select
-                    value={settings.reminderTime}
-                    onValueChange={(value) => setSettings({ ...settings, reminderTime: value })}
-                  >
-                    <SelectTrigger className="border-slate-200 focus:border-blue-500 focus:ring-blue-500">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="1">1 hour</SelectItem>
-                      <SelectItem value="2">2 hours</SelectItem>
-                      <SelectItem value="24">24 hours</SelectItem>
-                      <SelectItem value="48">48 hours</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-              
-              <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl">
-                <div className="space-y-1">
-                  <Label className="text-sm font-medium text-slate-700">Allow Cancellation</Label>
-                  <p className="text-sm text-slate-600">Allow customers to cancel appointments</p>
-                </div>
-                <Switch
-                  checked={settings.allowCancellation}
-                  onCheckedChange={(checked) => setSettings({ ...settings, allowCancellation: checked })}
-                />
-              </div>
-              
-              {settings.allowCancellation && (
-                <div className="space-y-3">
-                  <Label htmlFor="cancellationWindow" className="text-sm font-medium text-slate-700">Cancellation Window (hours)</Label>
-                  <Input
-                    id="cancellationWindow"
-                    type="number"
-                    value={settings.cancellationWindow}
-                    onChange={(e) => setSettings({ ...settings, cancellationWindow: e.target.value })}
-                    className="border-slate-200 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </div>
-              )}
-            </div>
-          </div>
+          <p className="mt-4 text-xs text-slate-500">
+            Timezone: {settings.timezone.replace(/_/g, " ")}
+          </p>
         </div>
       </div>
 
-      {/* Save Button */}
-      <div className="flex justify-end items-center gap-3">
+      <div className="flex items-center justify-end gap-3">
         {!canEdit && (
-          <span className="text-xs text-muted-foreground inline-flex items-center gap-1">
-            <Lock className="h-3 w-3" /> You don't have permission to edit appointment settings
+          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+            <Lock className="h-3 w-3" /> You don&apos;t have permission to edit appointment settings
           </span>
         )}
         <Button
           onClick={handleSave}
-          disabled={isLoading || !canEdit}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-lg font-medium disabled:opacity-60"
+          disabled={isSaving || !canEdit}
+          className="rounded-lg bg-violet-600 px-8 font-medium text-white hover:bg-violet-700 disabled:opacity-60"
         >
-          {isLoading ? "Saving..." : "Save Changes"}
+          {isSaving ? "Saving…" : "Save changes"}
         </Button>
       </div>
     </div>

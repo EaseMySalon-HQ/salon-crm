@@ -74,7 +74,7 @@ export default function BranchSettingsPage() {
           <div>
             <h2 className="text-lg font-semibold text-slate-800">Branch configuration</h2>
             <p className="text-sm text-slate-500">
-              Edit details, online booking and operating hours for one branch at a time.
+              Edit branch details, revenue targets, and operating hours for one branch at a time.
             </p>
           </div>
           <Select value={selectedBranch} onValueChange={handleSelectChange} disabled={activeBranches.length === 0}>

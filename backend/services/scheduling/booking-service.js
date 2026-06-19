@@ -160,7 +160,8 @@ async function createBooking(models, businessDoc, payload, opts = {}) {
       staffId,
       start,
       end,
-      skipHoldCheck: opts.skipHoldConflict === true
+      skipHoldCheck: opts.skipHoldConflict === true,
+      excludeHoldIds: holdIdsToConsume.map(String)
     });
     if (c.conflict) {
       const err = new Error('Staff conflict');

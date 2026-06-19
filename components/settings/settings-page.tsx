@@ -154,11 +154,11 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
       {
         id: "appointments",
         title: "Appointment settings",
-        description: "Booking rules, time slots, and scheduling preferences.",
+        description: "Online booking, time slots, working hours, and scheduling rules.",
         icon: Calendar,
         iconColors:
           "bg-violet-50 text-violet-600 border-violet-100 group-hover:bg-violet-100/80 group-hover:border-violet-200",
-        searchTerms: ["booking", "schedule", "calendar"],
+        searchTerms: ["booking", "schedule", "calendar", "online booking", "public link"],
       },
       {
         id: "services",

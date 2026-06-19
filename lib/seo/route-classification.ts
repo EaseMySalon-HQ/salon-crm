@@ -60,6 +60,7 @@ export const NOINDEX_PREFIXES = [
   "/account-suspended",
   "/unauthorized",
   "/feedback",
+  "/book",
 ] as const
 
 /**

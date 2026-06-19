@@ -54,6 +54,7 @@ import {
   canChangeAppointmentStatusViaContextMenu,
   getAppointmentIdsForCardStatusUpdate,
   appointmentsOnSameVisitDate,
+  isOnlineBookingAppointment,
   type AppointmentCardContextStatus,
 } from "@/lib/appointment-calendar-helpers"
 import {
@@ -1190,6 +1191,15 @@ export const AppointmentsCalendar = forwardRef<
                                     Paid
                                   </Badge>
                                 )}
+                              {isOnlineBookingAppointment(anyAppt) && (
+                                <Badge
+                                  variant="outline"
+                                  className="text-[10px] shrink-0 border-violet-300 text-violet-800 bg-violet-50"
+                                  title="Booked online"
+                                >
+                                  Online
+                                </Badge>
+                              )}
                             </div>
                             <div className="flex items-center gap-1 shrink-0">
                               {groupAccentRing && (
@@ -1605,6 +1615,15 @@ export const AppointmentsCalendar = forwardRef<
                                   Paid
                                 </Badge>
                               )}
+                            {isOnlineBookingAppointment(anyAppt) && (
+                              <Badge
+                                variant="outline"
+                                className="text-xs shrink-0 border-violet-300 text-violet-800 bg-violet-50"
+                                title="Booked online"
+                              >
+                                Online
+                              </Badge>
+                            )}
                           </div>
                           <Badge variant="outline" className="text-indigo-700 border-indigo-300 bg-indigo-50 shrink-0">
                             {appointment.time}

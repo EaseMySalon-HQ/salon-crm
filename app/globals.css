@@ -76,6 +76,86 @@
     animation: dotPing 1s cubic-bezier(0, 0, 0.2, 1) infinite;
   }
 
+  /* Father's Day top-nav banner */
+  .fathers-day-banner-gradient {
+    background: linear-gradient(
+      105deg,
+      #0f172a 0%,
+      #1e3a5f 22%,
+      #172554 45%,
+      #1a2744 68%,
+      #0f172a 100%
+    );
+    background-size: 220% 100%;
+    animation: fathersDayGradientShift 10s ease-in-out infinite;
+  }
+
+  .fathers-day-text-shimmer {
+    background: linear-gradient(
+      90deg,
+      #fde68a 0%,
+      #fef3c7 35%,
+      #fcd34d 50%,
+      #fef3c7 65%,
+      #fde68a 100%
+    );
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: fathersDayTextShimmer 4s linear infinite;
+  }
+
+  .fathers-day-float {
+    animation: fathersDayFloat 3s ease-in-out infinite;
+  }
+
+  .fathers-day-float-delay {
+    animation-delay: 1.2s;
+  }
+
+  .fathers-day-sparkle {
+    animation: fathersDaySparkle 2.4s ease-in-out infinite;
+  }
+
+  .fathers-day-sparkle-delay-1 {
+    animation-delay: 0.4s;
+  }
+
+  .fathers-day-sparkle-delay-2 {
+    animation-delay: 0.9s;
+  }
+
+  .fathers-day-sparkle-delay-3 {
+    animation-delay: 1.5s;
+  }
+
+  .fathers-day-pulse {
+    animation: fathersDayPulse 2s ease-in-out infinite;
+  }
+
+  .fathers-day-pulse-delay {
+    animation-delay: 1s;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .fathers-day-banner-gradient,
+    .fathers-day-text-shimmer,
+    .fathers-day-float,
+    .fathers-day-sparkle,
+    .fathers-day-pulse,
+    .fathers-day-nav .animate-gold-sheen {
+      animation: none !important;
+    }
+
+    .fathers-day-text-shimmer {
+      color: #fde68a;
+      background: none;
+      -webkit-background-clip: unset;
+      background-clip: unset;
+    }
+  }
+
   /* Schedule grid layout transition */
   .schedule-grid-transition {
     transition: grid-template-columns 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -213,6 +293,59 @@
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes fathersDayGradientShift {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+@keyframes fathersDayTextShimmer {
+  0% {
+    background-position: 200% center;
+  }
+  100% {
+    background-position: -200% center;
+  }
+}
+
+@keyframes fathersDayFloat {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-4deg);
+  }
+  50% {
+    transform: translateY(-3px) rotate(4deg);
+  }
+}
+
+@keyframes fathersDaySparkle {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.2);
+  }
+}
+
+@keyframes fathersDayPulse {
+  0%,
+  100% {
+    opacity: 0.65;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
   }
 }
 

@@ -536,6 +536,80 @@ const publicDemoLeadSchema = z
   })
   .strict();
 
+const publicBookingCartItemSchema = z
+  .object({
+    serviceId: objectIdHex,
+    staffId: objectIdHex.nullable().optional(),
+  })
+  .strict();
+
+const publicBookingSlotsBodySchema = z
+  .object({
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Invalid date'),
+    items: z.array(publicBookingCartItemSchema).min(1).max(20),
+    holdIds: z.array(objectIdHex).max(20).optional(),
+  })
+  .strict();
+
+const publicBookingHoldsBodySchema = z
+  .object({
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Invalid date'),
+    startAt: z.union([z.string(), z.number()]),
+    items: z.array(publicBookingCartItemSchema).min(1).max(20),
+  })
+  .strict();
+
+const publicBookingCreateBodySchema = z
+  .object({
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Invalid date'),
+    startAt: z.union([z.string(), z.number()]),
+    items: z.array(publicBookingCartItemSchema).min(1).max(20),
+    holdIds: z.array(objectIdHex).max(20).optional(),
+    customer: z
+      .object({
+        name: z.string().trim().min(2).max(120),
+        phone: z.string().trim().min(10).max(20),
+        email: z.string().trim().email().max(320).optional().or(z.literal('')),
+        notes: z.string().trim().max(2000).optional(),
+      })
+      .strict(),
+  })
+  .strict();
+
+const weekDaySchema = z.enum([
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+  'sunday',
+]);
+
+const dayHoursSchema = z
+  .object({
+    open: z.string().max(8).optional(),
+    close: z.string().max(8).optional(),
+    closed: z.boolean().optional(),
+  })
+  .strict();
+
+const { BOOKING_HERO_THEME_IDS } = require('../lib/booking-hero-themes');
+
+const appointmentSettingsUpdateBodySchema = z
+  .object({
+    allowOnlineBooking: z.boolean().optional(),
+    slotDuration: z.union([z.literal(15), z.literal(30)]).optional(),
+    advanceBookingDays: z.number().int().min(1).max(365).optional(),
+    bufferTime: z.number().int().min(0).max(120).optional(),
+    cancellationWindowHours: z.number().int().min(0).max(168).optional(),
+    operatingHours: z.record(weekDaySchema, dayHoursSchema).optional(),
+    bookingTagline: z.string().trim().max(120).optional(),
+    showcaseImages: z.array(z.string().max(1_500_000)).max(8).optional(),
+    bookingHeroTheme: z.enum(BOOKING_HERO_THEME_IDS).optional(),
+  })
+  .strict();
+
 module.exports = {
   tenantLoginSchema,
   staffLoginSchema,
@@ -576,4 +650,8 @@ module.exports = {
   whatsappTemplateUpdateBodySchema,
   whatsappTemplateListQuerySchema,
   publicDemoLeadSchema,
+  publicBookingSlotsBodySchema,
+  publicBookingHoldsBodySchema,
+  publicBookingCreateBodySchema,
+  appointmentSettingsUpdateBodySchema,
 };

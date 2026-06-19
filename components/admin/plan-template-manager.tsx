@@ -75,6 +75,7 @@ const FEATURE_ENFORCEMENT: Record<string, "gated" | "core" | "partial" | "planne
   incentive_management: "gated",
   reward_points: "gated",
   feedback_management: "gated",
+  online_booking: "gated",
   analytics: "gated",
   advanced_inventory: "gated",
   advanced_reports: "gated",

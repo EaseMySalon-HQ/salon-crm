@@ -55,6 +55,12 @@ const businessSchema = new mongoose.Schema({
       allowOnlineBooking: { type: Boolean, default: false },
       allowCrossBranchBooking: { type: Boolean, default: false },
       cancellationWindowHours: { type: Number, default: 24, min: 0 },
+      /** Short line under salon name on the public booking page */
+      bookingTagline: { type: String, default: '' },
+      /** Up to 8 HTTPS or data-URL images for the public booking showcase carousel */
+      showcaseImages: { type: [String], default: [] },
+      /** Public booking hero background theme id */
+      bookingHeroTheme: { type: String, default: 'purple' },
     },
 
     /** Monthly revenue target for branch-management overview (INR). */

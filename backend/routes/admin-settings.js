@@ -391,7 +391,15 @@ let adminSettingsFallback = {
         sms: false,
         inApp: true
       }
-    }
+    },
+    navBanners: {
+      fathers_day: {
+        enabled: false,
+        expiresAt: "",
+        headline: "Happy Father's Day",
+        tagline: "Treat Dad to a grooming session",
+      },
+    },
   },
   
   // API & Integration
