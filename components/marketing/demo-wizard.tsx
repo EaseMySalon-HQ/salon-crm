@@ -271,11 +271,6 @@ export function DemoWizard() {
     setLoading(true)
 
     try {
-      const message = [
-        `Services interested in: ${values.services.join(", ")}`,
-        `Notes: ${values.notes}`,
-      ].join("\n\n")
-
       const dateObj = isoToDate(values.preferredDate)
       const dateLabel = dateObj ? formatLongDate(dateObj) : values.preferredDate
       const preferredTime = `${dateLabel} · ${values.preferredSlot} IST`
@@ -292,7 +287,7 @@ export function DemoWizard() {
           branches: values.branches,
           preferredTime,
           services: values.services,
-          message,
+          message: values.notes.trim(),
           website: values.website || "",
         }),
       })

@@ -240,21 +240,49 @@ export function PrivacyPolicyContent() {
           </CardContent>
         </Card>
 
-        {/* International Transfers */}
+        {/* Meta Platform Integration */}
         <Card className="mb-6">
           <CardHeader>
-            <CardTitle>10. International Data Transfers</CardTitle>
+            <CardTitle>10. Meta Platform Integration</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4 text-gray-700">
-            <p>
-              Your data may be processed and stored in servers located outside the European Economic Area (EEA). 
-              We ensure appropriate safeguards are in place, including:
-            </p>
-            <ul className="list-disc list-inside space-y-2 ml-4">
-              <li>Standard Contractual Clauses (SCCs)</li>
-              <li>Adequacy decisions by the European Commission</li>
-              <li>Other approved transfer mechanisms under GDPR</li>
-            </ul>
+            <div>
+              <h4 className="font-semibold mb-2">WhatsApp Business Platform integration</h4>
+              <ul className="list-disc list-inside space-y-2 ml-4">
+                <li>
+                  EaseMySalon integrates with the WhatsApp Business Platform (API), a Meta product, on behalf of our salon clients.
+                </li>
+                <li>
+                  When a client connects their WhatsApp Business account, we access and process data from this platform such as message delivery status, message templates, and conversation content.
+                </li>
+                <li>
+                  This data is used solely to provide the WhatsApp messaging services described in this policy, in accordance with Meta&apos;s Platform Terms and Developer Policies.
+                </li>
+              </ul>
+            </div>
+            <div>
+              <h4 className="font-semibold mb-2">Messages to a salon&apos;s customers</h4>
+              <ul className="list-disc list-inside space-y-2 ml-4">
+                <li>
+                  When we send WhatsApp messages to a salon&apos;s own customers, we process those customers&apos; contact details and message content strictly to deliver the service the salon has configured, such as appointment reminders, confirmations, and opt-in promotional offers.
+                </li>
+                <li>We do not use this data for any independent purpose.</li>
+                <li>
+                  Recipients may opt out at any time, and their preference is logged automatically.
+                </li>
+              </ul>
+            </div>
+            <div>
+              <h4 className="font-semibold mb-2">Retention, security, and deletion</h4>
+              <ul className="list-disc list-inside space-y-2 ml-4">
+                <li>
+                  Data obtained through the WhatsApp Business Platform is subject to the same retention, security, and deletion practices described in Sections 6, 7, and 8 of this policy, including permanent deletion within 30 days of an account deletion request.
+                </li>
+                <li>
+                  We do not sell or transfer this data to third parties, except as required to operate the service or by law.
+                </li>
+              </ul>
+            </div>
           </CardContent>
         </Card>
 

@@ -3,6 +3,8 @@
 import type { ReactNode } from "react"
 import { ArrowLeft } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { cn } from "@/lib/utils"
+import { BT } from "@/lib/booking-page-theme"
 
 export const DESKTOP_CHECKOUT_STEP_COUNT = 2
 
@@ -69,12 +71,16 @@ export function BookingCheckoutShell({
   const progressPct = (step / stepCount) * 100
 
   return (
-    <div className="flex w-full flex-1 flex-col bg-gradient-to-b from-slate-50/80 via-white to-purple-50/20">
+    <div
+      className={cn(
+        "flex w-full flex-1 flex-col bg-gradient-to-b from-[color:var(--booking-surface-muted)] via-[color:var(--booking-surface)] to-[color-mix(in_srgb,var(--booking-accent)_8%,var(--booking-surface))]"
+      )}
+    >
       <div className="mx-auto w-full max-w-3xl flex-1 px-4 py-8 sm:px-6 lg:py-10">
         <div className="mx-auto mb-8 max-w-md">
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200/80">
+          <div className={cn("h-1.5 w-full overflow-hidden rounded-full", BT.bgSurfaceMuted)}>
             <div
-              className="h-full rounded-full bg-gradient-to-r from-[#7C3AED] to-[#A855F7] transition-all duration-500 ease-out"
+              className={cn("h-full rounded-full transition-all duration-500 ease-out", BT.bgAccent)}
               style={{ width: `${progressPct}%` }}
               aria-hidden
             />
@@ -86,22 +92,22 @@ export function BookingCheckoutShell({
             type="button"
             variant="ghost"
             onClick={onBack}
-            className="absolute left-0 text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+            className={cn("absolute left-0", BT.textSecondary, BT.hoverAccentSoft, BT.hoverTextPrimary)}
           >
             <ArrowLeft className="mr-1 h-4 w-4" aria-hidden />
             Back
           </Button>
-          <p className="font-mono text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">
+          <p className={cn("font-mono text-xs font-semibold uppercase tracking-[0.3em]", BT.textMuted)}>
             Step {step} of {stepCount}
           </p>
         </div>
 
         <div className="mt-4 text-center">
-          <h2 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
+          <h2 className={cn("text-2xl font-bold tracking-tight sm:text-3xl", BT.textPrimary)}>
             {heading.title}
           </h2>
           {heading.sub ? (
-            <p className="mx-auto mt-3 max-w-xl text-base text-slate-600">{heading.sub}</p>
+            <p className={cn("mx-auto mt-3 max-w-xl text-base", BT.textSecondary)}>{heading.sub}</p>
           ) : null}
         </div>
 

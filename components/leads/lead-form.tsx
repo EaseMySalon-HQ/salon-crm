@@ -4,8 +4,7 @@ import { useState, useEffect } from "react"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
-import { User, Mail, Phone, Calendar as CalendarIcon, FileText } from "lucide-react"
-import { format } from "date-fns"
+import { User, Mail, Phone, FileText } from "lucide-react"
 import { LeadsAPI } from "@/lib/api"
 import { ServicesAPI } from "@/lib/api"
 import { Button } from "@/components/ui/button"
@@ -13,13 +12,12 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Calendar } from "@/components/ui/calendar"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { toast } from "@/components/ui/use-toast"
-import { cn } from "@/lib/utils"
+import { FollowUpDateField } from "@/components/admin/leads/follow-up-date-field"
+import { toLocalYmd } from "@/lib/local-date"
 
 interface LeadFormProps {
   lead?: any
@@ -84,7 +82,7 @@ export function LeadForm({ lead, isEditMode = false, onSuccess, onCancel }: Lead
         gender: lead.gender || undefined,
         interestedServices: interestedServices,
         assignedStaffId: lead.assignedStaffId?._id || lead.assignedStaffId || "none",
-        followUpDate: lead.followUpDate ? new Date(lead.followUpDate).toISOString().split('T')[0] : "",
+        followUpDate: lead.followUpDate ? toLocalYmd(new Date(lead.followUpDate)) : "",
         notes: lead.notes || "",
       })
       setInterestedServicesText(interestedServices)
@@ -385,43 +383,11 @@ export function LeadForm({ lead, isEditMode = false, onSuccess, onCancel }: Lead
                 control={form.control}
                 name="followUpDate"
                 render={({ field }) => (
-                  <FormItem className="space-y-2">
-                    <FormLabel className="flex items-center gap-2">
-                      <CalendarIcon className="h-4 w-4" />
-                      Follow-up Date
-                    </FormLabel>
-                    <FormControl>
-                      <Popover>
-                        <PopoverTrigger asChild>
-                          <Button
-                            variant="outline"
-                            className={cn(
-                              "w-full justify-start text-left font-normal",
-                              !field.value && "text-muted-foreground"
-                            )}
-                          >
-                            <CalendarIcon className="mr-2 h-4 w-4" />
-                            {field.value ? (
-                              format(new Date(field.value), "PPP")
-                            ) : (
-                              <span>Pick a date</span>
-                            )}
-                          </Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
-                          <Calendar
-                            mode="single"
-                            selected={field.value ? new Date(field.value) : undefined}
-                            onSelect={(date) => {
-                              field.onChange(date ? date.toISOString().split('T')[0] : "")
-                            }}
-                            initialFocus
-                          />
-                        </PopoverContent>
-                      </Popover>
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
+                  <FollowUpDateField
+                    label="Follow-up Date"
+                    value={field.value || ""}
+                    onChange={field.onChange}
+                  />
                 )}
               />
             )}

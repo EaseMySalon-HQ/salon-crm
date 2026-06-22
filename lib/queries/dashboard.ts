@@ -9,6 +9,7 @@ type DashboardInitOptions = {
   enabled?: boolean
   chartRange?: "year" | "last7days" | "last30days"
   metricsRange?: "today" | "last7days"
+  appointmentsRange?: "today" | "next7days"
 }
 
 export function useDashboardInit(options?: boolean | DashboardInitOptions) {
@@ -17,11 +18,13 @@ export function useDashboardInit(options?: boolean | DashboardInitOptions) {
   const enabled = typeof options === "boolean" ? options : options?.enabled !== false
   const chartRange = typeof options === "object" && options?.chartRange ? options.chartRange : "last7days"
   const metricsRange = typeof options === "object" && options?.metricsRange ? options.metricsRange : "today"
+  const appointmentsRange =
+    typeof options === "object" && options?.appointmentsRange ? options.appointmentsRange : "today"
 
   return useQuery({
-    queryKey: ["dashboard", "init", branchKey, chartRange, metricsRange],
+    queryKey: ["dashboard", "init", branchKey, chartRange, metricsRange, appointmentsRange],
     queryFn: async () => {
-      const res = await DashboardAPI.getInit({ chartRange, metricsRange })
+      const res = await DashboardAPI.getInit({ chartRange, metricsRange, appointmentsRange })
       if (!res?.success) {
         throw new Error(typeof res?.error === "string" ? res.error : "Dashboard init failed")
       }

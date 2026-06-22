@@ -100,6 +100,8 @@ const businessSettingsSchema = new mongoose.Schema({
   timestamps: true
 });
 
+businessSettingsSchema.index({ branchId: 1 }, { background: true });
+
 // Export both schema and model for flexibility
 module.exports = {
   schema: businessSettingsSchema,

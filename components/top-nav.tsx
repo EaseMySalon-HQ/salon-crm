@@ -387,7 +387,7 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
   return (
     <header
       className={cn(
-        "fathers-day-nav sticky top-0 z-30 w-full shrink-0 overflow-hidden px-8 py-4 shadow-sm backdrop-blur-sm",
+        "fathers-day-nav sticky top-0 z-30 w-full shrink-0 overflow-hidden px-4 py-3 shadow-sm backdrop-blur-sm sm:px-6 sm:py-4 lg:px-8",
         fathersDayNav
           ? "relative border-b border-amber-400/25"
           : "border-b border-gray-200/60 bg-gradient-to-r from-white via-slate-50 to-blue-50/30"
@@ -396,9 +396,16 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
       {fathersDayNav && navBannerConfig ? (
         <NavBannerBackground theme={navBannerConfig.theme} />
       ) : null}
-      <div className="relative z-10 flex items-center justify-between gap-3">
+      <div
+        className={cn(
+          "relative z-10 grid items-center gap-x-2 gap-y-2 sm:gap-x-3",
+          fathersDayNav && navBannerConfig
+            ? "grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[minmax(0,1fr)_minmax(0,auto)_minmax(0,1fr)]"
+            : "grid-cols-[minmax(0,1fr)_auto]"
+        )}
+      >
         {/* Left — business name + messaging wallet balance */}
-        <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0 flex-1">
+        <div className="col-start-1 row-start-1 flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
           <BranchSwitcher businessName={businessName} isLoadingName={isLoadingBusinessName} />
 
           <button
@@ -447,17 +454,27 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
           ) : null}
         </div>
 
-        <div className="pointer-events-none absolute left-1/2 top-1/2 z-10 hidden -translate-x-1/2 -translate-y-1/2 md:block">
-          {fathersDayNav && navBannerConfig ? <NavBannerMessage config={navBannerConfig} /> : null}
-        </div>
+        {fathersDayNav && navBannerConfig ? (
+          <div className="hidden min-w-0 justify-self-center px-1 md:col-start-2 md:row-start-1 md:flex lg:px-2">
+            <NavBannerMessage config={navBannerConfig} />
+          </div>
+        ) : null}
 
         {/* Right side - Quick Add, Notifications, and User */}
-        <div className="flex items-center justify-end gap-2 sm:gap-3 min-w-0 flex-1">
+        <div
+          className={cn(
+            "col-start-2 row-start-1 flex min-w-0 items-center justify-end gap-1.5 sm:gap-2 md:col-start-3 md:gap-3",
+            fathersDayNav && navBannerConfig ? "" : "md:col-start-2"
+          )}
+        >
           {/* Session Status */}
           <SessionStatus showAlways={false} />
 
           {/* Client search — opens client details drawer on select */}
-          <div ref={clientSearchRef} className="relative w-36 shrink-0 sm:w-48 lg:w-56 z-40">
+          <div
+            ref={clientSearchRef}
+            className="relative z-40 min-w-0 w-full max-w-[7.5rem] sm:max-w-[9rem] md:max-w-[10rem] lg:max-w-[12rem] xl:max-w-56"
+          >
             <Search className="pointer-events-none absolute left-2.5 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-slate-400 sm:h-4 sm:w-4" />
             <Input
               type="search"

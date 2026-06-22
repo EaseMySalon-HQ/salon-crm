@@ -23,6 +23,12 @@ export function openWhatsAppWebWithText(intlPhoneDigits: string, text: string): 
   window.open(url, "_blank", "noopener,noreferrer")
 }
 
+/** Open WhatsApp chat for a phone number (no prefilled message). */
+export function openWhatsAppChat(intlPhoneDigits: string): void {
+  if (typeof window === "undefined") return
+  window.open(`https://wa.me/${intlPhoneDigits}`, "_blank", "noopener,noreferrer")
+}
+
 export type PurchaseOrderWhatsAppLine = {
   productName: string
   quantity: number

@@ -49,6 +49,10 @@ const serviceSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  showInOnlineBooking: {
+    type: Boolean,
+    default: true
+  },
   serviceKind: {
     type: String,
     enum: ['simple', 'bundle'],

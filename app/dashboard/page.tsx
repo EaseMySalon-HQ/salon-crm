@@ -20,6 +20,7 @@ import { DashboardGate } from "@/components/dashboard/dashboard-gate"
 export default function DashboardPage() {
   const [salesOverviewRange, setSalesOverviewRange] = useState<"last7days" | "last30days">("last7days")
   const [keyMetricsRange, setKeyMetricsRange] = useState<"today" | "last7days">("today")
+  const [upcomingAppointmentsRange, setUpcomingAppointmentsRange] = useState<"today" | "next7days">("today")
 
   return (
     <ProtectedLayout requiredModule="dashboard">
@@ -94,15 +95,44 @@ export default function DashboardPage() {
             </Card>
 
             <Card className="col-span-3 h-full shadow-lg border-0 bg-white/80 backdrop-blur-sm">
-              <CardHeader className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-t-lg border-b border-green-100">
-                <CardTitle className="flex items-center gap-2 text-green-800">
-                  <Calendar className="h-5 w-5" />
-                  Recent Appointments
-                </CardTitle>
-                <CardDescription className="text-green-600">Latest scheduled appointments and activities</CardDescription>
+              <CardHeader className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-t-lg border-b border-green-100 space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <CardTitle className="flex items-center gap-2 text-green-800">
+                      <Calendar className="h-5 w-5" />
+                      Upcoming Appointments
+                    </CardTitle>
+                    <CardDescription className="text-green-600">
+                      {upcomingAppointmentsRange === "today"
+                        ? "Scheduled visits for today"
+                        : "Scheduled visits for the next 7 days"}
+                    </CardDescription>
+                  </div>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 rounded-md border border-green-200 bg-white/85 text-green-800 hover:bg-green-50"
+                        aria-label="Upcoming appointments range options"
+                      >
+                        <MoreVertical className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-48">
+                      <DropdownMenuItem onClick={() => setUpcomingAppointmentsRange("today")}>
+                        {upcomingAppointmentsRange === "today" ? "✓ " : ""}Today
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setUpcomingAppointmentsRange("next7days")}>
+                        {upcomingAppointmentsRange === "next7days" ? "✓ " : ""}Upcoming 7 Days
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
               </CardHeader>
               <CardContent className="p-6 h-[350px]">
-                <RecentAppointments />
+                <RecentAppointments range={upcomingAppointmentsRange} />
               </CardContent>
             </Card>
           </div>

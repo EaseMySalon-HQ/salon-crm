@@ -8,7 +8,7 @@ import {
   getPaginationRowModel,
   useReactTable,
 } from "@tanstack/react-table"
-import { MoreHorizontal, Pencil, Trash2, Phone, Mail, Calendar, ArrowRight, ShoppingCart } from "lucide-react"
+import { MoreHorizontal, Pencil, Trash2, Phone, Calendar, ArrowRight, ShoppingCart, MessageCircle } from "lucide-react"
 import { LeadHistoryDialog } from "@/components/leads/lead-history-dialog"
 import { useRouter } from "next/navigation"
 
@@ -36,6 +36,7 @@ import {
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/lib/auth-context"
 import { LeadsAPI } from "@/lib/api"
+import { normalizePhoneForWhatsApp, openWhatsAppChat } from "@/lib/whatsapp-share"
 
 // Helper function to check permissions
 const hasPermission = (user: any, module: string, feature: string): boolean => {
@@ -109,6 +110,19 @@ export function LeadsTable({ leads, onRefresh, onEdit, onConvert }: LeadsTablePr
   
   const canEdit = hasPermission(user, 'lead_management', 'edit')
   const canDelete = hasPermission(user, 'lead_management', 'delete')
+
+  const openLeadChat = (lead: Lead) => {
+    const intlPhone = normalizePhoneForWhatsApp(lead.phone)
+    if (!intlPhone) {
+      toast({
+        title: "Invalid phone",
+        description: "Could not open WhatsApp for this lead's number.",
+        variant: "destructive",
+      })
+      return
+    }
+    openWhatsAppChat(intlPhone)
+  }
 
   const handleDelete = async () => {
     if (!selectedLead) return
@@ -209,20 +223,6 @@ export function LeadsTable({ leads, onRefresh, onEdit, onConvert }: LeadsTablePr
       ),
     },
     {
-      accessorKey: "email",
-      header: "Email",
-      cell: ({ row }) => (
-        row.original.email ? (
-          <div className="flex items-center gap-2">
-            <Mail className="h-4 w-4 text-gray-500" />
-            {row.original.email}
-          </div>
-        ) : (
-          <span className="text-gray-400">—</span>
-        )
-      ),
-    },
-    {
       accessorKey: "source",
       header: "Source",
       cell: ({ row }) => (
@@ -302,6 +302,23 @@ export function LeadsTable({ leads, onRefresh, onEdit, onConvert }: LeadsTablePr
           </div>
         )
       },
+    },
+    {
+      id: "chat",
+      header: "",
+      cell: ({ row }) => (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"
+          title={`Chat with ${row.original.name} on WhatsApp`}
+          aria-label={`Chat with ${row.original.name} on WhatsApp`}
+          onClick={() => openLeadChat(row.original)}
+        >
+          <MessageCircle className="h-4 w-4" />
+        </Button>
+      ),
     },
     {
       id: "actions",

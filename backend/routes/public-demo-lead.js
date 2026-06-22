@@ -74,11 +74,6 @@ router.post(
         ? [...new Set(services.map((s) => String(s).trim()).filter(Boolean))]
         : [];
 
-      const interestedParts = [
-        cityName ? `City: ${cityName}` : '',
-        branchCount ? `Branches: ${branchCount}` : '',
-      ].filter(Boolean);
-
       const existing = await PlatformLead.findOne({
         phone: normalizedPhone,
         status: { $in: ['new', 'follow-up'] },
@@ -131,7 +126,6 @@ router.post(
         email: email ? String(email).trim().toLowerCase() : undefined,
         source: 'website',
         status: 'new',
-        interestedIn: interestedParts.join(' | '),
         interestedServices,
         notes: demoNotes,
       });
@@ -153,6 +147,7 @@ router.post(
           city: cityName,
           branchCount,
           preferredDemoTime,
+          demoNotes,
           interestedServices,
         },
       });

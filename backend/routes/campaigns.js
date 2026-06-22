@@ -444,8 +444,8 @@ router.get('/:campaignId/stats', authenticateToken, setupMainDatabase, setupBusi
 
     // Get detailed stats from message logs
     const logs = await WhatsAppMessageLog.find({
-      campaignId: campaign._id
-    }).lean();
+      campaignId: campaign._id,
+    }).limit(5000).lean();
 
     const stats = {
       total: logs.length,

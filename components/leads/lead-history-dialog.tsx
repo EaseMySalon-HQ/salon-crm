@@ -19,13 +19,11 @@ import { Button } from "@/components/ui/button"
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Calendar as CalendarComponent } from "@/components/ui/calendar"
+import { FollowUpDateField } from "@/components/admin/leads/follow-up-date-field"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { cn } from "@/lib/utils"
 import { 
   Phone, 
-  Calendar as CalendarIcon,
   Plus,
   AlertCircle,
   Sparkles,
@@ -947,50 +945,11 @@ export function LeadHistoryDialog({ lead, open, onOpenChange, onLeadUpdated }: L
                   control={form.control}
                   name="followUpDate"
                   render={({ field }) => (
-                    <FormItem className="space-y-2">
-                      <FormLabel className="text-base font-semibold flex items-center gap-2">
-                        <CalendarIcon className="h-4 w-4" />
-                        Follow-up Date
-                      </FormLabel>
-                      <FormControl>
-                        <Popover>
-                          <PopoverTrigger asChild>
-                            <Button
-                              variant="outline"
-                              className={cn(
-                                "w-full justify-start text-left font-normal h-11",
-                                !field.value && "text-muted-foreground"
-                              )}
-                            >
-                              <CalendarIcon className="mr-2 h-4 w-4" />
-                              {field.value ? (
-                                format(new Date(field.value + 'T00:00:00'), "PPP")
-                              ) : (
-                                <span>Pick a date</span>
-                              )}
-                            </Button>
-                          </PopoverTrigger>
-                          <PopoverContent className="w-auto p-0" align="start">
-                            <CalendarComponent
-                              mode="single"
-                              selected={field.value ? new Date(field.value + 'T00:00:00') : undefined}
-                              onSelect={(date) => {
-                                if (date) {
-                                  const year = date.getFullYear()
-                                  const month = String(date.getMonth() + 1).padStart(2, '0')
-                                  const day = String(date.getDate()).padStart(2, '0')
-                                  field.onChange(`${year}-${month}-${day}`)
-                                } else {
-                                  field.onChange("")
-                                }
-                              }}
-                              initialFocus
-                            />
-                          </PopoverContent>
-                        </Popover>
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
+                    <FollowUpDateField
+                      label="Follow-up Date"
+                      value={field.value || ""}
+                      onChange={field.onChange}
+                    />
                   )}
                 />
               )}

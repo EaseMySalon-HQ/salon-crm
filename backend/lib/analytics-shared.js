@@ -15,7 +15,7 @@ const MAX_RANGE_DAYS = 731;
 const MONTH_NAMES_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const PIE_COLORS = ['#adfa1d', '#10b981', '#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#06b6d4', '#64748b'];
 
-const CANCELLED_NOR = [{ status: /cancelled/i }];
+const CANCELLED_NOR = [{ status: { $in: ['cancelled', 'Cancelled'] } }];
 
 const MAX_SPAN_DAILY = 31;
 const MAX_SPAN_WEEKLY = 35;

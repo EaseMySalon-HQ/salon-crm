@@ -21,6 +21,7 @@ import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/lib/auth-context"
 import { ProtectedLayout } from "@/components/layout/protected-layout"
 import { FormSkeleton, ListSkeleton } from "@/components/loading"
+import { PlanFeaturePageGate } from "@/components/plan/plan-feature-page-gate"
 
 const STATUS_COLOR: Record<string, string> = {
   active: "bg-green-100 text-green-800",
@@ -174,17 +175,28 @@ export default function ClientWalletPage() {
   if (loading) {
     return (
       <ProtectedLayout requiredModule="clients">
-        <div className="p-6 max-w-3xl mx-auto space-y-6">
-          <FormSkeleton fields={3} columns={1} showHeader={false} />
-          <ListSkeleton rows={4} showAvatar={false} />
-        </div>
+        <PlanFeaturePageGate
+          featureId="prepaid_wallet"
+          title="Prepaid Wallet"
+          description="Client prepaid wallet plans and service credit are available on Growth and Pro plans."
+        >
+          <div className="p-6 max-w-3xl mx-auto space-y-6">
+            <FormSkeleton fields={3} columns={1} showHeader={false} />
+            <ListSkeleton rows={4} showAvatar={false} />
+          </div>
+        </PlanFeaturePageGate>
       </ProtectedLayout>
     )
   }
 
   return (
     <ProtectedLayout requiredModule="clients">
-      <div className="p-6 max-w-3xl mx-auto space-y-6">
+      <PlanFeaturePageGate
+        featureId="prepaid_wallet"
+        title="Prepaid Wallet"
+        description="Client prepaid wallet plans and service credit are available on Growth and Pro plans."
+      >
+        <div className="p-6 max-w-3xl mx-auto space-y-6">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="icon" asChild>
             <Link href={backHref}>
@@ -359,6 +371,7 @@ export default function ClientWalletPage() {
           </ul>
         )}
       </div>
+      </PlanFeaturePageGate>
     </ProtectedLayout>
   )
 }

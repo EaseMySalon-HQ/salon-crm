@@ -7,6 +7,8 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { LoadingButton } from "@/components/loading"
+import { cn } from "@/lib/utils"
+import { BT } from "@/lib/booking-page-theme"
 
 const customerSchema = z.object({
   name: z.string().trim().min(2, "Enter your name"),
@@ -39,15 +41,15 @@ export function CustomerDetailsForm({
     <section className="space-y-4">
       {!hideHeader && (
         <div>
-          <h2 className="text-lg font-semibold text-slate-900">Your details</h2>
-          <p className="mt-1 text-sm text-slate-500">We&apos;ll use this to confirm your appointment.</p>
+          <h2 className={cn("text-lg font-semibold", BT.textPrimary)}>Your details</h2>
+          <p className={cn("mt-1 text-sm", BT.textMuted)}>We&apos;ll use this to confirm your appointment.</p>
         </div>
       )}
 
       <form
         id="public-booking-customer-form"
         onSubmit={form.handleSubmit(onSubmit)}
-        className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+        className={cn("space-y-4 rounded-2xl border p-5 shadow-sm", BT.borderDefault, BT.bgSurface)}
       >
         <div className="space-y-2">
           <Label htmlFor="customer-name">Customer name</Label>
@@ -70,7 +72,7 @@ export function CustomerDetailsForm({
             name="phone"
             render={({ field }) => (
               <div className="relative">
-                <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center border-r border-slate-200 pl-3 pr-3 text-sm font-medium text-slate-600">
+                <span className={cn("pointer-events-none absolute inset-y-0 left-0 flex items-center border-r pl-3 pr-3 text-sm font-medium", BT.borderDefault, BT.textSecondary)}>
                   +91
                 </span>
                 <Input
@@ -100,7 +102,7 @@ export function CustomerDetailsForm({
 
         <div className="space-y-2">
           <Label htmlFor="customer-email">
-            Email <span className="font-normal text-slate-400">(optional)</span>
+            Email <span className={cn("font-normal", BT.textSubtle)}>(optional)</span>
           </Label>
           <Input
             id="customer-email"
@@ -117,7 +119,7 @@ export function CustomerDetailsForm({
 
         <div className="space-y-2">
           <Label htmlFor="customer-notes">
-            Notes <span className="font-normal text-slate-400">(optional)</span>
+            Notes <span className={cn("font-normal", BT.textSubtle)}>(optional)</span>
           </Label>
           <Textarea
             id="customer-notes"
@@ -132,7 +134,7 @@ export function CustomerDetailsForm({
           type="submit"
           loading={submitting}
           disabled={disabled}
-          className="hidden w-full bg-[#7C3AED] hover:bg-[#6D28D9] lg:inline-flex lg:w-full"
+          className={cn("hidden w-full lg:inline-flex lg:w-full", BT.btnPrimary)}
         >
           Confirm booking
         </LoadingButton>

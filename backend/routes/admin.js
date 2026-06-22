@@ -1025,7 +1025,7 @@ router.get(
           {
             $match: {
               createdAt: { $gte: thirtyDaysAgo },
-              $nor: [{ status: /cancelled/i }],
+              status: { $nin: ['cancelled', 'Cancelled'] },
             },
           },
           { $group: { _id: null, total: { $sum: { $ifNull: ['$grossTotal', 0] } } } },

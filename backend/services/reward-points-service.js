@@ -316,7 +316,7 @@ async function processSaleCompletionLoyalty({ savedSale, branchId, businessModel
   const priorCompleted = await Sale.countDocuments({
     branchId: branchOid,
     customerId: clientOid,
-    status: { $regex: /^completed$/i },
+    status: { $in: ['completed', 'Completed'] },
     _id: { $ne: saleId },
   });
   if (priorCompleted === 0 && Number(settings.firstVisitBonusPoints) > 0) {

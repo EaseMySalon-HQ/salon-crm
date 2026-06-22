@@ -22,6 +22,7 @@ import {
   Megaphone,
   ChevronDown,
   Building2,
+  UserCog,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
@@ -83,7 +84,7 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
     { kind: "link", title: "Quick Sale", href: "/quick-sale", icon: Receipt, permissionModule: "sales" },
     { kind: "link", title: "Appointments", href: "/appointments", icon: CalendarDays, permissionModule: "appointments" },
     { kind: "link", title: "Clients", href: "/clients", icon: Users, permissionModule: "clients" },
-    { kind: "link", title: "Leads", href: "/leads", icon: Phone, permissionModule: "lead_management" },
+    { kind: "link", title: "Leads", href: "/leads", icon: Phone, permissionModule: "lead_management", featureId: "lead_management" },
     {
       kind: "group",
       title: "Marketing",
@@ -118,7 +119,7 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
           },
         ]
       : []),
-    { kind: "link", title: "Staff Directory", href: "/staff", icon: Users, permissionModule: "staff" },
+    { kind: "link", title: "Staff Directory", href: "/staff", icon: UserCog, permissionModule: "staff" },
     { kind: "link", title: "Settings", href: "/settings", icon: Settings, permissionModule: "settings" },
   ]
 

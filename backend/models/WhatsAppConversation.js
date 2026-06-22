@@ -43,6 +43,8 @@ whatsappConversationSchema.index(
 );
 whatsappConversationSchema.index({ businessId: 1, cswExpiresAt: -1 });
 whatsappConversationSchema.index({ businessId: 1, lastInboundAt: -1 });
+whatsappConversationSchema.index({ businessId: 1, unreadCount: 1, lastInboundAt: -1 }, { background: true });
+whatsappConversationSchema.index({ businessId: 1, resolved: 1, lastInboundAt: -1 }, { background: true });
 
 /**
  * Returns whether the conversation has any free window currently open
