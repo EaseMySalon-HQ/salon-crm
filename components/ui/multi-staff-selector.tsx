@@ -138,6 +138,21 @@ export function MultiStaffSelector({
     }
   }
 
+  /** Name click: single-select — replace selection; checkbox-only for multi-select. */
+  const selectStaffByName = (staffId: string) => {
+    if (disabled) return
+    if (selectedStaffIds.length === 1 && selectedStaffIds[0] === staffId) {
+      setSelectedStaffIds([])
+      setPercentages([])
+      sharesManuallyEdited.current = false
+    } else {
+      setSelectedStaffIds([staffId])
+      sharesManuallyEdited.current = false
+      applyEqualSplit([staffId])
+    }
+    setOpen(false)
+  }
+
   const removeStaff = (staffId: string) => toggleStaff(staffId, false)
 
   const handlePercentageChange = (index: number, raw: string) => {
@@ -320,10 +335,7 @@ export function MultiStaffSelector({
                   <button
                     type="button"
                     className="min-w-0 flex-1 truncate rounded-sm px-0.5 py-0.5 text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    onClick={() => {
-                      toggleStaff(id, !checked)
-                      setOpen(false)
-                    }}
+                    onClick={() => selectStaffByName(id)}
                   >
                     {staff.name}
                   </button>
