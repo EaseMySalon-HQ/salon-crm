@@ -296,30 +296,43 @@ export function MultiStaffSelector({
               const checked = selectedStaffIds.includes(id)
               const shareIndex = selectedStaffIds.indexOf(id)
               return (
-                <button
+                <div
                   key={id}
-                  type="button"
                   role="option"
                   aria-selected={checked}
-                  className="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
-                  onClick={() => toggleStaff(id, !checked)}
+                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
                 >
-                  <span
-                    aria-hidden
+                  <button
+                    type="button"
+                    aria-label={checked ? `Deselect ${staff.name}` : `Select ${staff.name}`}
                     className={cn(
-                      "flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border border-primary",
+                      "flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
                       checked && "bg-primary text-primary-foreground"
                     )}
+                    onClick={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      toggleStaff(id, !checked)
+                    }}
                   >
-                    {checked ? <Check className="h-3 w-3" /> : null}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-left">{staff.name}</span>
+                    {checked ? <Check className="h-3 w-3" aria-hidden /> : null}
+                  </button>
+                  <button
+                    type="button"
+                    className="min-w-0 flex-1 truncate rounded-sm px-0.5 py-0.5 text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    onClick={() => {
+                      toggleStaff(id, !checked)
+                      setOpen(false)
+                    }}
+                  >
+                    {staff.name}
+                  </button>
                   {showShareInDropdown && checked && shareIndex >= 0
                     ? sharePercentInput(shareIndex, staff.name, "ml-auto w-11 justify-end")
                     : showShareInDropdown
                       ? <span className="ml-auto w-11 shrink-0" aria-hidden />
                       : null}
-                </button>
+                </div>
               )
             })}
           </div>
