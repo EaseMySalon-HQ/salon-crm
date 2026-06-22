@@ -495,12 +495,6 @@ async function computePublicSlots(models, businessDoc, branchId, { date, items, 
     };
 
     if (slotPastLeadTime(start, timezone)) {
-      slots.push({
-        ...base,
-        status: 'unavailable',
-        reason: 'past',
-        staffAssignments: [],
-      });
       continue;
     }
 
