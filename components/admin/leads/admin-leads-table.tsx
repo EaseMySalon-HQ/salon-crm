@@ -14,7 +14,7 @@ import {
   Building2,
   Calendar,
   ExternalLink,
-  Mail,
+  MessageCircle,
   MoreHorizontal,
   Pencil,
   Phone,
@@ -50,6 +50,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge"
 import { useToast } from "@/hooks/use-toast"
 import { AdminLeadHistoryDialog } from "@/components/admin/leads/admin-lead-history-dialog"
+import { normalizePhoneForWhatsApp, openWhatsAppChat } from "@/lib/whatsapp-share"
 
 type AdminLeadsTableProps = {
   leads: PlatformLeadRow[]
@@ -68,6 +69,19 @@ export function AdminLeadsTable({ leads, onRefresh, onEdit, onConvert }: AdminLe
 
   const canEdit = hasAdminLeadPermission(admin, "update")
   const canDelete = hasAdminLeadPermission(admin, "delete")
+
+  const openLeadChat = (lead: PlatformLeadRow) => {
+    const intlPhone = normalizePhoneForWhatsApp(lead.phone)
+    if (!intlPhone) {
+      toast({
+        title: "Invalid phone",
+        description: "Could not open WhatsApp for this lead's number.",
+        variant: "destructive",
+      })
+      return
+    }
+    openWhatsAppChat(intlPhone)
+  }
 
   const handleDelete = async () => {
     if (!selectedLead?._id) return
@@ -135,19 +149,6 @@ export function AdminLeadsTable({ leads, onRefresh, onEdit, onConvert }: AdminLe
       ),
     },
     {
-      accessorKey: "email",
-      header: "Email",
-      cell: ({ row }) =>
-        row.original.email ? (
-          <span className="flex items-center gap-1.5">
-            <Mail className="h-3.5 w-3.5 text-slate-400" />
-            {row.original.email}
-          </span>
-        ) : (
-          <span className="text-slate-400">—</span>
-        ),
-    },
-    {
       accessorKey: "source",
       header: "Source",
       cell: ({ row }) => (
@@ -190,6 +191,23 @@ export function AdminLeadsTable({ leads, onRefresh, onEdit, onConvert }: AdminLe
           </span>
         )
       },
+    },
+    {
+      id: "chat",
+      header: "",
+      cell: ({ row }) => (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"
+          title={`Chat with ${row.original.name} on WhatsApp`}
+          aria-label={`Chat with ${row.original.name} on WhatsApp`}
+          onClick={() => openLeadChat(row.original)}
+        >
+          <MessageCircle className="h-4 w-4" />
+        </Button>
+      ),
     },
     {
       id: "actions",

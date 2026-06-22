@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { useAuth } from "@/lib/auth-context"
 import { cn } from "@/lib/utils"
 import { useDashboardInit } from "@/lib/queries/dashboard"
+import { invalidateDashboard } from "@/lib/queries/invalidate"
 import { CardSkeletonGrid } from "@/components/loading"
 
 interface ServiceStats {

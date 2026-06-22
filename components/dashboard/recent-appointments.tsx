@@ -6,6 +6,10 @@ import { Calendar } from "lucide-react"
 import { format, isValid, parse, parseISO } from "date-fns"
 import { ListSkeleton } from "@/components/loading"
 import { useDashboardInit } from "@/lib/queries/dashboard"
+import {
+  isOnlineBookingAppointment,
+  ONLINE_BOOKING_PILL_CLASS,
+} from "@/lib/appointment-calendar-helpers"
 
 interface RecentItem {
   id: string
@@ -17,6 +21,7 @@ interface RecentItem {
   price: number
   status: string
   dateTime: Date | null
+  isOnlineBooking: boolean
 }
 
 /** Build local Date from appointment date + time; supports 24h (e.g. 19:15) and 12h with AM/PM. */
@@ -49,13 +54,16 @@ function parseAppointmentWallDateTime(dateRaw: unknown, timeRaw: unknown, startA
   return null
 }
 
-export function RecentAppointments() {
+export type UpcomingAppointmentsRange = "today" | "next7days"
+
+export function RecentAppointments({ range = "today" }: { range?: UpcomingAppointmentsRange }) {
   const router = useRouter()
-  const { data, isPending, isError } = useDashboardInit()
+  const { data, isPending, isError } = useDashboardInit({ appointmentsRange: range })
 
   const raw = data?.appointments?.recentUpcoming ?? []
 
-  const items: RecentItem[] = (Array.isArray(raw) ? raw : []).map((a: any) => {
+  const items: RecentItem[] = (Array.isArray(raw) ? raw : [])
+    .map((a: any) => {
     const appointmentDateTime = parseAppointmentWallDateTime(a?.date, a?.time, a?.startAt)
     const timeLabel =
       appointmentDateTime && isValid(appointmentDateTime)
@@ -71,8 +79,10 @@ export function RecentAppointments() {
       price: Number(a?.price || a?.serviceId?.price || 0),
       status: a?.status || "scheduled",
       dateTime: appointmentDateTime,
+      isOnlineBooking: isOnlineBookingAppointment(a),
     }
   })
+    .filter((item) => String(item.status || "").trim().toLowerCase() !== "completed")
 
   const scrollClass =
     "h-full overflow-y-auto overflow-x-hidden overscroll-contain space-y-4 pr-1 [-webkit-overflow-scrolling:touch]"
@@ -86,7 +96,7 @@ export function RecentAppointments() {
   }
 
   if (isError) {
-    return <div className="text-sm text-muted-foreground">Could not load recent appointments.</div>
+    return <div className="text-sm text-muted-foreground">Could not load upcoming appointments.</div>
   }
 
   return (
@@ -158,11 +168,18 @@ export function RecentAppointments() {
                 </Avatar>
               </div>
               <div className="ml-4 space-y-1 flex-1">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-semibold leading-none text-gray-800 group-hover:text-blue-800 transition-colors duration-300">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm font-semibold leading-none text-gray-800 group-hover:text-blue-800 transition-colors duration-300 truncate">
                     {appointment.name}
                   </p>
-                  <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${status.badge}`}>{status.label}</span>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    {appointment.isOnlineBooking && (
+                      <span className={ONLINE_BOOKING_PILL_CLASS} title="Booked online">
+                        Online
+                      </span>
+                    )}
+                    <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${status.badge}`}>{status.label}</span>
+                  </div>
                 </div>
                 <p className="text-sm text-gray-600 group-hover:text-blue-600 transition-colors duration-300">
                   {appointment.service} with {appointment.staffName || "Unassigned Staff"}
@@ -183,8 +200,8 @@ export function RecentAppointments() {
           <div className="w-16 h-16 mx-auto mb-4 bg-gray-100 rounded-full flex items-center justify-center">
             <Calendar className="h-8 w-8 text-gray-400" />
           </div>
-          <p className="text-gray-500 font-medium">No recent appointments</p>
-          <p className="text-sm text-gray-400">Appointments will appear here once scheduled</p>
+          <p className="text-gray-500 font-medium">No upcoming appointments</p>
+          <p className="text-sm text-gray-400">Scheduled visits will appear here</p>
         </div>
       )}
     </div>

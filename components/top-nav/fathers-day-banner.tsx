@@ -1,13 +1,11 @@
 "use client"
 
 import { Sparkles, Shirt } from "lucide-react"
-import type { NavBannerConfig } from "@/lib/nav-banner"
+import type { NavBannerConfig, NavBannerTheme } from "@/lib/nav-banner"
 
 type NavBannerMessageProps = {
   config: NavBannerConfig
 }
-
-import type { NavBannerConfig, NavBannerTheme } from "@/lib/nav-banner"
 
 export function NavBannerBackground({ theme }: { theme: NavBannerTheme }) {
   if (theme !== "fathers_day") return null
@@ -35,28 +33,28 @@ export function NavBannerMessage({ config }: NavBannerMessageProps) {
 
   return (
     <div
-      className="relative inline-flex h-9 max-w-[min(100%,28rem)] shrink-0 items-center px-1 sm:max-w-none sm:px-2"
+      className="relative inline-flex h-9 max-w-full min-w-0 items-center px-1 sm:px-2"
       role="status"
-      aria-label={config.headline}
+      aria-label={[config.headline, config.tagline].filter(Boolean).join(" · ")}
     >
       <div className="relative flex min-w-0 items-center gap-1.5 sm:gap-2">
-        <span className="fathers-day-float hidden sm:inline-flex" aria-hidden>
+        <span className="fathers-day-float hidden sm:inline-flex shrink-0" aria-hidden>
           <Shirt className="h-3 w-3 text-amber-300/90" strokeWidth={2} />
         </span>
 
-        <p className="flex min-w-0 items-center gap-1 truncate text-[11px] font-semibold leading-none tracking-wide sm:text-xs">
+        <p className="flex min-w-0 items-center gap-1 text-[11px] font-semibold leading-none tracking-wide sm:text-xs">
           <Sparkles className="h-3 w-3 shrink-0 text-amber-300 fathers-day-pulse" aria-hidden />
-          <span className="fathers-day-text-shimmer shrink-0">{config.headline}</span>
+          <span className="fathers-day-text-shimmer min-w-0 truncate">{config.headline}</span>
           {config.tagline ? (
             <>
-              <span className="hidden text-slate-300/80 lg:inline" aria-hidden>
+              <span className="hidden shrink-0 text-slate-300/80 xl:inline" aria-hidden>
                 ·
               </span>
-              <span className="hidden truncate text-slate-200/90 lg:inline">{config.tagline}</span>
+              <span className="hidden min-w-0 truncate text-slate-200/90 xl:inline">{config.tagline}</span>
             </>
           ) : null}
           <Sparkles
-            className="hidden h-3 w-3 shrink-0 text-sky-300/90 fathers-day-pulse fathers-day-pulse-delay lg:inline"
+            className="hidden h-3 w-3 shrink-0 text-sky-300/90 fathers-day-pulse fathers-day-pulse-delay xl:inline"
             aria-hidden
           />
         </p>

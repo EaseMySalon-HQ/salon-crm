@@ -11,6 +11,7 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion"
 import { cn } from "@/lib/utils"
+import { BT } from "@/lib/booking-page-theme"
 import {
   BOOKING_COLUMN_HEADER_CLASS,
   BOOKING_STICKY_COLUMN_CLASS,
@@ -47,39 +48,39 @@ function ServiceRow({
   return (
     <div className="flex flex-col gap-3 py-4 lg:gap-2 xl:flex-row xl:items-center xl:gap-4">
       <div className="min-w-0 flex-1">
-        <p className="font-medium leading-snug text-slate-900">{service.name}</p>
-        <p className="mt-1 flex items-center gap-1 text-xs text-slate-500">
+        <p className={cn("font-medium leading-snug", BT.textPrimary)}>{service.name}</p>
+        <p className={cn("mt-1 flex items-center gap-1 text-xs", BT.textMuted)}>
           <Clock className="h-3 w-3 shrink-0" />
           {formatDurationMinutes(service.duration)}
         </p>
         {service.description && (
-          <p className="mt-1 line-clamp-1 text-xs text-slate-400">{service.description}</p>
+          <p className={cn("mt-1 line-clamp-1 text-xs", BT.textSubtle)}>{service.description}</p>
         )}
       </div>
       <div className="flex shrink-0 items-center justify-between gap-3 xl:justify-end">
-        <span className="text-sm font-semibold tabular-nums text-slate-900">
+        <span className={cn("text-sm font-semibold tabular-nums", BT.textPrimary)}>
           {formatBookingPrice(service.price)}
         </span>
         {qty > 0 ? (
-          <div className="flex items-center rounded-full border border-[#7C3AED]/30 bg-purple-50/80 p-0.5">
+          <div className={cn("flex items-center rounded-full border p-0.5", BT.borderAccent, BT.bgAccentSoft)}>
             <Button
               type="button"
               variant="ghost"
               size="icon"
-              className="h-8 w-8 rounded-full text-[#7C3AED] hover:bg-purple-100"
+              className={cn("h-8 w-8 rounded-full", BT.textAccent, BT.hoverAccentSoft)}
               onClick={() => onRemoveOne(service.id)}
               aria-label={`Remove one ${service.name}`}
             >
               <Minus className="h-4 w-4" />
             </Button>
-            <span className="min-w-[1.25rem] text-center text-sm font-semibold text-[#7C3AED]">
+            <span className={cn("min-w-[1.25rem] text-center text-sm font-semibold", BT.textAccent)}>
               {qty}
             </span>
             <Button
               type="button"
               variant="ghost"
               size="icon"
-              className="h-8 w-8 rounded-full text-[#7C3AED] hover:bg-purple-100"
+              className={cn("h-8 w-8 rounded-full", BT.textAccent, BT.hoverAccentSoft)}
               onClick={() => onAdd(service)}
               aria-label={`Add another ${service.name}`}
             >
@@ -91,7 +92,13 @@ function ServiceRow({
             type="button"
             size="sm"
             variant="outline"
-            className="h-9 rounded-full border-[#7C3AED]/40 px-4 text-[#7C3AED] hover:bg-purple-50 hover:text-[#6D28D9]"
+            className={cn(
+              "h-9 rounded-full px-4",
+              BT.borderAccent,
+              BT.textAccent,
+              BT.hoverAccentSoft,
+              "hover:text-[color:var(--booking-accent)]"
+            )}
             onClick={() => onAdd(service)}
           >
             <Plus className="mr-1 h-3.5 w-3.5" />
@@ -123,14 +130,14 @@ function CategoryNavButton({
       className={cn(
         "relative flex w-full items-start justify-between gap-2 rounded-lg px-3 py-2.5 text-left text-sm transition-colors",
         active
-          ? "bg-white font-medium text-[#7C3AED] shadow-sm ring-1 ring-purple-100"
-          : "text-slate-600 hover:bg-white/80 hover:text-slate-900",
+          ? cn(BT.bgSurface, "font-medium shadow-sm ring-1", BT.textAccent, BT.ringAccent)
+          : cn(BT.textSecondary, BT.hoverAccentSoft, BT.hoverTextPrimary),
         className
       )}
     >
       {active && (
         <span
-          className="absolute left-0 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r-full bg-[#7C3AED]"
+          className="absolute left-0 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r-full bg-[var(--booking-accent)]"
           aria-hidden
         />
       )}
@@ -138,7 +145,7 @@ function CategoryNavButton({
       <span
         className={cn(
           "shrink-0 rounded-full px-2 py-0.5 text-xs tabular-nums",
-          active ? "bg-purple-100 text-[#7C3AED]" : "bg-slate-200/70 text-slate-500"
+          active ? cn(BT.bgAccentSoftStrong, BT.textAccent) : cn(BT.bgSurfaceMuted, BT.textMuted)
         )}
       >
         {count}
@@ -271,21 +278,24 @@ export function ServicePicker({
   }, [])
 
   return (
-    <div className="flex h-full w-full min-h-[50vh] flex-col bg-white lg:min-h-[calc(100vh-4.5rem)]">
+    <div className={cn("flex h-full w-full min-h-[50vh] flex-col lg:min-h-[calc(100vh-4.5rem)]", BT.bgSurface)}>
       <div className="grid w-full flex-1 grid-cols-1 lg:grid-cols-booking-categories-compact xl:grid-cols-booking-categories 2xl:grid-cols-booking-categories-xl lg:items-start">
         <aside
           className={cn(
-            "hidden border-r border-slate-100 bg-slate-50/60 lg:block lg:w-full",
+            "hidden border-r lg:block lg:w-full",
+            BT.borderSubtle,
+            BT.bgSurfaceMuted,
             BOOKING_STICKY_COLUMN_CLASS
           )}
         >
           <div
             className={cn(
               BOOKING_COLUMN_HEADER_CLASS,
-              "bg-slate-50/95 px-4 lg:px-5"
+              BT.bgSurfaceMuted,
+              "px-4 lg:px-5"
             )}
           >
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Categories</p>
+            <p className={cn("text-xs font-semibold uppercase tracking-wider", BT.textSubtle)}>Categories</p>
           </div>
           <nav
             className="overflow-y-auto px-3 py-3 lg:max-h-[calc(100vh-3.5rem)] xl:px-5"
@@ -298,7 +308,7 @@ export function ServicePicker({
                   ))}
                 </div>
               ) : categories.length === 0 ? (
-                <p className="text-sm text-slate-500">No categories</p>
+                <p className={cn("text-sm", BT.textMuted)}>No categories</p>
               ) : (
                 <div className="space-y-0.5">
                   {categories.map(([cat, count]) => (
@@ -324,12 +334,12 @@ export function ServicePicker({
             )}
           >
             <div className="relative w-full min-w-0 sm:max-w-sm lg:max-w-none xl:ml-auto xl:w-[clamp(9.5rem,12vw,14rem)] 2xl:w-[clamp(10rem,10vw,15rem)]">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <Search className={cn("pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2", BT.textSubtle)} />
               <Input
                 value={search}
                 onChange={(e) => onSearchChange(e.target.value)}
                 placeholder="Search services"
-                className="h-9 border-slate-200 bg-slate-50/50 pl-9 text-sm"
+                className={cn("h-9 pl-9 text-sm", BT.borderDefault, BT.bgSurfaceMuted)}
                 aria-label="Search services"
               />
             </div>
@@ -344,8 +354,8 @@ export function ServicePicker({
               </div>
             ) : totalVisible === 0 ? (
               <div className="flex flex-col items-center justify-center px-4 py-16 text-center">
-                <p className="text-sm font-medium text-slate-700">No services found</p>
-                <p className="mt-1 text-xs text-slate-500">Try a different search term.</p>
+                <p className={cn("text-sm font-medium", BT.textSecondary)}>No services found</p>
+                <p className={cn("mt-1 text-xs", BT.textMuted)}>Try a different search term.</p>
               </div>
             ) : (
               <>
@@ -371,13 +381,19 @@ export function ServicePicker({
                     <AccordionItem
                       key={category}
                       value={category}
-                      className="border-slate-100 px-1"
+                      className={cn("px-1", BT.borderSubtle)}
                     >
-                      <AccordionTrigger className="py-3.5 text-sm font-semibold text-slate-800 hover:no-underline [&[data-state=open]]:text-[#7C3AED]">
+                      <AccordionTrigger
+                        className={cn(
+                          "py-3.5 text-sm font-semibold hover:no-underline",
+                          BT.textSecondary,
+                          "[&[data-state=open]]:text-[color:var(--booking-accent)]"
+                        )}
+                      >
                         <span className="min-w-0 flex-1 pr-3 text-left leading-snug">{category}</span>
                       </AccordionTrigger>
                       <AccordionContent className="pb-2 pt-0">
-                        <ul className="divide-y divide-slate-100">
+                        <ul className={cn("divide-y", BT.divideSubtle)}>
                           {categoryServices.map((service) => (
                             <li key={service.id}>
                               <ServiceRow
@@ -403,25 +419,31 @@ export function ServicePicker({
                       data-category={category}
                       className={cn(
                         "scroll-mt-32 rounded-xl transition-colors",
-                        activeCategory === category && !isSearching && "bg-purple-50/25 ring-1 ring-purple-100/80"
+                        activeCategory === category && !isSearching && cn(BT.bgAccentSoft, "ring-1", BT.ringAccent)
                       )}
                     >
-                      <div className="sticky top-[3.25rem] z-[5] -mx-1 border-b border-slate-100/80 bg-white/90 px-1 py-3 backdrop-blur-sm lg:top-[3rem]">
+                      <div
+                        className={cn(
+                          "sticky top-[3.25rem] z-[5] -mx-1 border-b px-1 py-3 backdrop-blur-sm lg:top-[3rem]",
+                          BT.borderSubtle,
+                          "bg-[color-mix(in_srgb,var(--booking-surface)_90%,transparent)]"
+                        )}
+                      >
                         <div className="flex items-center justify-between gap-3">
                           <h3
                             className={cn(
                               "text-sm font-semibold",
-                              activeCategory === category ? "text-[#7C3AED]" : "text-slate-800"
+                              activeCategory === category ? BT.textAccent : BT.textSecondary
                             )}
                           >
                             {category}
                           </h3>
-                          <span className="shrink-0 text-xs text-slate-400">
+                          <span className={cn("shrink-0 text-xs", BT.textSubtle)}>
                             {categoryServices.length} service{categoryServices.length !== 1 ? "s" : ""}
                           </span>
                         </div>
                       </div>
-                      <ul className="divide-y divide-slate-100 px-1">
+                      <ul className={cn("divide-y px-1", BT.divideSubtle)}>
                         {categoryServices.map((service) => (
                           <li key={service.id}>
                             <ServiceRow
@@ -447,8 +469,8 @@ export function ServicePicker({
 
 export function ServicePickerLoadingShell() {
   return (
-    <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-slate-200/80 bg-white">
-      <Loader2 className="h-7 w-7 animate-spin text-[#7C3AED]" />
+    <div className={cn("flex min-h-[420px] items-center justify-center rounded-2xl border", BT.borderDefault, BT.bgSurface)}>
+      <Loader2 className={cn("h-7 w-7 animate-spin", BT.textAccent)} />
     </div>
   )
 }

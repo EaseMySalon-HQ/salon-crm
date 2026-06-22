@@ -1,12 +1,4 @@
 export const BOOKING_HERO_THEME_IDS = [
-  "purple",
-  "midnight",
-  "rose",
-  "emerald",
-  "amber",
-  "ocean",
-  "sunset",
-  "slate",
   "light-lavender",
   "light-rose",
   "light-mint",
@@ -17,9 +9,9 @@ export const BOOKING_HERO_THEME_IDS = [
 
 export type BookingHeroThemeId = (typeof BOOKING_HERO_THEME_IDS)[number]
 
-export const DEFAULT_BOOKING_HERO_THEME: BookingHeroThemeId = "purple"
+export const DEFAULT_BOOKING_HERO_THEME: BookingHeroThemeId = "light-lavender"
 
-export type BookingHeroThemeMode = "dark" | "light"
+export type BookingHeroThemeMode = "light"
 
 export type BookingHeroTheme = {
   id: BookingHeroThemeId
@@ -34,102 +26,6 @@ export type BookingHeroTheme = {
 }
 
 export const BOOKING_HERO_THEMES: Record<BookingHeroThemeId, BookingHeroTheme> = {
-  purple: {
-    id: "purple",
-    label: "Violet glow",
-    mode: "dark",
-    baseBg: "#0f1117",
-    overlay:
-      "radial-gradient(ellipse 80% 60% at 20% 0%, rgba(124,58,237,0.35), transparent 55%), radial-gradient(ellipse 50% 40% at 90% 80%, rgba(168,85,247,0.2), transparent 50%)",
-    accent: "#A855F7",
-    badgeBorder: "border-[#7C3AED]/40",
-    badgeBg: "bg-[#7C3AED]/15",
-    badgeText: "text-purple-200",
-  },
-  midnight: {
-    id: "midnight",
-    label: "Midnight blue",
-    mode: "dark",
-    baseBg: "#0a0f1a",
-    overlay:
-      "radial-gradient(ellipse 75% 55% at 15% 0%, rgba(37,99,235,0.4), transparent 55%), radial-gradient(ellipse 45% 35% at 85% 85%, rgba(59,130,246,0.22), transparent 50%)",
-    accent: "#60A5FA",
-    badgeBorder: "border-blue-400/40",
-    badgeBg: "bg-blue-500/15",
-    badgeText: "text-blue-200",
-  },
-  rose: {
-    id: "rose",
-    label: "Rose blush",
-    mode: "dark",
-    baseBg: "#1a0f14",
-    overlay:
-      "radial-gradient(ellipse 80% 60% at 20% 0%, rgba(225,29,72,0.32), transparent 55%), radial-gradient(ellipse 50% 40% at 90% 80%, rgba(244,63,94,0.18), transparent 50%)",
-    accent: "#FB7185",
-    badgeBorder: "border-rose-400/40",
-    badgeBg: "bg-rose-500/15",
-    badgeText: "text-rose-200",
-  },
-  emerald: {
-    id: "emerald",
-    label: "Emerald calm",
-    mode: "dark",
-    baseBg: "#0a1210",
-    overlay:
-      "radial-gradient(ellipse 80% 60% at 20% 0%, rgba(16,185,129,0.32), transparent 55%), radial-gradient(ellipse 50% 40% at 90% 80%, rgba(52,211,153,0.18), transparent 50%)",
-    accent: "#34D399",
-    badgeBorder: "border-emerald-400/40",
-    badgeBg: "bg-emerald-500/15",
-    badgeText: "text-emerald-200",
-  },
-  amber: {
-    id: "amber",
-    label: "Warm amber",
-    mode: "dark",
-    baseBg: "#14100a",
-    overlay:
-      "radial-gradient(ellipse 80% 60% at 20% 0%, rgba(217,119,6,0.34), transparent 55%), radial-gradient(ellipse 50% 40% at 90% 80%, rgba(251,191,36,0.2), transparent 50%)",
-    accent: "#FBBF24",
-    badgeBorder: "border-amber-400/40",
-    badgeBg: "bg-amber-500/15",
-    badgeText: "text-amber-200",
-  },
-  ocean: {
-    id: "ocean",
-    label: "Ocean breeze",
-    mode: "dark",
-    baseBg: "#0a1114",
-    overlay:
-      "radial-gradient(ellipse 80% 60% at 20% 0%, rgba(6,182,212,0.34), transparent 55%), radial-gradient(ellipse 50% 40% at 90% 80%, rgba(34,211,238,0.18), transparent 50%)",
-    accent: "#22D3EE",
-    badgeBorder: "border-cyan-400/40",
-    badgeBg: "bg-cyan-500/15",
-    badgeText: "text-cyan-200",
-  },
-  sunset: {
-    id: "sunset",
-    label: "Sunset coral",
-    mode: "dark",
-    baseBg: "#140e0a",
-    overlay:
-      "radial-gradient(ellipse 80% 60% at 20% 0%, rgba(234,88,12,0.34), transparent 55%), radial-gradient(ellipse 50% 40% at 90% 80%, rgba(251,146,60,0.2), transparent 50%)",
-    accent: "#FB923C",
-    badgeBorder: "border-orange-400/40",
-    badgeBg: "bg-orange-500/15",
-    badgeText: "text-orange-200",
-  },
-  slate: {
-    id: "slate",
-    label: "Slate minimal",
-    mode: "dark",
-    baseBg: "#111318",
-    overlay:
-      "radial-gradient(ellipse 80% 60% at 20% 0%, rgba(148,163,184,0.22), transparent 55%), radial-gradient(ellipse 50% 40% at 90% 80%, rgba(100,116,139,0.16), transparent 50%)",
-    accent: "#94A3B8",
-    badgeBorder: "border-slate-400/40",
-    badgeBg: "bg-slate-500/15",
-    badgeText: "text-slate-200",
-  },
   "light-lavender": {
     id: "light-lavender",
     label: "Soft lavender",
@@ -204,13 +100,19 @@ export const BOOKING_HERO_THEMES: Record<BookingHeroThemeId, BookingHeroTheme> =
   },
 }
 
-export const BOOKING_HERO_DARK_THEME_IDS = BOOKING_HERO_THEME_IDS.filter(
-  (id) => BOOKING_HERO_THEMES[id].mode === "dark"
-)
+/** @deprecated Dark themes removed; kept for legacy stored values. */
+export const BOOKING_HERO_DARK_THEME_IDS: readonly string[] = [
+  "purple",
+  "midnight",
+  "rose",
+  "emerald",
+  "amber",
+  "ocean",
+  "sunset",
+  "slate",
+]
 
-export const BOOKING_HERO_LIGHT_THEME_IDS = BOOKING_HERO_THEME_IDS.filter(
-  (id) => BOOKING_HERO_THEMES[id].mode === "light"
-)
+export const BOOKING_HERO_LIGHT_THEME_IDS = BOOKING_HERO_THEME_IDS
 
 export function isBookingHeroThemeId(value: string): value is BookingHeroThemeId {
   return (BOOKING_HERO_THEME_IDS as readonly string[]).includes(value)

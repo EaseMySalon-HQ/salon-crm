@@ -1705,12 +1705,12 @@ export function SalesReport() {
         4. Do not add a separate filter bar for the new type—keep all filters in this same bar.
       */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-        <div className="p-6">
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 lg:gap-6">
-            <div className="flex flex-wrap items-center gap-3 sm:gap-4">
+        <div className="p-4 sm:p-6">
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start xl:gap-6">
+            <div className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 lg:grid-cols-4 xl:grid-cols-[repeat(auto-fill,minmax(9rem,1fr))]">
               {/* Report type */}
               <Select value={reportType} onValueChange={setReportType}>
-                <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                <SelectTrigger className="h-10 w-full min-w-0 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                   <SelectValue placeholder="Report type" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1743,10 +1743,10 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   {datePeriod === "custom" && (
-                    <div className="flex items-center gap-2">
+                    <div className="col-span-2 flex min-w-0 flex-wrap items-center gap-2 sm:col-span-full">
                       <Popover>
                         <PopoverTrigger asChild>
-                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                          <Button variant="outline" className="h-10 w-full min-w-[8.5rem] max-w-full justify-start px-3 text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 sm:w-auto">
                             <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                             <span className="truncate">
                               {dateRange?.from ? format(dateRange.from, "dd MMM yyyy") : "From"}
@@ -1790,10 +1790,10 @@ export function SalesReport() {
                     placeholder="Search sales..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
-                    className="w-52 border-slate-200 focus:border-blue-500 focus:ring-blue-500"
+                    className="col-span-2 h-10 w-full min-w-0 border-slate-200 focus:border-blue-500 focus:ring-blue-500 sm:col-span-1"
                   />
                   <Select value={datePeriod} onValueChange={handleDatePeriodChange}>
-                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="h-10 w-full min-w-0 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Quick periods" />
                     </SelectTrigger>
                     <SelectContent>
@@ -1807,10 +1807,10 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   {datePeriod === "custom" && (
-                    <div className="flex items-center gap-2">
+                    <div className="col-span-2 flex min-w-0 flex-wrap items-center gap-2 sm:col-span-full">
                       <Popover>
                         <PopoverTrigger asChild>
-                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                          <Button variant="outline" className="h-10 w-full min-w-[8.5rem] max-w-full justify-start px-3 text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 sm:w-auto">
                             <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                             <span className="truncate">
                               {dateRange?.from ? format(dateRange.from, "dd MMM yyyy") : "From"}
@@ -1828,7 +1828,7 @@ export function SalesReport() {
                       </Popover>
                       <Popover>
                         <PopoverTrigger asChild>
-                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                          <Button variant="outline" className="h-10 w-full min-w-[8.5rem] max-w-full justify-start px-3 text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 sm:w-auto">
                             <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                             <span className="truncate">
                               {dateRange?.to ? format(dateRange.to, "dd MMM yyyy") : "To"}
@@ -1847,7 +1847,7 @@ export function SalesReport() {
                     </div>
                   )}
                   <Select value={paymentFilter} onValueChange={setPaymentFilter}>
-                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="h-10 w-full min-w-0 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Payment" />
                     </SelectTrigger>
                     <SelectContent>
@@ -1860,7 +1860,7 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   <Select value={statusFilter} onValueChange={setStatusFilter}>
-                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="h-10 w-full min-w-0 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Status" />
                     </SelectTrigger>
                     <SelectContent>
@@ -1890,10 +1890,10 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   {datePeriod === "custom" && (
-                    <div className="flex items-center gap-2">
+                    <div className="col-span-2 flex min-w-0 flex-wrap items-center gap-2 sm:col-span-full">
                       <Popover>
                         <PopoverTrigger asChild>
-                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                          <Button variant="outline" className="h-10 w-full min-w-[8.5rem] max-w-full justify-start px-3 text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 sm:w-auto">
                             <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                             <span className="truncate">
                               {dateRange?.from ? format(dateRange.from, "dd MMM yyyy") : "From"}
@@ -2529,12 +2529,12 @@ export function SalesReport() {
                 </>
               )}
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-3">
               {(reportType === "sales" || reportType === "staff-tip" || reportType === "summary" || reportType === "service-list" || reportType === "product-list" || reportType === "appointment-list" || reportType === "deleted-invoice" || reportType === "unpaid-part-paid" || reportType === "cash-movement" || reportType === "gst") && canExport && (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button
-                        className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-lg font-medium"
+                        className="h-10 whitespace-nowrap bg-blue-600 px-4 py-2 font-medium text-white shadow-md transition-all duration-300 hover:bg-blue-700 hover:shadow-lg sm:px-6 sm:py-2.5 rounded-lg"
                       >
                         <Download className="h-4 w-4 mr-2" />
                         Export Report
@@ -3437,17 +3437,17 @@ export function SalesReport() {
         <TooltipProvider delayDuration={200}>
         <>
       {/* Enhanced Stats Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-4">
+      <div className="grid min-w-0 grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-4 2xl:grid-cols-7">
         <CursorTooltip wrapperClassName="h-full min-h-0" className="text-center" content="Successfully completed">
-          <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-              <CardTitle className="text-sm font-medium text-gray-900">Completed Sales</CardTitle>
-              <div className="p-2 bg-gray-100 rounded-lg">
+          <Card className="h-full min-w-0 overflow-hidden bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
+            <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0 pb-3">
+              <CardTitle className="min-w-0 flex-1 text-sm font-medium leading-snug text-gray-900 break-words">Completed Sales</CardTitle>
+              <div className="shrink-0 p-2 bg-gray-100 rounded-lg">
                 <TrendingUp className="h-4 w-4 text-gray-600" />
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-gray-900">
+              <div className="text-xl font-bold text-gray-900 sm:text-2xl">
                 {salesStatsLoading ? salesStatSkeleton : completedSales}
               </div>
             </CardContent>
@@ -3459,10 +3459,10 @@ export function SalesReport() {
           className="text-center"
           content="Bills with partial payment vs fully unpaid for current filters."
         >
-          <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-              <CardTitle className="text-sm font-medium text-gray-900">Partial/Unpaid Payments</CardTitle>
-              <div className="p-2 bg-gray-100 rounded-lg">
+          <Card className="h-full min-w-0 overflow-hidden bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
+            <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0 pb-3">
+              <CardTitle className="min-w-0 flex-1 text-sm font-medium leading-snug text-gray-900 break-words">Partial/Unpaid Payments</CardTitle>
+              <div className="shrink-0 p-2 bg-gray-100 rounded-lg">
                 <Users className="h-4 w-4 text-gray-600" />
               </div>
             </CardHeader>
@@ -3471,16 +3471,13 @@ export function SalesReport() {
                 salesStatSkeleton
               ) : (
                 <div className="space-y-2">
-                  <div className="text-2xl font-bold text-gray-900">{partialSales + unpaidSales}</div>
-                  <div className="flex flex-nowrap items-center justify-between gap-2 text-xs text-gray-600">
-                    <span className="truncate">
+                  <div className="text-xl font-bold text-gray-900 sm:text-2xl">{partialSales + unpaidSales}</div>
+                  <div className="flex flex-col gap-1 text-xs text-gray-600 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
+                    <span>
                       Partial{" "}
                       <span className="font-semibold text-gray-900">{partialSales}</span>
                     </span>
-                    <span className="shrink-0 text-gray-300" aria-hidden>
-                      ·
-                    </span>
-                    <span className="truncate text-right">
+                    <span>
                       Unpaid{" "}
                       <span className="font-semibold text-gray-900">{unpaidSales}</span>
                     </span>
@@ -3496,10 +3493,10 @@ export function SalesReport() {
           className="text-center"
           content={<>From {totalSalesRows} sales</>}
         >
-          <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-              <CardTitle className="text-sm font-medium text-gray-900">Total Revenue</CardTitle>
-              <div className="p-2 bg-gray-100 rounded-lg">
+          <Card className="h-full min-w-0 overflow-hidden bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
+            <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0 pb-3">
+              <CardTitle className="min-w-0 flex-1 text-sm font-medium leading-snug text-gray-900 break-words">Total Revenue</CardTitle>
+              <div className="shrink-0 p-2 bg-gray-100 rounded-lg">
                 <DollarSign className="h-4 w-4 text-gray-600" />
               </div>
             </CardHeader>
@@ -3520,10 +3517,10 @@ export function SalesReport() {
             </>
           }
         >
-          <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-              <CardTitle className="text-sm font-medium text-gray-900">Unpaid Value</CardTitle>
-              <div className="p-2 bg-gray-100 rounded-lg">
+          <Card className="h-full min-w-0 overflow-hidden bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
+            <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0 pb-3">
+              <CardTitle className="min-w-0 flex-1 text-sm font-medium leading-snug text-gray-900 break-words">Unpaid Value</CardTitle>
+              <div className="shrink-0 p-2 bg-gray-100 rounded-lg">
                 <Wallet className="h-4 w-4 text-gray-600" />
               </div>
             </CardHeader>
@@ -3546,7 +3543,7 @@ export function SalesReport() {
           }
         >
           <Card
-            className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full cursor-pointer select-none outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2"
+            className="h-full min-w-0 overflow-hidden cursor-pointer select-none rounded-lg border border-gray-200 bg-white shadow-sm outline-none transition-shadow duration-200 hover:shadow-md focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2"
             role="button"
             tabIndex={0}
             aria-expanded={showCashCollectedBreakdown}
@@ -3558,9 +3555,9 @@ export function SalesReport() {
               }
             }}
           >
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-              <CardTitle className="text-sm font-medium text-gray-900">Cash Collected</CardTitle>
-              <div className="p-2 bg-gray-100 rounded-lg">
+            <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0 pb-3">
+              <CardTitle className="min-w-0 flex-1 text-sm font-medium leading-snug text-gray-900 break-words">Cash Collected</CardTitle>
+              <div className="shrink-0 p-2 bg-gray-100 rounded-lg">
                 <DollarSign className="h-4 w-4 text-gray-600" />
               </div>
             </CardHeader>
@@ -3570,7 +3567,7 @@ export function SalesReport() {
               ) : !showCashCollectedBreakdown ? (
                 <div className="space-y-1">
                   <div className="text-2xl font-bold text-gray-900">₹{cashCollected.toFixed(2)}</div>
-                  <p className="text-xs text-gray-400">Click for breakdown</p>
+                  <p className="text-xs leading-snug text-gray-400 break-words">Click for breakdown</p>
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -3599,7 +3596,7 @@ export function SalesReport() {
           }
         >
           <Card
-            className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full cursor-pointer select-none outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2"
+            className="h-full min-w-0 overflow-hidden cursor-pointer select-none rounded-lg border border-gray-200 bg-white shadow-sm outline-none transition-shadow duration-200 hover:shadow-md focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2"
             role="button"
             tabIndex={0}
             aria-expanded={showOnlineCashCollectedBreakdown}
@@ -3611,9 +3608,9 @@ export function SalesReport() {
               }
             }}
           >
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-              <CardTitle className="text-sm font-medium text-gray-900">Online Cash Collected</CardTitle>
-              <div className="p-2 bg-gray-100 rounded-lg">
+            <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0 pb-3">
+              <CardTitle className="min-w-0 flex-1 text-sm font-medium leading-snug text-gray-900 break-words">Online Cash Collected</CardTitle>
+              <div className="shrink-0 p-2 bg-gray-100 rounded-lg">
                 <TrendingUp className="h-4 w-4 text-gray-600" />
               </div>
             </CardHeader>
@@ -3623,7 +3620,7 @@ export function SalesReport() {
               ) : !showOnlineCashCollectedBreakdown ? (
                 <div className="space-y-1">
                   <div className="text-2xl font-bold text-gray-900">₹{onlineCashCollected.toFixed(2)}</div>
-                  <p className="text-xs text-gray-400">Click for breakdown</p>
+                  <p className="text-xs leading-snug text-gray-400 break-words">Click for breakdown</p>
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -3642,10 +3639,10 @@ export function SalesReport() {
         </CursorTooltip>
 
         <CursorTooltip wrapperClassName="h-full min-h-0" className="text-center" content="Tips from selected sales">
-          <Card className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200 h-full">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-              <CardTitle className="text-sm font-medium text-gray-900">Tips Collected</CardTitle>
-              <div className="p-2 bg-gray-100 rounded-lg">
+          <Card className="h-full min-w-0 overflow-hidden bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
+            <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0 pb-3">
+              <CardTitle className="min-w-0 flex-1 text-sm font-medium leading-snug text-gray-900 break-words">Tips Collected</CardTitle>
+              <div className="shrink-0 p-2 bg-gray-100 rounded-lg">
                 <DollarSign className="h-4 w-4 text-gray-600" />
               </div>
             </CardHeader>

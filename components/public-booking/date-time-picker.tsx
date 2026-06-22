@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { DayPicker } from "react-day-picker"
 import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { BT } from "@/lib/booking-page-theme"
 import {
   dateToIso,
   formatSlotTimeDisplay,
@@ -191,18 +192,26 @@ export function DateTimePicker({
     months: "flex flex-col",
     month: "flex flex-col gap-2",
     nav: "flex items-center justify-between px-1",
-    button_previous:
-      "inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-600 hover:bg-slate-100 disabled:opacity-30",
-    button_next:
-      "inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-600 hover:bg-slate-100 disabled:opacity-30",
-    month_caption: "flex h-8 items-center justify-center text-base font-semibold text-slate-900",
+    button_previous: cn(
+      "inline-flex h-8 w-8 items-center justify-center rounded-md disabled:opacity-30",
+      BT.textSecondary,
+      BT.hoverAccentSoft
+    ),
+    button_next: cn(
+      "inline-flex h-8 w-8 items-center justify-center rounded-md disabled:opacity-30",
+      BT.textSecondary,
+      BT.hoverAccentSoft
+    ),
+    month_caption: cn("flex h-8 items-center justify-center text-base font-semibold", BT.textPrimary),
     table: "w-full border-collapse",
     weekdays: "flex",
-    weekday:
-      "flex-1 py-1.5 text-center text-[11px] font-medium uppercase tracking-wide text-slate-500",
+    weekday: cn(
+      "flex-1 py-1.5 text-center text-[11px] font-medium uppercase tracking-wide",
+      BT.textMuted
+    ),
     week: "flex",
     day: "flex-1 aspect-square p-0.5",
-    outside: "text-slate-300",
+    outside: BT.textSubtle,
     disabled: "opacity-40",
   }
 
@@ -232,10 +241,13 @@ export function DateTimePicker({
           {...buttonProps}
           className={cn(
             "mx-auto flex h-9 w-9 items-center justify-center rounded-full text-sm transition-colors",
-            isDisabled && "cursor-not-allowed text-slate-300",
-            !isDisabled && !isSelected && !isToday && "font-medium text-slate-700 hover:bg-purple-50",
-            !isDisabled && isToday && !isSelected && "font-semibold text-slate-900 ring-1 ring-inset ring-slate-400",
-            isSelected && "bg-[#7C3AED] font-semibold text-white shadow-sm hover:bg-[#6D28D9]"
+            isDisabled && cn("cursor-not-allowed", BT.textSubtle),
+            !isDisabled && !isSelected && !isToday && cn("font-medium", BT.textSecondary, BT.hoverAccentSoft),
+            !isDisabled &&
+              isToday &&
+              !isSelected &&
+              cn("font-semibold ring-1 ring-inset", BT.textPrimary, BT.ringAccent),
+            isSelected && cn("font-semibold text-white shadow-sm hover:opacity-90", BT.bgAccent)
           )}
         >
           {day.date.getDate()}
@@ -245,7 +257,7 @@ export function DateTimePicker({
   }
 
   const timezoneFooter = (
-    <div className="mt-4 border-t border-slate-100 pt-3 text-xs text-slate-500">
+    <div className={cn("mt-4 border-t pt-3 text-xs", BT.borderSubtle, BT.textMuted)}>
       {profile.timezone.replace("_", " ")} ({istNow})
     </div>
   )
@@ -274,7 +286,11 @@ export function DateTimePicker({
         onClick={() => stepSelectedDate(-1)}
         disabled={!canStepDate(-1)}
         aria-label="Previous day"
-        className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+        className={cn(
+          "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-30",
+          BT.textSecondary,
+          BT.hoverAccentSoft
+        )}
       >
         <ChevronLeft className="h-5 w-5" aria-hidden />
       </button>
@@ -283,7 +299,11 @@ export function DateTimePicker({
         onClick={() => {
           if (view === "combined") setMobileCalendarExpanded(true)
         }}
-        className="min-w-0 flex-1 rounded-lg px-2 py-2 text-center text-sm font-semibold leading-snug text-slate-900 transition-colors hover:bg-purple-50"
+        className={cn(
+          "min-w-0 flex-1 rounded-lg px-2 py-2 text-center text-sm font-semibold leading-snug transition-colors",
+          BT.textPrimary,
+          BT.hoverAccentSoft
+        )}
       >
         {formatSelectedDateLabel(selectedDate)}
       </button>
@@ -292,7 +312,11 @@ export function DateTimePicker({
         onClick={() => stepSelectedDate(1)}
         disabled={!canStepDate(1)}
         aria-label="Next day"
-        className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+        className={cn(
+          "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-30",
+          BT.textSecondary,
+          BT.hoverAccentSoft
+        )}
       >
         <ChevronRight className="h-5 w-5" aria-hidden />
       </button>
@@ -302,28 +326,28 @@ export function DateTimePicker({
   const slotsPanel = (
     <>
       {!selectedDate ? (
-        <div className="flex min-h-[220px] flex-col items-center justify-center text-center text-sm text-slate-500">
+        <div className={cn("flex min-h-[220px] flex-col items-center justify-center text-center text-sm", BT.textMuted)}>
           Select a date to see available slots.
         </div>
       ) : slotsLoading ? (
-        <div className="flex min-h-[220px] flex-col items-center justify-center gap-2 text-sm text-slate-500">
-          <Loader2 className="h-5 w-5 animate-spin text-[#7C3AED]" />
+        <div className={cn("flex min-h-[220px] flex-col items-center justify-center gap-2 text-sm", BT.textMuted)}>
+          <Loader2 className={cn("h-5 w-5 animate-spin", BT.textAccent)} />
           Loading slots…
         </div>
       ) : closedDay ? (
         <div className="flex min-h-[220px] flex-col items-center justify-center text-center">
-          <p className="text-sm font-semibold text-slate-900">Closed on this day</p>
-          <p className="mt-1 text-xs text-slate-500">Please choose another date.</p>
+          <p className={cn("text-sm font-semibold", BT.textPrimary)}>Closed on this day</p>
+          <p className={cn("mt-1 text-xs", BT.textMuted)}>Please choose another date.</p>
         </div>
       ) : slots.length === 0 ? (
         <div className="flex min-h-[220px] flex-col items-center justify-center text-center">
-          <p className="text-sm font-semibold text-slate-900">No slots available</p>
-          <p className="mt-1 text-xs text-slate-500">Try another date.</p>
+          <p className={cn("text-sm font-semibold", BT.textPrimary)}>No slots available</p>
+          <p className={cn("mt-1 text-xs", BT.textMuted)}>Try another date.</p>
         </div>
       ) : (
         <div>
           {view === "combined" ? (
-            <p className="mb-3 text-sm font-semibold text-slate-900 lg:sr-only">Select a time</p>
+            <p className={cn("mb-3 text-sm font-semibold lg:sr-only", BT.textPrimary)}>Select a time</p>
           ) : null}
           <div
             className={cn(
@@ -344,11 +368,11 @@ export function DateTimePicker({
                   key={slot.startAt}
                   className={cn(
                     "flex flex-col items-center rounded-xl border-2 px-2 py-2.5 text-center transition-colors",
-                    isSelected && "border-[#7C3AED] bg-purple-50 shadow-sm",
+                    isSelected && cn("shadow-sm", BT.borderAccent, BT.bgAccentSoft),
                     !isSelected &&
                       isAvailable &&
-                      "border-slate-200 bg-white hover:border-[#7C3AED]/50 hover:bg-purple-50/50",
-                    isBooked && "border-slate-100 bg-slate-50 text-slate-400"
+                      cn(BT.borderDefault, BT.bgSurface, BT.hoverAccentBorder, BT.hoverAccentSoft),
+                    isBooked && cn(BT.borderSubtle, BT.bgSurfaceMuted, BT.textSubtle)
                   )}
                 >
                   <button
@@ -364,18 +388,18 @@ export function DateTimePicker({
                     <span
                       className={cn(
                         "text-sm font-semibold",
-                        isSelected ? "text-[#7C3AED]" : isAvailable ? "text-slate-900" : "text-slate-400"
+                        isSelected ? BT.textAccent : isAvailable ? BT.textPrimary : BT.textSubtle
                       )}
                     >
                       {formatSlotTimeDisplay(slot.time)}
                     </span>
                     <span className="mt-0.5 text-[10px] font-medium uppercase tracking-wide">
                       {isSelected ? (
-                        <span className="text-[#7C3AED]">Selected</span>
+                        <span className={BT.textAccent}>Selected</span>
                       ) : slot.status === "available" ? (
                         <span className="text-emerald-600">Available</span>
                       ) : (
-                        <span className="text-slate-400">Booked</span>
+                        <span className={BT.textSubtle}>Booked</span>
                       )}
                     </span>
                   </button>
@@ -383,7 +407,10 @@ export function DateTimePicker({
                     <button
                       type="button"
                       onClick={onChangeStaff}
-                      className="mt-1 text-[10px] font-normal normal-case tracking-normal text-[#7C3AED] hover:underline"
+                      className={cn(
+                        "mt-1 text-[10px] font-normal normal-case tracking-normal hover:underline",
+                        BT.textAccent
+                      )}
                     >
                       Change Staff
                     </button>
@@ -402,11 +429,11 @@ export function DateTimePicker({
       <section className="space-y-4">
         {!hideHeader && (
           <div>
-            <h2 className="text-lg font-semibold text-slate-900">Pick a date</h2>
-            <p className="mt-1 text-sm text-slate-500">Select a day for your appointment.</p>
+            <h2 className={cn("text-lg font-semibold", BT.textPrimary)}>Pick a date</h2>
+            <p className={cn("mt-1 text-sm", BT.textMuted)}>Select a day for your appointment.</p>
           </div>
         )}
-        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+        <div className={cn("overflow-hidden rounded-2xl border p-5 shadow-sm sm:p-6", BT.borderDefault, BT.bgSurface)}>
           {dayPicker}
           {timezoneFooter}
         </div>
@@ -419,11 +446,11 @@ export function DateTimePicker({
       <section className="space-y-4">
         {!hideHeader && (
           <div>
-            <h2 className="text-lg font-semibold text-slate-900">Pick a time</h2>
-            <p className="mt-1 text-sm text-slate-500">Choose an available slot.</p>
+            <h2 className={cn("text-lg font-semibold", BT.textPrimary)}>Pick a time</h2>
+            <p className={cn("mt-1 text-sm", BT.textMuted)}>Choose an available slot.</p>
           </div>
         )}
-        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+        <div className={cn("overflow-hidden rounded-2xl border p-5 shadow-sm sm:p-6", BT.borderDefault, BT.bgSurface)}>
           {compactDateNav ? <div className="mb-4">{compactDateNav}</div> : null}
           {slotsPanel}
         </div>
@@ -435,18 +462,18 @@ export function DateTimePicker({
     <section className="space-y-4">
       {!hideHeader && (
         <div>
-          <h2 className="text-lg font-semibold text-slate-900">Pick a convenient time</h2>
-          <p className="mt-1 text-sm text-slate-500">Select a date and available time slot.</p>
+          <h2 className={cn("text-lg font-semibold", BT.textPrimary)}>Pick a convenient time</h2>
+          <p className={cn("mt-1 text-sm", BT.textMuted)}>Select a date and available time slot.</p>
         </div>
       )}
 
-      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className={cn("overflow-hidden rounded-2xl border shadow-sm", BT.borderDefault, BT.bgSurface)}>
         <div className="grid lg:grid-cols-2">
-          <div className="border-b border-slate-100 p-5 lg:border-b-0 lg:border-r lg:p-6">
+          <div className={cn("border-b p-5 lg:border-b-0 lg:border-r lg:p-6", BT.borderSubtle)}>
             {showMobileCompactDate ? (
               <div className="lg:hidden">
                 {compactDateNav}
-                <p className="mt-2 text-center text-xs text-slate-500">Tap date to open calendar</p>
+                <p className={cn("mt-2 text-center text-xs", BT.textMuted)}>Tap date to open calendar</p>
               </div>
             ) : null}
 

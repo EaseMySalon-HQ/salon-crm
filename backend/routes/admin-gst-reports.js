@@ -321,6 +321,7 @@ router.post(
 
       const rows = await Invoice.find(filter)
         .sort({ invoiceDate: 1, invoiceNumber: 1 })
+        .limit(10000)
         .lean();
 
       const XLSX = require('xlsx');

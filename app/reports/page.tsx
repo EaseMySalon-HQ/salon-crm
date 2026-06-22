@@ -20,26 +20,39 @@ import { PageSkeleton } from "@/components/loading"
 function ReportsTabsBody() {
   const { user, hasPermission } = useAuth()
   const { hasAccess: canIncentiveManagement, isLoading: entitlementsLoading } = useFeature("incentive_management")
+  const { hasAccess: canMembership, isLoading: membershipEntitlementsLoading } = useFeature("membership")
+  const { hasAccess: canPackages, isLoading: packagesEntitlementsLoading } = useFeature("packages")
   const { hasAccess: canWhatsAppIntegration, isLoading: whatsAppEntitlementsLoading } =
     useFeature("whatsapp_integration")
   const router = useRouter()
   const searchParams = useSearchParams()
 
   const canViewFinancialReports = !user || hasPermission("reports", "view_financial_reports")
+  const canViewMembershipReports =
+    canViewFinancialReports && !membershipEntitlementsLoading && canMembership
   const canViewStaffCommission =
     (!user || hasPermission("reports", "view_staff_commission")) &&
     !entitlementsLoading &&
     canIncentiveManagement
-  const canViewPackageReports = !user || hasPermission("packages", "view")
+  const canViewPackageReports =
+    (!user || hasPermission("packages", "view")) && !packagesEntitlementsLoading && canPackages
 
   const allowedTabs = useMemo(() => {
     const t: string[] = []
-    if (canViewFinancialReports) t.push("sales", "membership", "expense")
+    if (canViewFinancialReports) t.push("sales", "expense")
+    if (canViewMembershipReports) t.push("membership")
     if (canViewStaffCommission) t.push("staff")
     if (canViewPackageReports) t.push("package")
     if (!whatsAppEntitlementsLoading && canWhatsAppIntegration) t.push("messages")
     return t
-  }, [canViewFinancialReports, canViewStaffCommission, canViewPackageReports, canWhatsAppIntegration, whatsAppEntitlementsLoading])
+  }, [
+    canViewFinancialReports,
+    canViewMembershipReports,
+    canViewStaffCommission,
+    canViewPackageReports,
+    canWhatsAppIntegration,
+    whatsAppEntitlementsLoading,
+  ])
 
   const tabCount = allowedTabs.length
 
@@ -115,13 +128,15 @@ function ReportsTabsBody() {
                     <TrendingUp className="h-4 w-4 mr-2 shrink-0" />
                     Sales
                   </TabsTrigger>
-                  <TabsTrigger
-                    value="membership"
-                    className="data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
-                  >
-                    <CreditCard className="h-4 w-4 mr-2 shrink-0" />
-                    Membership
-                  </TabsTrigger>
+                  {canViewMembershipReports ? (
+                    <TabsTrigger
+                      value="membership"
+                      className="data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
+                    >
+                      <CreditCard className="h-4 w-4 mr-2 shrink-0" />
+                      Membership
+                    </TabsTrigger>
+                  ) : null}
                   <TabsTrigger
                     value="expense"
                     className="data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
@@ -178,7 +193,7 @@ function ReportsTabsBody() {
                 </TabsContent>
 
                 <TabsContent value="membership" className="space-y-6">
-                  {activeTab === "membership" && (
+                  {activeTab === "membership" && canViewMembershipReports && (
                     <Card className="border-0 shadow-sm bg-slate-50/50">
                       <CardContent className="pt-6">
                         <MembershipReport />

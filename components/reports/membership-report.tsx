@@ -302,17 +302,17 @@ export function MembershipReport() {
     <div className="space-y-8">
       {/* Filter Bar – above cards */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-        <div className="p-6">
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 lg:gap-6">
-            <div className="flex flex-wrap items-center gap-3 sm:gap-4">
+        <div className="p-4 sm:p-6">
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start xl:gap-6">
+            <div className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-2 sm:gap-3 md:grid-cols-4">
               <Input
                 placeholder="Search members..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-52 border-slate-200 focus:border-blue-500 focus:ring-blue-500"
+                className="col-span-2 h-10 w-full min-w-0 border-slate-200 focus:border-blue-500 focus:ring-blue-500 sm:col-span-1"
               />
               <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as MembershipStatusFilter)}>
-                <SelectTrigger className="w-[160px] border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                <SelectTrigger className="h-10 w-full min-w-0 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                   <SelectValue placeholder="Status" />
                 </SelectTrigger>
                 <SelectContent>
@@ -323,7 +323,7 @@ export function MembershipReport() {
                 </SelectContent>
               </Select>
               <Select value={datePeriod} onValueChange={(v) => setDatePeriod(v as DatePeriod)}>
-                <SelectTrigger className="w-[180px] border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                <SelectTrigger className="h-10 w-full min-w-0 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                   <SelectValue placeholder="Date period" />
                 </SelectTrigger>
                 <SelectContent>
@@ -336,7 +336,7 @@ export function MembershipReport() {
                 </SelectContent>
               </Select>
               <Select value={planFilter} onValueChange={setPlanFilter}>
-                <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                <SelectTrigger className="h-10 w-full min-w-0 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                   <SelectValue placeholder="All Plans" />
                 </SelectTrigger>
                 <SelectContent>
@@ -349,10 +349,10 @@ export function MembershipReport() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-3">
               <Sheet open={manageDrawerOpen} onOpenChange={setManageDrawerOpen}>
                 <SheetTrigger asChild>
-                  <Button variant="outline" size="sm" className="border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                  <Button variant="outline" size="sm" className="whitespace-nowrap border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                     <Settings className="h-4 w-4 mr-2" />
                     Manage Plans
                   </Button>
@@ -369,7 +369,7 @@ export function MembershipReport() {
               </Sheet>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 shadow-md hover:shadow-lg transition-all duration-300 rounded-lg font-medium">
+                  <Button className="h-10 whitespace-nowrap bg-blue-600 px-4 py-2 font-medium text-white shadow-md transition-all duration-300 hover:bg-blue-700 hover:shadow-lg sm:px-6 sm:py-2.5 rounded-lg">
                     <Download className="h-4 w-4 mr-2" />
                     Export Report
                     <ChevronDown className="h-4 w-4 ml-2" />
@@ -390,41 +390,41 @@ export function MembershipReport() {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card className="border-slate-200/80">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-slate-600">Active Members</CardTitle>
-            <div className="p-2 bg-indigo-50 rounded-lg">
+      <div className="grid min-w-0 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3">
+        <Card className="min-w-0 overflow-hidden border-slate-200/80">
+          <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0 pb-2">
+            <CardTitle className="min-w-0 flex-1 text-sm font-medium leading-snug text-slate-600 break-words">Active Members</CardTitle>
+            <div className="shrink-0 rounded-lg bg-indigo-50 p-2">
               <CreditCard className="h-4 w-4 text-indigo-600" />
             </div>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-slate-900">{stats.totalActiveMembers}</div>
-            <p className="text-xs text-slate-500 mt-1">With active membership</p>
+            <div className="text-xl font-bold text-slate-900 sm:text-2xl">{stats.totalActiveMembers}</div>
+            <p className="mt-1 text-xs leading-snug text-slate-500 break-words">With active membership</p>
           </CardContent>
         </Card>
-        <Card className="border-slate-200/80">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-slate-600">Membership Revenue</CardTitle>
-            <div className="p-2 bg-emerald-50 rounded-lg">
+        <Card className="min-w-0 overflow-hidden border-slate-200/80">
+          <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0 pb-2">
+            <CardTitle className="min-w-0 flex-1 text-sm font-medium leading-snug text-slate-600 break-words">Membership Revenue</CardTitle>
+            <div className="shrink-0 rounded-lg bg-emerald-50 p-2">
               <DollarSign className="h-4 w-4 text-emerald-600" />
             </div>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-slate-900">{formatAmount(filteredMembershipRevenue)}</div>
-            <p className="text-xs text-slate-500 mt-1">Plan prices for the filtered list (same as table)</p>
+            <div className="text-xl font-bold text-slate-900 sm:text-2xl">{formatAmount(filteredMembershipRevenue)}</div>
+            <p className="mt-1 text-xs leading-snug text-slate-500 break-words">Plan prices for the filtered list (same as table)</p>
           </CardContent>
         </Card>
-        <Card className="border-slate-200/80">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-slate-600">Expiring in 30 Days</CardTitle>
-            <div className="p-2 bg-amber-50 rounded-lg">
+        <Card className="min-w-0 overflow-hidden border-slate-200/80 sm:col-span-2 lg:col-span-1">
+          <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0 pb-2">
+            <CardTitle className="min-w-0 flex-1 text-sm font-medium leading-snug text-slate-600 break-words">Expiring in 30 Days</CardTitle>
+            <div className="shrink-0 rounded-lg bg-amber-50 p-2">
               <CalendarDays className="h-4 w-4 text-amber-600" />
             </div>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-slate-900">{stats.membersExpiringIn30Days}</div>
-            <p className="text-xs text-slate-500 mt-1">Memberships expiring soon</p>
+            <div className="text-xl font-bold text-slate-900 sm:text-2xl">{stats.membersExpiringIn30Days}</div>
+            <p className="mt-1 text-xs leading-snug text-slate-500 break-words">Memberships expiring soon</p>
           </CardContent>
         </Card>
       </div>

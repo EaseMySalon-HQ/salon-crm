@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button"
 import { toast } from "@/components/ui/use-toast"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { BookingHero } from "@/components/public-booking/booking-hero"
+import { BookingThemeProvider } from "@/components/public-booking/booking-theme-context"
+import { BT } from "@/lib/booking-page-theme"
 import {
   BOOKING_HERO_INNER_WIDTH_CLASS,
   BOOKING_PAGE_MAIN_GRID_CLASS,
@@ -508,33 +510,35 @@ export function PublicBookingPage({ code }: PublicBookingPageProps) {
     ? MOBILE_CHECKOUT_STEP_HEADINGS
     : DESKTOP_CHECKOUT_STEP_HEADINGS
 
+  const themeId = profile?.bookingHeroTheme ?? null
+
   if (profileLoading) {
     return (
-      <div className="flex min-h-[60vh] flex-col items-center justify-center gap-3 text-slate-500">
-        <Loader2 className="h-8 w-8 animate-spin text-[#7C3AED]" />
-        <p className="text-sm">Loading booking page…</p>
-      </div>
+      <BookingThemeProvider themeId={themeId} className="flex min-h-screen w-full flex-col">
+        <div className={cn("flex min-h-[60vh] flex-col items-center justify-center gap-3", BT.textMuted)}>
+          <Loader2 className={cn("h-8 w-8 animate-spin", BT.textAccent)} />
+          <p className="text-sm">Loading booking page…</p>
+        </div>
+      </BookingThemeProvider>
     )
   }
 
   if (profileError || !profile) {
     const isRateLimited = profileErrorStatus === 429
     return (
-      <div className="mx-auto max-w-md px-4 py-16 text-center">
-        <h1 className="text-lg font-semibold text-slate-900">
-          {isRateLimited ? "Please try again" : "Booking unavailable"}
-        </h1>
-        <p className="mt-2 text-sm text-slate-500">{profileError || "This page is not available."}</p>
-        {isRateLimited && (
-          <Button
-            type="button"
-            className="mt-6 bg-[#7C3AED] hover:bg-[#6D28D9]"
-            onClick={() => setProfileReloadKey((k) => k + 1)}
-          >
-            Retry
-          </Button>
-        )}
-      </div>
+      <BookingThemeProvider themeId={themeId} className="flex min-h-screen w-full flex-col">
+        <div className="mx-auto max-w-md px-4 py-16 text-center">
+          <h1 className={cn("text-lg font-semibold", BT.textPrimary)}>
+            {isRateLimited ? "Please try again" : "Booking unavailable"}
+          </h1>
+          <p className={cn("mt-2 text-sm", BT.textMuted)}>{profileError || "This page is not available."}</p>
+          {isRateLimited && (
+            <Button type="button" className={cn("mt-6", BT.btnPrimary)} onClick={() => setProfileReloadKey((k) => k + 1)}>
+              Retry
+            </Button>
+          )}
+        </div>
+      </BookingThemeProvider>
     )
   }
 
@@ -566,7 +570,7 @@ export function PublicBookingPage({ code }: PublicBookingPageProps) {
   )
 
   return (
-    <div className="flex min-h-screen w-full flex-col">
+    <BookingThemeProvider themeId={themeId} className="flex min-h-screen w-full flex-col">
       {phase === "services" && <BookingHero profile={profile} />}
 
       <div className={`${BOOKING_HERO_INNER_WIDTH_CLASS} flex flex-1 flex-col`}>
@@ -654,7 +658,7 @@ export function PublicBookingPage({ code }: PublicBookingPageProps) {
                         />
                       </div>
                       <div>
-                        <h3 className="mb-4 text-base font-semibold text-slate-900">Date & time</h3>
+                        <h3 className={cn("mb-4 text-base font-semibold", BT.textPrimary)}>Date & time</h3>
                         <DateTimePicker
                           profile={profile}
                           selectedDate={selectedDate}
@@ -687,7 +691,7 @@ export function PublicBookingPage({ code }: PublicBookingPageProps) {
         </div>
 
         <aside className={cn("hidden lg:block lg:w-full", BOOKING_STICKY_COLUMN_CLASS)}>
-          <div className="flex max-h-[calc(100vh)] w-full flex-col bg-white">
+          <div className={cn("flex max-h-[calc(100vh)] w-full flex-col", BT.bgSurface)}>
             {cartPanel}
           </div>
         </aside>
@@ -757,6 +761,6 @@ export function PublicBookingPage({ code }: PublicBookingPageProps) {
         onOpenChange={setSuccessOpen}
         summary={successSummary}
       />
-    </div>
+    </BookingThemeProvider>
   )
 }

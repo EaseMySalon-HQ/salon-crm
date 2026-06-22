@@ -5,6 +5,7 @@ import { useParams } from "next/navigation"
 import { PackageNewPage } from "@/components/packages/package-new-page"
 import { ProtectedLayout } from "@/components/layout/protected-layout"
 import { ProtectedRoute } from "@/components/auth/protected-route"
+import { PlanFeaturePageGate } from "@/components/plan/plan-feature-page-gate"
 
 function PackageEditContent() {
   const params = useParams()
@@ -16,7 +17,13 @@ export default function PackageEditRoutePage() {
   return (
     <ProtectedRoute requiredModule="sales">
       <ProtectedLayout>
-        <PackageEditContent />
+        <PlanFeaturePageGate
+          featureId="packages"
+          title="Packages"
+          description="Multi-session packages and sellable bundles are available on Growth and Pro plans."
+        >
+          <PackageEditContent />
+        </PlanFeaturePageGate>
       </ProtectedLayout>
     </ProtectedRoute>
   )

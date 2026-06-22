@@ -9,8 +9,7 @@ import { useToast } from "@/hooks/use-toast"
 import { compressImageFile, SHOWCASE_IMAGE_MAX_CHARS } from "@/lib/compress-showcase-image"
 import {
   BOOKING_HERO_THEME_IDS,
-  BOOKING_HERO_THEMES,
-  DEFAULT_BOOKING_HERO_THEME,
+  resolveBookingHeroTheme,
   type BookingHeroThemeId,
 } from "@/lib/booking-hero-themes"
 import { cn } from "@/lib/utils"
@@ -30,7 +29,7 @@ type BookingShowcaseManagerProps = {
 export function BookingShowcaseManager({
   tagline,
   images,
-  heroTheme = DEFAULT_BOOKING_HERO_THEME,
+  heroTheme,
   disabled,
   onTaglineChange,
   onImagesChange,
@@ -92,7 +91,8 @@ export function BookingShowcaseManager({
     onImagesChange(next)
   }
 
-  const selectedTheme = BOOKING_HERO_THEMES[heroTheme]
+  const resolvedHeroTheme = resolveBookingHeroTheme(heroTheme)
+  const selectedTheme = resolvedHeroTheme
 
   return (
     <div className="space-y-5">
@@ -103,8 +103,8 @@ export function BookingShowcaseManager({
         </p>
         <div className="flex flex-wrap gap-2">
           {BOOKING_HERO_THEME_IDS.map((id) => {
-            const theme = BOOKING_HERO_THEMES[id]
-            const selected = heroTheme === id
+            const theme = resolveBookingHeroTheme(id)
+            const selected = resolvedHeroTheme.id === id
             return (
               <button
                 key={id}
@@ -123,7 +123,7 @@ export function BookingShowcaseManager({
               >
                 <div className="absolute inset-0" style={{ backgroundColor: theme.baseBg }}>
                   <div
-                    className={cn("h-full w-full", theme.mode === "light" ? "opacity-90" : "opacity-80")}
+                    className="h-full w-full opacity-90"
                     style={{ background: theme.overlay }}
                     aria-hidden
                   />

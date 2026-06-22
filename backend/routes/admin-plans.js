@@ -26,8 +26,9 @@ router.get('/config', authenticateAdmin, setupMainDatabase, checkAdminPermission
   try {
     const { PlanTemplate } = req.mainModels;
 
-    await planResolver.syncLegacyBusinessPlanIds();
-    await planResolver.syncBuiltInPlanTemplates();
+    // Read templates as stored — do not run sync here (it races with saves and
+    // previously re-merged static defaults over admin toggles).
+    await planResolver.refreshPlanTemplates();
 
     // Admin UI lists only the three canonical plan templates.
     const dbPlans = await PlanTemplate.find({
@@ -234,16 +235,15 @@ router.post('/templates', authenticateAdmin, setupMainDatabase, checkAdminPermis
 
     await template.save();
 
-    // Plan definitions changed — refresh the resolver cache and drop any
-    // per-business entitlement caches so tenants pick up the new plan.
-    planResolver.invalidate();
-    entitlementsCache.invalidateAll();
+    planResolver.upsertCachedTemplate(template.toObject());
+    await planResolver.invalidate();
+    await entitlementsCache.invalidateAll();
 
     res.json({
       success: true,
       message: 'Plan template created successfully',
       data: {
-        template,
+        template: template.toObject(),
       },
     });
   } catch (error) {
@@ -272,9 +272,8 @@ router.put('/templates/:planId', authenticateAdmin, setupMainDatabase, checkAdmi
       isActive,
     } = req.body;
 
-    const template = await PlanTemplate.findOne({ id: planId });
-    let doc = template;
-    if (!doc) {
+    const existing = await PlanTemplate.findOne({ id: planId });
+    if (!existing) {
       const configPlan = getPlanConfig(planId);
       if (!configPlan) {
         return res.status(404).json({
@@ -282,7 +281,7 @@ router.put('/templates/:planId', authenticateAdmin, setupMainDatabase, checkAdmi
           error: 'Plan template not found',
         });
       }
-      doc = new PlanTemplate({
+      const created = await PlanTemplate.create({
         id: planId,
         name: configPlan.name,
         description: configPlan.description || '',
@@ -306,36 +305,58 @@ router.put('/templates/:planId', authenticateAdmin, setupMainDatabase, checkAdmi
           updatedBy: req.admin._id,
         },
       });
+      planResolver.upsertCachedTemplate(created.toObject());
+      await planResolver.invalidate();
+      await entitlementsCache.invalidateAll();
+      return res.json({
+        success: true,
+        message: 'Plan template created successfully',
+        data: { template: created.toObject() },
+      });
     }
 
-    // Update fields
-    if (name !== undefined) doc.name = name;
-    if (description !== undefined) doc.description = description;
-    if (monthlyPrice !== undefined) doc.monthlyPrice = normalizeOptionalPrice(monthlyPrice);
-    if (yearlyPrice !== undefined) doc.yearlyPrice = normalizeOptionalPrice(yearlyPrice);
+    const $set = {
+      'metadata.updatedBy': req.admin._id,
+    };
+    if (name !== undefined) $set.name = name;
+    if (description !== undefined) $set.description = description;
+    if (monthlyPrice !== undefined) $set.monthlyPrice = normalizeOptionalPrice(monthlyPrice);
+    if (yearlyPrice !== undefined) $set.yearlyPrice = normalizeOptionalPrice(yearlyPrice);
     if (features !== undefined) {
-      doc.features = normalizePlanFeaturesForStorage(features);
+      $set.features = normalizePlanFeaturesForStorage(features);
     }
-    if (limits !== undefined) doc.limits = limits;
-    if (support !== undefined) doc.support = support;
-    if (isDefault !== undefined) doc.isDefault = isDefault;
-    if (isActive !== undefined) doc.isActive = isActive;
+    if (limits !== undefined) $set.limits = limits;
+    if (support !== undefined) $set.support = support;
+    if (isDefault !== undefined) $set.isDefault = isDefault;
+    if (isActive !== undefined) $set.isActive = isActive;
 
-    doc.metadata = doc.metadata || {};
-    doc.metadata.updatedBy = req.admin._id;
+    const doc = await PlanTemplate.findOneAndUpdate(
+      { id: planId },
+      { $set },
+      { new: true, runValidators: true },
+    );
 
-    await doc.save();
+    if (!doc) {
+      return res.status(404).json({
+        success: false,
+        error: 'Plan template not found',
+      });
+    }
 
-    // Feature toggles / limits changed — refresh resolver + per-business caches
-    // so the change takes effect immediately for all tenants on this plan.
-    planResolver.invalidate();
-    entitlementsCache.invalidateAll();
+    const saved = doc.toObject();
+    planResolver.upsertCachedTemplate(saved);
+    await planResolver.invalidate();
+    await entitlementsCache.invalidateAll();
+
+    logger.info(
+      `plan template "${planId}" saved with ${Array.isArray(saved.features) ? saved.features.length : 0} feature(s)`,
+    );
 
     res.json({
       success: true,
       message: 'Plan template updated successfully',
       data: {
-        template: doc,
+        template: saved,
       },
     });
   } catch (error) {
@@ -377,8 +398,8 @@ router.delete('/templates/:planId', authenticateAdmin, setupMainDatabase, checkA
       template.isActive = false;
       await template.save();
 
-      planResolver.invalidate();
-      entitlementsCache.invalidateAll();
+      await planResolver.invalidate();
+      await entitlementsCache.invalidateAll();
 
       return res.json({
         success: true,
@@ -391,8 +412,8 @@ router.delete('/templates/:planId', authenticateAdmin, setupMainDatabase, checkA
 
     await PlanTemplate.deleteOne({ id: planId });
 
-    planResolver.invalidate();
-    entitlementsCache.invalidateAll();
+    await planResolver.invalidate();
+    await entitlementsCache.invalidateAll();
 
     res.json({
       success: true,

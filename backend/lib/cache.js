@@ -115,6 +115,10 @@ async function invalidateMyBranchesCache(userId) {
   await cacheDel(myBranchesCacheKey(String(userId)));
 }
 
+async function invalidateAllBusinessPlanCaches() {
+  await cacheDel('business:plan:*');
+}
+
 module.exports = {
   cacheGet,
   cacheSet,
@@ -127,4 +131,5 @@ module.exports = {
   myBranchesCacheKey,
   invalidateTenantReadCaches,
   invalidateMyBranchesCache,
+  invalidateAllBusinessPlanCaches,
 };

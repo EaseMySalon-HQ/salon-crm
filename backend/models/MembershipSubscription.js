@@ -40,6 +40,7 @@ const membershipSubscriptionSchema = new mongoose.Schema({
 membershipSubscriptionSchema.index({ branchId: 1, customerId: 1, status: 1 });
 membershipSubscriptionSchema.index({ branchId: 1 });
 membershipSubscriptionSchema.index({ expiryDate: 1 });
+membershipSubscriptionSchema.index({ branchId: 1, status: 1, expiryDate: 1 }, { background: true });
 
 module.exports = {
   schema: membershipSubscriptionSchema,

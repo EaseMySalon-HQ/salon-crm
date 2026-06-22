@@ -90,9 +90,9 @@ async function refreshPlanTemplates() {
       lastLoadedAt = Date.now();
       logger.debug(`📦 plan-resolver: loaded ${templateCache.size} active plan template(s)`);
     } catch (error) {
-      // Never throw — entitlement resolution must degrade gracefully to the
-      // static config rather than failing the whole request.
-      logger.warn('plan-resolver: failed to refresh plan templates, using static config fallback:', error.message);
+      // Never throw — entitlement resolution must degrade gracefully. Keep the
+      // prior cache on failure so admin saves are not overwritten by static fallback.
+      logger.warn('plan-resolver: failed to refresh plan templates, keeping prior cache:', error.message);
     } finally {
       loadingPromise = null;
     }
@@ -141,13 +141,23 @@ function resolveAllPlans() {
 }
 
 /**
- * Invalidate the cache after an admin write. Triggers an immediate reload so
- * the next entitlement check reflects the change.
+ * Invalidate the cache after an admin write. Reloads templates immediately so
+ * the next entitlement check reflects the change (no static-config fallback window).
  */
-function invalidate() {
+async function invalidate() {
   lastLoadedAt = 0;
-  templateCache.clear();
-  void refreshPlanTemplates();
+  await refreshPlanTemplates();
+}
+
+/**
+ * Push a freshly saved template into the in-memory cache immediately (before the
+ * next full refresh completes). Ensures tenant gating picks up admin toggles at once.
+ */
+function upsertCachedTemplate(dbPlan) {
+  if (!dbPlan?.id) return;
+  const canonicalId = normalizePlanId(dbPlan.id);
+  templateCache.set(canonicalId, mergeTemplate({ ...dbPlan, id: canonicalId }));
+  lastLoadedAt = Date.now();
 }
 
 /**
@@ -254,7 +264,6 @@ async function syncBuiltInPlanTemplates() {
           );
           logger.info(`plan-resolver: reactivated plan template "${plan.id}"`);
         }
-        const staticFeatures = Array.isArray(plan.features) ? plan.features : [];
         const existingFeatures = Array.isArray(existing.features) ? existing.features : [];
         const normalizedExisting = normalizePlanFeaturesForStorage(existingFeatures);
         const legacyGmbPresent = GMB_LEGACY_IDS.some((id) => existingFeatures.includes(id));
@@ -268,17 +277,8 @@ async function syncBuiltInPlanTemplates() {
             `plan-resolver: collapsed legacy GMB features into gmb on "${plan.id}"`,
           );
         }
-        const missingFeatures = staticFeatures.filter((f) => !normalizedExisting.includes(f));
-        if (missingFeatures.length > 0) {
-          await PlanTemplate.updateOne(
-            { id: plan.id },
-            { $addToSet: { features: { $each: missingFeatures } } },
-          );
-          featuresMerged = true;
-          logger.info(
-            `plan-resolver: added ${missingFeatures.length} feature(s) to "${plan.id}": ${missingFeatures.join(', ')}`,
-          );
-        }
+        // Do not re-add static-config features to existing templates. Admin edits
+        // in Platform → Plans are authoritative; auto-merge was undoing toggles off.
         continue;
       }
       await PlanTemplate.create({
@@ -306,7 +306,7 @@ async function syncBuiltInPlanTemplates() {
 
     if (featuresMerged) {
       try {
-        require('./entitlements-cache').invalidateAll();
+        await require('./entitlements-cache').invalidateAll();
       } catch {
         /* non-fatal */
       }
@@ -332,5 +332,6 @@ module.exports = {
   syncLegacyBusinessPlanIds,
   syncBuiltInPlanTemplates,
   invalidate,
+  upsertCachedTemplate,
   warmup,
 };

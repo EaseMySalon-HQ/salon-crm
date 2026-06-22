@@ -56,6 +56,8 @@ const modelFactory = require('./models/model-factory');
 // Central feature-gating registry (cache-backed; see config/feature-routes.js)
 const { gate, FEATURE } = require('./config/feature-routes');
 const INCENTIVE_MANAGEMENT = gate(FEATURE.INCENTIVE_MANAGEMENT);
+const MEMBERSHIP = gate(FEATURE.MEMBERSHIP);
+const LEAD_MANAGEMENT = gate(FEATURE.LEAD_MANAGEMENT);
 const { setupBusinessDatabase, setupMainDatabase } = require('./middleware/business-db');
 const { WALK_IN_PHONE } = require('./lib/ensure-walk-in-client');
 
@@ -3205,115 +3207,13 @@ app.get('/api/clients/stats', authenticateToken, requireStaff, setupBusinessData
       throw countError;
     }
     
-    // Fetch all clients with just lastVisit field for accurate calculation
-    logger.debug('Fetching all clients with lastVisit field...');
-    let allClients = [];
-    try {
-      // Use lean() for performance but handle dates carefully
-      allClients = await Client.find({}).select('lastVisit').lean();
-      logger.debug('Fetched %d clients', allClients.length);
-      
-      // Convert dates from MongoDB format to JavaScript Date objects
-      // When using lean(), dates come as strings or ISODate objects
-      allClients = allClients.map(client => {
-        if (client.lastVisit) {
-          // Handle MongoDB ISODate or string dates
-          if (client.lastVisit instanceof Date) {
-            return client;
-          } else if (typeof client.lastVisit === 'string') {
-            const date = new Date(client.lastVisit);
-            if (!isNaN(date.getTime())) {
-              return { ...client, lastVisit: date };
-            }
-          } else if (client.lastVisit.$date) {
-            // Handle MongoDB extended JSON format
-            return { ...client, lastVisit: new Date(client.lastVisit.$date) };
-          }
-        }
-        return client;
-      });
-    } catch (fetchError) {
-      logger.error('Error fetching clients for stats: %s', fetchError.message, { stack: fetchError.stack, name: fetchError.name });
-      throw fetchError;
-    }
-    
-    if (allClients.length === 0) {
-      logger.debug('No clients found, returning zero stats');
-      return res.json({
-        success: true,
-        data: {
-          totalCustomers: 0,
-          activeCustomers: 0,
-          inactiveCustomers: 0
-        }
-      });
-    }
-    
-    // Sample first 3 clients for debugging
-    try {
-      logger.debug('Sample clients: %o', allClients.slice(0, 3).map(c => ({
-        hasLastVisit: !!c.lastVisit,
-        lastVisitType: c.lastVisit ? typeof c.lastVisit : 'null',
-        lastVisitValue: c.lastVisit ? c.lastVisit.toString() : null,
-        isDate: c.lastVisit instanceof Date
-      })));
-    } catch (logError) {
-      logger.warn('Error logging sample clients:', logError);
-    }
-    
-    // Count active: lastVisit exists, is a Date, AND >= threeMonthsAgo
-    let activeCount = 0;
-    let inactiveCount = 0;
-    let nullCount = 0;
-    let oldVisitCount = 0;
-    let invalidDateCount = 0;
-    
-    for (const client of allClients) {
-      try {
-        if (!client.lastVisit || client.lastVisit === null || client.lastVisit === undefined) {
-          // No lastVisit = inactive
-          inactiveCount++;
-          nullCount++;
-        } else {
-          // Convert to Date if it's not already
-          let lastVisitDate = client.lastVisit;
-          if (!(lastVisitDate instanceof Date)) {
-            // Try to convert string or other format to Date
-            lastVisitDate = new Date(lastVisitDate);
-            // Check if conversion was successful
-            if (isNaN(lastVisitDate.getTime())) {
-              // Invalid date = inactive
-              inactiveCount++;
-              invalidDateCount++;
-              continue;
-            }
-          }
-          
-          // Has a valid Date - compare
-          if (lastVisitDate >= threeMonthsAgo) {
-            activeCount++;
-          } else {
-            inactiveCount++;
-            oldVisitCount++;
-          }
-        }
-      } catch (clientError) {
-        logger.warn('Error processing client:', clientError);
-        inactiveCount++; // Default to inactive on error
-      }
-    }
-    
-    logger.debug('Client stats breakdown - Active: %d, Inactive: %d (null: %d, invalidDates: %d, oldVisits: %d), calculated: %d, dbTotal: %d',
-      activeCount, inactiveCount, nullCount, invalidDateCount, oldVisitCount, activeCount + inactiveCount, totalCustomers);
-    
-    let activeCustomers = activeCount;
-    let inactiveCustomers = inactiveCount;
-    
-    // Ensure they add up correctly (safety check)
-    if (activeCustomers + inactiveCustomers !== totalCustomers) {
-      logger.warn('Count mismatch! Adjusting inactive: %d vs %d', activeCustomers + inactiveCustomers, totalCustomers);
-      inactiveCustomers = Math.max(0, totalCustomers - activeCustomers);
-    }
+    // Count active clients via aggregation instead of loading every document
+    const [activeAgg] = await Client.aggregate([
+      { $match: { lastVisit: { $gte: threeMonthsAgo } } },
+      { $count: 'active' },
+    ]);
+    const activeCustomers = activeAgg ? activeAgg.active : 0;
+    const inactiveCustomers = Math.max(0, totalCustomers - activeCustomers);
     
     const result = {
       totalCustomers: Number(totalCustomers) || 0,
@@ -3668,7 +3568,7 @@ app.post('/api/clients/import', authenticateToken, setupBusinessDatabase, requir
 // ============================================
 
 // Get all leads with filters
-app.get('/api/leads', authenticateToken, setupBusinessDatabase, checkPermission('lead_management', 'view'), async (req, res) => {
+app.get('/api/leads', authenticateToken, setupBusinessDatabase, checkPermission('lead_management', 'view'), LEAD_MANAGEMENT, async (req, res) => {
   try {
     const { Lead } = req.businessModels;
     const { 
@@ -3749,7 +3649,7 @@ app.get('/api/leads', authenticateToken, setupBusinessDatabase, checkPermission(
 });
 
 // Get single lead by ID
-app.get('/api/leads/:id', authenticateToken, setupBusinessDatabase, checkPermission('lead_management', 'view'), async (req, res) => {
+app.get('/api/leads/:id', authenticateToken, setupBusinessDatabase, checkPermission('lead_management', 'view'), LEAD_MANAGEMENT, async (req, res) => {
   try {
     const { Lead } = req.businessModels;
     const lead = await Lead.findOne({ 
@@ -3779,7 +3679,7 @@ app.get('/api/leads/:id', authenticateToken, setupBusinessDatabase, checkPermiss
 });
 
 // Get lead activities
-app.get('/api/leads/:id/activities', authenticateToken, setupBusinessDatabase, checkPermission('lead_management', 'view'), async (req, res) => {
+app.get('/api/leads/:id/activities', authenticateToken, setupBusinessDatabase, checkPermission('lead_management', 'view'), LEAD_MANAGEMENT, async (req, res) => {
   try {
     const { Lead, LeadActivity } = req.businessModels;
     
@@ -3819,7 +3719,7 @@ app.get('/api/leads/:id/activities', authenticateToken, setupBusinessDatabase, c
 });
 
 // Create new lead
-app.post('/api/leads', authenticateToken, setupBusinessDatabase, checkPermission('lead_management', 'create'), async (req, res) => {
+app.post('/api/leads', authenticateToken, setupBusinessDatabase, checkPermission('lead_management', 'create'), LEAD_MANAGEMENT, async (req, res) => {
   try {
     const { Lead } = req.businessModels;
     const { 
@@ -3966,7 +3866,7 @@ app.post('/api/leads', authenticateToken, setupBusinessDatabase, checkPermission
 });
 
 // Update lead
-app.put('/api/leads/:id', authenticateToken, setupBusinessDatabase, checkPermission('lead_management', 'edit'), async (req, res) => {
+app.put('/api/leads/:id', authenticateToken, setupBusinessDatabase, checkPermission('lead_management', 'edit'), LEAD_MANAGEMENT, async (req, res) => {
   try {
     const { Lead } = req.businessModels;
     const { 
@@ -4160,7 +4060,7 @@ app.put('/api/leads/:id', authenticateToken, setupBusinessDatabase, checkPermiss
 });
 
 // Update lead status
-app.patch('/api/leads/:id/status', authenticateToken, setupBusinessDatabase, checkPermission('lead_management', 'edit'), async (req, res) => {
+app.patch('/api/leads/:id/status', authenticateToken, setupBusinessDatabase, checkPermission('lead_management', 'edit'), LEAD_MANAGEMENT, async (req, res) => {
   try {
     const { Lead } = req.businessModels;
     const { status } = req.body;
@@ -4218,7 +4118,7 @@ app.patch('/api/leads/:id/status', authenticateToken, setupBusinessDatabase, che
 });
 
 // Convert lead to appointment
-app.post('/api/leads/:id/convert-to-appointment', authenticateToken, setupBusinessDatabase, checkPermission('lead_management', 'edit'), async (req, res) => {
+app.post('/api/leads/:id/convert-to-appointment', authenticateToken, setupBusinessDatabase, checkPermission('lead_management', 'edit'), LEAD_MANAGEMENT, async (req, res) => {
   try {
     const { Lead, Appointment, Client, Service } = req.businessModels;
     const { date, time, staffId, staffAssignments, notes: appointmentNotes } = req.body;
@@ -4387,7 +4287,7 @@ app.post('/api/leads/:id/convert-to-appointment', authenticateToken, setupBusine
 });
 
 // Delete lead
-app.delete('/api/leads/:id', authenticateToken, setupBusinessDatabase, checkPermission('lead_management', 'delete'), async (req, res) => {
+app.delete('/api/leads/:id', authenticateToken, setupBusinessDatabase, checkPermission('lead_management', 'delete'), LEAD_MANAGEMENT, async (req, res) => {
   try {
     const { Lead } = req.businessModels;
     const deletedLead = await Lead.findOneAndDelete({ 
@@ -4529,7 +4429,7 @@ app.post('/api/services', authenticateToken, setupBusinessDatabase, requirePermi
       return res.status(201).json({ success: true, data: savedService });
     }
 
-    const { name, category, duration, price, fullPrice, offerPrice, taxApplicable, hsnSacCode, description, isAutoConsumptionEnabled } = body;
+    const { name, category, duration, price, fullPrice, offerPrice, taxApplicable, hsnSacCode, description, isAutoConsumptionEnabled, showInOnlineBooking } = body;
 
     const full = fullPrice != null ? parseFloat(fullPrice) : (price != null ? parseFloat(price) : null);
     const offer = offerPrice != null ? parseFloat(offerPrice) : null;
@@ -4554,6 +4454,7 @@ app.post('/api/services', authenticateToken, setupBusinessDatabase, requirePermi
       description: description || '',
       isActive: true,
       isAutoConsumptionEnabled: !!isAutoConsumptionEnabled,
+      showInOnlineBooking: showInOnlineBooking !== false,
       branchId: req.user.branchId,
       serviceKind: 'simple'
     });
@@ -4657,7 +4558,7 @@ app.put('/api/services/:id', authenticateToken, setupBusinessDatabase, requirePe
       });
     }
 
-    const { name, category, duration, price, fullPrice, offerPrice, taxApplicable, hsnSacCode, description, isActive, isAutoConsumptionEnabled } = body;
+    const { name, category, duration, price, fullPrice, offerPrice, taxApplicable, hsnSacCode, description, isActive, isAutoConsumptionEnabled, showInOnlineBooking } = body;
 
     const full = fullPrice != null ? parseFloat(fullPrice) : (price != null ? parseFloat(price) : null);
     const offer = offerPrice != null ? parseFloat(offerPrice) : null;
@@ -4684,6 +4585,7 @@ app.put('/api/services/:id', authenticateToken, setupBusinessDatabase, requirePe
       serviceKind: 'simple',
     };
     if (isAutoConsumptionEnabled !== undefined) updatePayload.isAutoConsumptionEnabled = !!isAutoConsumptionEnabled;
+    if (showInOnlineBooking !== undefined) updatePayload.showInOnlineBooking = showInOnlineBooking !== false;
 
     const updatedService = await Service.findByIdAndUpdate(
       req.params.id,
@@ -4947,6 +4849,7 @@ app.post('/api/services/import', authenticateToken, setupBusinessDatabase, requi
           taxApplicable: taxApplicable,
           hsnSacCode: mappedData.hsnSacCode ? String(mappedData.hsnSacCode).trim() : '',
           isAutoConsumptionEnabled: isAutoConsumptionEnabled,
+          showInOnlineBooking: true,
           branchId: req.user.branchId,
           isActive: true
         };
@@ -5000,7 +4903,7 @@ app.post('/api/services/import', authenticateToken, setupBusinessDatabase, requi
 
 // ========== Membership routes ==========
 // Plan APIs
-app.get('/api/membership/plans', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.get('/api/membership/plans', authenticateToken, setupBusinessDatabase, requireStaff, MEMBERSHIP, async (req, res) => {
   try {
     const { MembershipPlan } = req.businessModels;
     const { isActive } = req.query;
@@ -5015,7 +4918,7 @@ app.get('/api/membership/plans', authenticateToken, setupBusinessDatabase, requi
 });
 
 // List active subscriptions (for membership report filter)
-app.get('/api/membership/subscriptions', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.get('/api/membership/subscriptions', authenticateToken, setupBusinessDatabase, requireStaff, MEMBERSHIP, async (req, res) => {
   try {
     const { MembershipSubscription, Client, MembershipPlan } = req.businessModels;
     const { planId, search, status = 'ACTIVE', dateFrom, dateTo, page: pageQ, limit: limitQ } = req.query;
@@ -5124,7 +5027,7 @@ app.get('/api/membership/subscriptions', authenticateToken, setupBusinessDatabas
   }
 });
 
-app.post('/api/membership/plans', authenticateToken, setupBusinessDatabase, requirePermission('membership', 'create'), async (req, res) => {
+app.post('/api/membership/plans', authenticateToken, setupBusinessDatabase, requirePermission('membership', 'create'), MEMBERSHIP, async (req, res) => {
   try {
     const { MembershipPlan, Service } = req.businessModels;
     const {
@@ -5231,7 +5134,7 @@ app.post('/api/membership/plans', authenticateToken, setupBusinessDatabase, requ
   }
 });
 
-app.put('/api/membership/plans/:id', authenticateToken, setupBusinessDatabase, requirePermission('membership', 'edit'), async (req, res) => {
+app.put('/api/membership/plans/:id', authenticateToken, setupBusinessDatabase, requirePermission('membership', 'edit'), MEMBERSHIP, async (req, res) => {
   try {
     const { MembershipPlan, Service } = req.businessModels;
     const planId = req.params.id;
@@ -5329,7 +5232,7 @@ app.put('/api/membership/plans/:id', authenticateToken, setupBusinessDatabase, r
   }
 });
 
-app.patch('/api/membership/plans/:id/toggle', authenticateToken, setupBusinessDatabase, requirePermission('membership', 'edit'), async (req, res) => {
+app.patch('/api/membership/plans/:id/toggle', authenticateToken, setupBusinessDatabase, requirePermission('membership', 'edit'), MEMBERSHIP, async (req, res) => {
   try {
     const { MembershipPlan } = req.businessModels;
     const planId = req.params.id;
@@ -5360,7 +5263,7 @@ app.patch('/api/membership/plans/:id/toggle', authenticateToken, setupBusinessDa
 });
 
 // Subscription APIs
-app.post('/api/membership/subscribe', authenticateToken, setupBusinessDatabase, requirePermission('membership', 'create'), async (req, res) => {
+app.post('/api/membership/subscribe', authenticateToken, setupBusinessDatabase, requirePermission('membership', 'create'), MEMBERSHIP, async (req, res) => {
   try {
     const { MembershipPlan, MembershipSubscription, Client } = req.businessModels;
     const { customerId, planId } = req.body;
@@ -5427,7 +5330,7 @@ app.post('/api/membership/subscribe', authenticateToken, setupBusinessDatabase, 
   }
 });
 
-app.get('/api/membership/customer/:customerId', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.get('/api/membership/customer/:customerId', authenticateToken, setupBusinessDatabase, requireStaff, MEMBERSHIP, async (req, res) => {
   try {
     const { MembershipPlan, MembershipSubscription, MembershipUsage, Service, Sale } = req.businessModels;
     const { customerId } = req.params;
@@ -5563,7 +5466,7 @@ app.get('/api/membership/customer/:customerId', authenticateToken, setupBusiness
 });
 
 // Redeem API (called during billing or by frontend)
-app.post('/api/membership/redeem', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+app.post('/api/membership/redeem', authenticateToken, setupBusinessDatabase, requireStaff, MEMBERSHIP, async (req, res) => {
   try {
     const { MembershipPlan, MembershipSubscription, MembershipUsage } = req.businessModels;
     const { customerId, serviceId, staffId, billingId } = req.body;
@@ -10816,7 +10719,8 @@ app.get('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, r
     const receipts = await Receipt.find(query)
       .skip((pageNum - 1) * limitNum)
       .limit(limitNum)
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
 
     res.json({
       success: true,
@@ -12098,7 +12002,7 @@ app.get('/api/receipts/client/:clientId', authenticateToken, setupBusinessDataba
   const { Receipt } = req.businessModels;
   
   try {
-    const clientReceipts = await Receipt.find({ clientId }).sort({ createdAt: -1 });
+    const clientReceipts = await Receipt.find({ clientId }).sort({ createdAt: -1 }).limit(200).lean();
     
     res.json({
       success: true,
@@ -12138,9 +12042,11 @@ app.get('/api/reports/dashboard', authenticateToken, setupBusinessDatabase, requ
     const totalReceipts = await Receipt.countDocuments();
     logger.debug('Total receipts:', totalReceipts);
 
-    // Calculate total revenue from receipts
-    const receipts = await Receipt.find();
-    const totalRevenue = receipts.reduce((sum, receipt) => sum + receipt.total, 0);
+    // Calculate total revenue from receipts via aggregation
+    const [revenueAgg] = await Receipt.aggregate([
+      { $group: { _id: null, total: { $sum: { $ifNull: ['$total', 0] } } } },
+    ]);
+    const totalRevenue = revenueAgg ? revenueAgg.total : 0;
     logger.debug('Total revenue:', totalRevenue);
 
     // Membership metrics — active = ACTIVE and (no expiry or expiry on/after today)
@@ -12148,10 +12054,13 @@ app.get('/api/reports/dashboard', authenticateToken, setupBusinessDatabase, requ
     today.setHours(0, 0, 0, 0);
     const membershipActiveFilter = activeMembershipMongoMatch(today);
     const totalActiveMembers = await MembershipSubscription.countDocuments(membershipActiveFilter);
-    const activeSubscriptions = await MembershipSubscription.find(membershipActiveFilter)
-      .populate('planId', 'price')
-      .lean();
-    const membershipRevenue = activeSubscriptions.reduce((sum, sub) => sum + (sub.planId?.price || 0), 0);
+    const [memRevenueAgg] = await MembershipSubscription.aggregate([
+      { $match: membershipActiveFilter },
+      { $lookup: { from: 'membershipplans', localField: 'planId', foreignField: '_id', as: 'plan' } },
+      { $unwind: { path: '$plan', preserveNullAndEmptyArrays: true } },
+      { $group: { _id: null, total: { $sum: { $ifNull: ['$plan.price', 0] } } } },
+    ]);
+    const membershipRevenue = memRevenueAgg ? memRevenueAgg.total : 0;
     const in30Days = new Date(today);
     in30Days.setDate(in30Days.getDate() + 30);
     const membersExpiringIn30Days = await MembershipSubscription.countDocuments(
@@ -12195,7 +12104,9 @@ app.get('/api/dashboard/init', authenticateToken, setupBusinessDatabase, require
       chartRangeRaw === 'last7days' || chartRangeRaw === 'last30days' ? chartRangeRaw : 'year';
     const metricsRangeRaw = typeof req.query.metricsRange === 'string' ? req.query.metricsRange.trim() : '';
     const metricsRange = metricsRangeRaw === 'last7days' ? 'last7days' : 'today';
-    const cacheVariant = `chart:${chartRange}|metrics:${metricsRange}`;
+    const appointmentsRangeRaw = typeof req.query.appointmentsRange === 'string' ? req.query.appointmentsRange.trim() : '';
+    const appointmentsRange = appointmentsRangeRaw === 'next7days' ? 'next7days' : 'today';
+    const cacheVariant = `chart:${chartRange}|metrics:${metricsRange}|appts:${appointmentsRange}`;
     const redisKey = dashboardInitCacheKey(req.user.branchId, cacheVariant);
     const redisTtlSec = parseInt(process.env.DASHBOARD_REDIS_TTL_SEC, 10) || 60;
 
@@ -12206,6 +12117,7 @@ app.get('/api/dashboard/init', authenticateToken, setupBusinessDatabase, require
         user: req.user,
         chartRange,
         metricsRange,
+        appointmentsRange,
       });
       setDashboardCache(req.user.branchId, fresh, undefined, cacheVariant);
       void cacheSet(redisKey, fresh, redisTtlSec);
@@ -17904,9 +17816,9 @@ app.get('/api/reports/appointment-list', authenticateToken, setupBusinessDatabas
       }
       if (status && status !== 'all') {
         if (status === 'cancelled') {
-          saleQuery.status = new RegExp('^cancelled$', 'i');
+          saleQuery.status = { $in: ['cancelled', 'Cancelled'] };
         } else if (status === 'completed') {
-          saleQuery.status = new RegExp('^completed$', 'i');
+          saleQuery.status = { $in: ['completed', 'Completed'] };
         }
         // new, arrived, started don't apply to sales - walk-ins are typically completed
       }

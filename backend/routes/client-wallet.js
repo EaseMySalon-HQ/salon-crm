@@ -11,6 +11,7 @@ const router = express.Router();
 const { logger } = require('../utils/logger');
 const { authenticateToken, requireManager, requireStaff } = require('../middleware/auth');
 const { setupBusinessDatabase, setupMainDatabase } = require('../middleware/business-db');
+const { gate, FEATURE } = require('../config/feature-routes');
 const walletSvc = require('../services/client-wallet-service');
 
 function ok(res, data, message = 'Success') {
@@ -21,12 +22,12 @@ function fail(res, status, message, errors = []) {
   return res.status(status).json({ success: false, data: null, message, errors });
 }
 
-const authStaff = [authenticateToken, setupBusinessDatabase, requireStaff];
-const authManager = [authenticateToken, setupBusinessDatabase, requireManager];
-const authMainStaff = [authenticateToken, setupMainDatabase, requireStaff];
-const authMainManager = [authenticateToken, setupMainDatabase, requireManager];
-const authMainBusinessStaff = [authenticateToken, setupMainDatabase, setupBusinessDatabase, requireStaff];
-const authMainBusinessManager = [authenticateToken, setupMainDatabase, setupBusinessDatabase, requireManager];
+const authStaff = [authenticateToken, setupBusinessDatabase, requireStaff, gate(FEATURE.PREPAID_WALLET)];
+const authManager = [authenticateToken, setupBusinessDatabase, requireManager, gate(FEATURE.PREPAID_WALLET)];
+const authMainStaff = [authenticateToken, setupMainDatabase, requireStaff, gate(FEATURE.PREPAID_WALLET)];
+const authMainManager = [authenticateToken, setupMainDatabase, requireManager, gate(FEATURE.PREPAID_WALLET)];
+const authMainBusinessStaff = [authenticateToken, setupMainDatabase, setupBusinessDatabase, requireStaff, gate(FEATURE.PREPAID_WALLET)];
+const authMainBusinessManager = [authenticateToken, setupMainDatabase, setupBusinessDatabase, requireManager, gate(FEATURE.PREPAID_WALLET)];
 
 async function loadClientWalletSettingsPayload(req) {
   const Business = req.mainModels.Business;

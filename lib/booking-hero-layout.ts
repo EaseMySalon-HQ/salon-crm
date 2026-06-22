@@ -12,7 +12,7 @@ export const BOOKING_PAGE_MAIN_GRID_CLASS =
 
 /** Shared sticky sub-header row (Categories / Search / Cart) on the booking page. */
 export const BOOKING_COLUMN_HEADER_CLASS =
-  "sticky top-0 z-30 flex h-14 shrink-0 items-center border-b border-slate-100 bg-white/95 backdrop-blur-sm"
+  "sticky top-0 z-30 flex h-14 shrink-0 items-center border-b border-[color:var(--booking-border-subtle)] bg-[color-mix(in_srgb,var(--booking-surface)_95%,transparent)] backdrop-blur-sm"
 
 /** Max height for a sticky booking column (full viewport). */
 export const BOOKING_STICKY_COLUMN_CLASS =

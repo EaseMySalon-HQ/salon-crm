@@ -332,6 +332,9 @@ const ALL_SETTING_ITEMS: SettingsItem[] = SETTINGS_SECTIONS.flatMap((s) => s.ite
 /** Plan features required to open a settings module (beyond RBAC). */
 const SETTINGS_PLAN_FEATURES: Partial<Record<SettingsSectionId, string>> = {
   feedback: "feedback_management",
+  membership: "membership",
+  packages: "packages",
+  "prepaid-wallet": "prepaid_wallet",
   "reward-points": "reward_points",
   "whatsapp-integration": "whatsapp_integration",
   "google-business": "gmb",

@@ -15,6 +15,10 @@ import { FollowUpDateField } from "@/components/admin/leads/follow-up-date-field
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { useToast } from "@/hooks/use-toast"
 import type { AdminLeadAssignee } from "@/lib/admin-api"
+import {
+  getPlatformLeadDemoNotes,
+  getPlatformLeadInterestedInDisplay,
+} from "@/lib/admin-lead-permissions"
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Name must be at least 2 characters." }),
@@ -78,12 +82,12 @@ export function AdminLeadForm({
         email: lead.email || "",
         source: lead.source || "walk-in",
         status: lead.status || "new",
-        interestedIn: lead.interestedIn || "",
+        interestedIn: getPlatformLeadInterestedInDisplay(lead),
         assignedAdminId: assignedId || "none",
         followUpDate: lead.followUpDate
           ? new Date(lead.followUpDate).toISOString().split("T")[0]
           : "",
-        notes: lead.notes || "",
+        notes: getPlatformLeadDemoNotes(lead),
       })
     }
   }, [lead, form])
@@ -100,6 +104,9 @@ export function AdminLeadForm({
     }
   }, [status, isEditMode, form])
 
+  const leadDemoNotes = lead ? getPlatformLeadDemoNotes(lead) : ""
+  const showNotesField = status !== "new" || Boolean(leadDemoNotes)
+
   const onSubmit = async (values: z.infer<typeof formSchema>) => {
     try {
       setIsSubmitting(true)
@@ -107,7 +114,7 @@ export function AdminLeadForm({
       if (values.status !== "new") {
         notesPayload = values.notes || ""
       } else if (isEditMode) {
-        notesPayload = lead?.notes ?? ""
+        notesPayload = values.notes ?? leadDemoNotes
       }
 
       const payload = {
@@ -331,7 +338,7 @@ export function AdminLeadForm({
               />
             )}
 
-            {status !== "new" && (
+            {showNotesField && (
               <FormField
                 control={form.control}
                 name="notes"
@@ -342,7 +349,16 @@ export function AdminLeadForm({
                       Notes
                     </FormLabel>
                     <FormControl>
-                      <Textarea placeholder="Notes about this lead…" className="min-h-[100px]" {...field} />
+                      <Textarea
+                        placeholder={
+                          status === "new"
+                            ? "Message from demo booking form"
+                            : "Notes about this lead…"
+                        }
+                        className="min-h-[100px]"
+                        readOnly={status === "new" && Boolean(leadDemoNotes)}
+                        {...field}
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
