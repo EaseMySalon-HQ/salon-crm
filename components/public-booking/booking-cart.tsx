@@ -4,6 +4,7 @@ import { useMemo } from "react"
 import { Minus, Plus, ShoppingBag, ArrowRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { BT } from "@/lib/booking-page-theme"
 import { BOOKING_COLUMN_HEADER_CLASS } from "@/lib/booking-hero-layout"
 import type { CartLineItem } from "@/lib/public-booking-api"
 import { formatBookingPrice, formatDurationMinutes } from "@/lib/public-booking-api"
@@ -79,8 +80,9 @@ export function BookingCartPanel({
   const canAdjustQty = !!(onAddSame && onRemoveOne)
 
   const panelClass = cn(
-    "flex w-full flex-col bg-white",
-    !fullHeight && !compact && "rounded-2xl border border-slate-200/80 shadow-sm",
+    "flex w-full flex-col",
+    BT.bgSurface,
+    !fullHeight && !compact && cn("rounded-2xl border shadow-sm", BT.borderDefault),
     fullHeight && "max-h-[calc(100vh)] min-h-0 flex-col",
     compact && "border-0 shadow-none",
     className
@@ -91,11 +93,11 @@ export function BookingCartPanel({
       <div className={cn(panelClass, compact ? "p-5" : fullHeight ? "" : "p-6")}>
         <CartHeader count={0} compact={compact} fullHeight={fullHeight} />
         <div className="flex flex-1 flex-col items-center justify-center py-8 text-center">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-purple-50">
-            <ShoppingBag className="h-7 w-7 text-[#7C3AED]/60" />
+          <div className={cn("flex h-14 w-14 items-center justify-center rounded-2xl", BT.bgAccentSoft)}>
+            <ShoppingBag className={cn("h-7 w-7 opacity-60", BT.textAccent)} />
           </div>
-          <p className="mt-4 text-sm font-medium text-slate-700">Your cart is empty</p>
-          <p className="mt-1 max-w-[220px] text-xs leading-relaxed text-slate-400">
+          <p className={cn("mt-4 text-sm font-medium", BT.textSecondary)}>Your cart is empty</p>
+          <p className={cn("mt-1 max-w-[220px] text-xs leading-relaxed", BT.textSubtle)}>
             Browse categories and add services to build your appointment.
           </p>
         </div>
@@ -117,22 +119,18 @@ export function BookingCartPanel({
               : "max-h-[340px] overflow-y-auto px-4 py-3"
         )}
       >
-        <div className="divide-y divide-slate-100">
+        <div className={cn("divide-y", BT.divideSubtle)}>
           {groupedLines.map(({ serviceId, item, qty }) => (
             <div key={serviceId} className="py-3 first:pt-0 last:pb-0">
               <div className="flex items-start gap-2">
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium leading-snug text-slate-900">{item.name}</p>
-                  <p className="mt-1 text-xs text-slate-500">
+                  <p className={cn("text-sm font-medium leading-snug", BT.textPrimary)}>{item.name}</p>
+                  <p className={cn("mt-1 text-xs", BT.textMuted)}>
                     {formatDurationMinutes(item.duration * qty)}
                     {staffPreferenceLabel ? (
                       <>
                         {" · "}
-                        <span
-                          className={cn(
-                            staffPreferenceSelected && "font-medium text-[#7C3AED]"
-                          )}
-                        >
+                        <span className={cn(staffPreferenceSelected && cn("font-medium", BT.textAccent))}>
                           {staffPreferenceLabel}
                         </span>
                       </>
@@ -141,21 +139,29 @@ export function BookingCartPanel({
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   {canAdjustQty && (
-                    <div className="flex items-center rounded-full border border-[#7C3AED]/40 bg-white px-0.5">
+                    <div className={cn("flex items-center rounded-full border px-0.5", BT.borderAccent, BT.bgSurface)}>
                       <button
                         type="button"
-                        className="flex h-7 w-7 items-center justify-center rounded-full text-[#7C3AED] transition-colors hover:bg-purple-50"
+                        className={cn(
+                          "flex h-7 w-7 items-center justify-center rounded-full transition-colors",
+                          BT.textAccent,
+                          BT.hoverAccentSoft
+                        )}
                         onClick={() => onRemoveOne(serviceId)}
                         aria-label={`Remove one ${item.name}`}
                       >
                         <Minus className="h-3.5 w-3.5" />
                       </button>
-                      <span className="min-w-[1.25rem] text-center text-sm font-semibold tabular-nums text-slate-900">
+                      <span className={cn("min-w-[1.25rem] text-center text-sm font-semibold tabular-nums", BT.textPrimary)}>
                         {qty}
                       </span>
                       <button
                         type="button"
-                        className="flex h-7 w-7 items-center justify-center rounded-full text-[#7C3AED] transition-colors hover:bg-purple-50"
+                        className={cn(
+                          "flex h-7 w-7 items-center justify-center rounded-full transition-colors",
+                          BT.textAccent,
+                          BT.hoverAccentSoft
+                        )}
                         onClick={() => onAddSame(serviceId)}
                         aria-label={`Add another ${item.name}`}
                       >
@@ -163,7 +169,7 @@ export function BookingCartPanel({
                       </button>
                     </div>
                   )}
-                  <span className="min-w-[3.5rem] text-right text-sm font-medium tabular-nums text-slate-900">
+                  <span className={cn("min-w-[3.5rem] text-right text-sm font-medium tabular-nums", BT.textPrimary)}>
                     {formatBookingPrice(item.price)}
                   </span>
                 </div>
@@ -173,11 +179,11 @@ export function BookingCartPanel({
         </div>
 
         {onAddMoreServices && (
-          <div className="mt-2 flex justify-end border-t border-slate-100 pt-3">
+          <div className={cn("mt-2 flex justify-end border-t pt-3", BT.borderSubtle)}>
             <button
               type="button"
               onClick={onAddMoreServices}
-              className="text-sm font-medium text-[#7C3AED] hover:text-[#6D28D9] hover:underline"
+              className={cn("text-sm font-medium hover:underline", BT.textAccent, "hover:opacity-80")}
             >
               Add more services
             </button>
@@ -226,25 +232,22 @@ function CartSummaryFooter({
 }) {
   return (
     <div
-      className={cn(
-        "border-t border-slate-100 pt-4",
-        compact ? "pb-1" : fullHeight ? "pb-4" : "pb-0"
-      )}
+      className={cn("border-t pt-4", BT.borderSubtle, compact ? "pb-1" : fullHeight ? "pb-4" : "pb-0")}
     >
       <div className="space-y-2 text-sm">
-        <div className="flex justify-between text-slate-500">
+        <div className={cn("flex justify-between", BT.textMuted)}>
           <span>Duration</span>
           <span className="tabular-nums">{formatDurationMinutes(totalDuration)}</span>
         </div>
         {selectedDate && selectedTime && (
-          <div className="flex justify-between text-slate-500">
+          <div className={cn("flex justify-between", BT.textMuted)}>
             <span>When</span>
             <span className="text-right text-xs">{selectedTime}</span>
           </div>
         )}
-        <div className="flex items-baseline justify-between border-t border-slate-100 pt-3">
-          <span className="font-medium text-slate-700">Total</span>
-          <span className="text-lg font-bold tabular-nums text-slate-900">
+        <div className={cn("flex items-baseline justify-between border-t pt-3", BT.borderSubtle)}>
+          <span className={cn("font-medium", BT.textSecondary)}>Total</span>
+          <span className={cn("text-lg font-bold tabular-nums", BT.textPrimary)}>
             {formatBookingPrice(totalAmount)}
           </span>
         </div>
@@ -253,7 +256,7 @@ function CartSummaryFooter({
       {onContinue && (
         <Button
           type="button"
-          className={cn("mt-4 w-full bg-[#7C3AED] hover:bg-[#6D28D9]", compact && "mt-3")}
+          className={cn("mt-4 w-full", BT.btnPrimary, compact && "mt-3")}
           disabled={continueDisabled}
           onClick={onContinue}
         >
@@ -263,7 +266,7 @@ function CartSummaryFooter({
       )}
 
       {!compact && (
-        <p className="mt-2 text-center text-[10px] text-slate-400">
+        <p className={cn("mt-2 text-center text-[10px]", BT.textSubtle)}>
           Booking at {businessName}
         </p>
       )}
@@ -289,9 +292,9 @@ function CartHeader({
       )}
     >
       <div className="flex w-full items-center justify-between">
-        <h3 className="font-semibold text-slate-900">Your cart</h3>
+        <h3 className={cn("font-semibold", BT.textPrimary)}>Your cart</h3>
         {count > 0 && (
-          <span className="rounded-full bg-purple-100 px-2.5 py-0.5 text-xs font-semibold text-[#7C3AED]">
+          <span className={cn("rounded-full px-2.5 py-0.5 text-xs font-semibold", BT.bgAccentSoftStrong, BT.textAccent)}>
             {count} {count === 1 ? "service" : "services"}
           </span>
         )}
@@ -317,22 +320,16 @@ export function MobileCartBar({
 }) {
   if (itemCount === 0) return null
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-slate-200 bg-white px-4 py-3 shadow-[0_-4px_24px_rgba(15,23,42,0.08)] lg:hidden">
+    <div className={cn("fixed bottom-0 left-0 right-0 z-40 border-t px-4 py-3 shadow-[0_-4px_24px_rgba(15,23,42,0.08)] lg:hidden", BT.borderDefault, BT.bgSurface)}>
       <div className="flex items-center gap-3">
         <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
-          <p className="text-xs text-slate-500">
+          <p className={cn("text-xs", BT.textMuted)}>
             {itemCount} service{itemCount !== 1 ? "s" : ""} · Tap to review
           </p>
-          <p className="font-semibold tabular-nums text-slate-900">{formatBookingPrice(totalAmount)}</p>
+          <p className={cn("font-semibold tabular-nums", BT.textPrimary)}>{formatBookingPrice(totalAmount)}</p>
         </button>
         {onContinue ? (
-          <Button
-            type="button"
-            size="sm"
-            className="shrink-0 bg-[#7C3AED] hover:bg-[#6D28D9]"
-            disabled={continueDisabled}
-            onClick={onContinue}
-          >
+          <Button type="button" size="sm" className={cn("shrink-0", BT.btnPrimary)} disabled={continueDisabled} onClick={onContinue}>
             {continueLabel}
             <ArrowRight className="ml-1.5 h-4 w-4" />
           </Button>

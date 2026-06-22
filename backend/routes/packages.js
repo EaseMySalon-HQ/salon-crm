@@ -35,6 +35,7 @@ const router = express.Router();
 const { logger } = require('../utils/logger');
 const { authenticateToken, requireManager, requireAdmin } = require('../middleware/auth');
 const { setupBusinessDatabase } = require('../middleware/business-db');
+const { gate, FEATURE } = require('../config/feature-routes');
 const packageSvc = require('../services/package-service');
 const { sendPackageNotification } = require('../services/package-notification-service');
 const databaseManager = require('../config/database-manager');
@@ -43,8 +44,8 @@ const { validate } = require('../middleware/validate');
 const { packageCreateBodySchema } = require('../validation/schemas');
 
 // All package routes require auth + business DB setup
-const auth = [authenticateToken, setupBusinessDatabase];
-const authManager = [authenticateToken, setupBusinessDatabase, requireManager];
+const auth = [authenticateToken, setupBusinessDatabase, gate(FEATURE.PACKAGES)];
+const authManager = [authenticateToken, setupBusinessDatabase, requireManager, gate(FEATURE.PACKAGES)];
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

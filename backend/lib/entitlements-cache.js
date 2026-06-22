@@ -83,8 +83,14 @@ function invalidate(businessId) {
   logger.debug(`🧹 entitlements-cache: invalidated business ${businessId}`);
 }
 
-function invalidateAll() {
+async function invalidateAll() {
   cache.clear();
+  try {
+    const { invalidateAllBusinessPlanCaches } = require('./cache');
+    await invalidateAllBusinessPlanCaches();
+  } catch {
+    /* redis cache optional */
+  }
   logger.debug('🧹 entitlements-cache: invalidated all businesses');
 }
 

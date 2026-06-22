@@ -35,7 +35,7 @@ export function switchToBranch(branchId: string): Promise<boolean> {
 }
 
 const pillClassName =
-  "group relative flex items-center gap-3 px-5 py-3 rounded-xl bg-gradient-to-r from-indigo-50 via-purple-50 to-pink-50 hover:from-indigo-100 hover:via-purple-100 hover:to-pink-100 border border-indigo-100/50 hover:border-indigo-200/70 transition-all duration-300 transform hover:scale-105 hover:shadow-lg hover:shadow-indigo-500/20 overflow-hidden"
+  "group relative flex items-center gap-2 overflow-hidden rounded-xl border border-indigo-100/50 bg-gradient-to-r from-indigo-50 via-purple-50 to-pink-50 px-3 py-2 transition-all duration-300 transform hover:scale-105 hover:border-indigo-200/70 hover:from-indigo-100 hover:via-purple-100 hover:to-pink-100 hover:shadow-lg hover:shadow-indigo-500/20 sm:gap-3 sm:px-4 sm:py-2.5 lg:px-5 lg:py-3"
 
 interface BranchSwitcherProps {
   businessName: string
@@ -59,7 +59,7 @@ function BranchNamePill({
         <div className="w-2.5 h-2.5 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-full shadow-sm" />
       </div>
 
-      <span className="relative z-10 text-sm font-bold text-transparent bg-clip-text bg-gradient-to-r from-indigo-700 via-purple-700 to-pink-700 group-hover:from-indigo-800 group-hover:via-purple-800 group-hover:to-pink-800 transition-all duration-300 max-w-[12rem] truncate sm:max-w-[16rem]">
+      <span className="relative z-10 max-w-[9rem] truncate text-sm font-bold text-transparent bg-clip-text bg-gradient-to-r from-indigo-700 via-purple-700 to-pink-700 transition-all duration-300 group-hover:from-indigo-800 group-hover:via-purple-800 group-hover:to-pink-800 sm:max-w-[12rem] lg:max-w-[16rem]">
         {isLoadingName ? (
           <span className="inline-block w-28 h-4 bg-gradient-to-r from-indigo-200 via-purple-200 to-pink-200 rounded" />
         ) : (

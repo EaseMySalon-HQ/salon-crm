@@ -16,6 +16,8 @@ import {
   LEAD_STATUS_COLORS,
   adminAssigneeName,
   formatLeadStatus,
+  getPlatformLeadDemoNotes,
+  getPlatformLeadInterestedInDisplay,
   getPlatformLeadInterestedServices,
   hasAdminLeadPermission,
 } from "@/lib/admin-lead-permissions"
@@ -66,6 +68,8 @@ export function AdminLeadHistoryDialog({
   const [activityTimelineOpen, setActivityTimelineOpen] = useState(false)
   const canEdit = hasAdminLeadPermission(admin, "update")
   const interestedServices = getPlatformLeadInterestedServices(lead)
+  const demoNotes = getPlatformLeadDemoNotes(lead)
+  const interestedInDisplay = getPlatformLeadInterestedInDisplay(lead)
 
   const form = useForm<z.infer<typeof statusUpdateSchema>>({
     resolver: zodResolver(statusUpdateSchema),
@@ -171,12 +175,21 @@ export function AdminLeadHistoryDialog({
               <p className="text-sm text-muted-foreground italic">No services selected</p>
             )}
           </div>
-          {lead.interestedIn && (
+          {demoNotes ? (
+            <div className="sm:col-span-2">
+              <div className="flex items-center gap-2 mb-1">
+                <FileText className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-medium text-muted-foreground">Notes</span>
+              </div>
+              <p className="text-sm text-slate-600 whitespace-pre-wrap">{demoNotes}</p>
+            </div>
+          ) : null}
+          {interestedInDisplay ? (
             <div className="sm:col-span-2 flex gap-2 text-slate-600">
               <FileText className="h-4 w-4 shrink-0 mt-0.5" />
-              <span>{lead.interestedIn}</span>
+              <span>{interestedInDisplay}</span>
             </div>
-          )}
+          ) : null}
         </div>
 
         {canEdit && lead.status !== "converted" && (

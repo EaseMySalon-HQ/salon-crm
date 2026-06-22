@@ -9,6 +9,8 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import type { PublicBookingStaff } from "@/lib/public-booking-api"
+import { cn } from "@/lib/utils"
+import { BT } from "@/lib/booking-page-theme"
 
 const NO_PREFERENCE = "__no_preference__"
 
@@ -33,18 +35,18 @@ export function StaffPreferenceSelect({
     <section className="space-y-4">
       {!hideHeader && (
         <div>
-          <h2 className="text-lg font-semibold text-slate-900">Select your preferred expert</h2>
-          <p className="mt-1 text-sm text-slate-500">
+          <h2 className={cn("text-lg font-semibold", BT.textPrimary)}>Select your preferred expert</h2>
+          <p className={cn("mt-1 text-sm", BT.textMuted)}>
             One stylist will handle all services in your appointment.
           </p>
         </div>
       )}
 
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className={cn("rounded-2xl border p-4 shadow-sm", BT.borderDefault, BT.bgSurface)}>
         <div className="flex items-center gap-3 sm:gap-4">
-          <p className="shrink-0 text-sm font-medium text-slate-900">Select Staff</p>
+          <p className={cn("shrink-0 text-sm font-medium", BT.textPrimary)}>Select Staff</p>
           {loading ? (
-            <div className="flex flex-1 items-center gap-2 text-sm text-slate-500">
+            <div className={cn("flex flex-1 items-center gap-2 text-sm", BT.textMuted)}>
               <Loader2 className="h-4 w-4 animate-spin" />
               Loading staff…
             </div>

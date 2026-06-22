@@ -37,6 +37,7 @@ export function ServiceForm({ onClose, service }: ServiceFormProps) {
     taxApplicable: !!service?.taxApplicable,
     hsnSacCode: service?.hsnSacCode ?? "",
     isAutoConsumptionEnabled: !!service?.isAutoConsumptionEnabled,
+    showInOnlineBooking: service?.showInOnlineBooking !== false,
   })
   const [taxEnabled, setTaxEnabled] = useState<boolean | null>(null)
 
@@ -84,6 +85,7 @@ export function ServiceForm({ onClose, service }: ServiceFormProps) {
         hsnSacCode: formData.hsnSacCode || undefined,
         isActive: true,
         isAutoConsumptionEnabled: formData.isAutoConsumptionEnabled,
+        showInOnlineBooking: formData.showInOnlineBooking,
       }
 
       let response
@@ -128,6 +130,7 @@ export function ServiceForm({ onClose, service }: ServiceFormProps) {
             taxApplicable: taxEnabled === true,
             hsnSacCode: "",
             isAutoConsumptionEnabled: false,
+            showInOnlineBooking: true,
           })
           setPendingConsumptionRules([])
         }
@@ -273,6 +276,27 @@ export function ServiceForm({ onClose, service }: ServiceFormProps) {
           />
         </div>
       )}
+
+      <div className="flex items-center justify-between rounded-lg border border-gray-200 p-4">
+        <div className="flex items-center gap-1.5">
+          <Label htmlFor="show-in-online-booking">Show in Online Booking portal</Label>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button type="button" className="inline-flex text-muted-foreground hover:text-foreground focus:outline-none">
+                <HelpCircle className="h-3.5 w-3.5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right" className="max-w-xs">
+              <p>When enabled, clients can book this service from your public booking page.</p>
+            </TooltipContent>
+          </Tooltip>
+        </div>
+        <Switch
+          id="show-in-online-booking"
+          checked={formData.showInOnlineBooking}
+          onCheckedChange={(checked) => setFormData({ ...formData, showInOnlineBooking: !!checked })}
+        />
+      </div>
 
       <div className="flex items-center justify-between rounded-lg border border-gray-200 p-4">
         <div className="flex items-center gap-1.5">

@@ -246,6 +246,7 @@ async function loadCartServices(models, branchId, items) {
     _id: { $in: ids },
     branchId,
     isActive: { $ne: false },
+    showInOnlineBooking: { $ne: false },
     $or: [{ serviceKind: { $exists: false } }, { serviceKind: 'simple' }, { serviceKind: null }],
   }).lean();
 
@@ -494,12 +495,6 @@ async function computePublicSlots(models, businessDoc, branchId, { date, items, 
     };
 
     if (slotPastLeadTime(start, timezone)) {
-      slots.push({
-        ...base,
-        status: 'unavailable',
-        reason: 'past',
-        staffAssignments: [],
-      });
       continue;
     }
 
@@ -734,6 +729,7 @@ async function listPublicServices(models, branchId, search = '') {
   const q = {
     branchId,
     isActive: { $ne: false },
+    showInOnlineBooking: { $ne: false },
     $or: [{ serviceKind: { $exists: false } }, { serviceKind: 'simple' }, { serviceKind: null }],
   };
   if (search && String(search).trim()) {

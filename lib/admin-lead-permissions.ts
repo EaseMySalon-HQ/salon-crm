@@ -53,9 +53,51 @@ type PlatformLeadAssigneeShape = {
   email?: string
 }
 
+type PlatformLeadLocationShape = {
+  city?: string
+  branchCount?: string
+  interestedIn?: string
+}
+
 type PlatformLeadServicesShape = {
   interestedServices?: string[]
   notes?: string
+}
+
+/** Demo form message stored on `notes` (services live in `interestedServices`, not here). */
+export function getPlatformLeadDemoNotes(lead: { notes?: string }): string {
+  const raw = (lead.notes || "").trim()
+  if (!raw) return ""
+
+  // Legacy demo wizard: "Services interested in: …\n\nNotes: …" or "… Notes: …"
+  const notesMatch = raw.match(/\bNotes:\s*(.+)$/is)
+  if (notesMatch) {
+    return notesMatch[1].trim()
+  }
+
+  if (/^Services interested in:/i.test(raw)) {
+    return ""
+  }
+
+  return raw
+}
+
+/** Legacy website leads duplicated city/branches into `interestedIn`; hide when redundant. */
+export function isLegacyPlatformLeadInterestedIn(lead: PlatformLeadLocationShape): boolean {
+  const interested = (lead.interestedIn || "").trim()
+  if (!interested) return false
+  const legacy = [
+    lead.city ? `City: ${lead.city}` : "",
+    lead.branchCount ? `Branches: ${lead.branchCount}` : "",
+  ]
+    .filter(Boolean)
+    .join(" | ")
+  return interested === legacy
+}
+
+export function getPlatformLeadInterestedInDisplay(lead: PlatformLeadLocationShape): string {
+  if (isLegacyPlatformLeadInterestedIn(lead)) return ""
+  return (lead.interestedIn || "").trim()
 }
 
 /** Services from demo booking — uses stored array or legacy notes format. */
@@ -63,7 +105,7 @@ export function getPlatformLeadInterestedServices(lead: PlatformLeadServicesShap
   if (lead.interestedServices?.length) return lead.interestedServices
 
   const notes = lead.notes || ""
-  const match = notes.match(/^Services interested in:\s*(.+?)(?:\n\n|$)/m)
+  const match = notes.match(/^Services interested in:\s*(.+?)(?:\n\n|\s+Notes:|$)/is)
   if (!match) return []
 
   return match[1]

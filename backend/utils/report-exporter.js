@@ -2305,8 +2305,8 @@ async function exportAppointmentListReport({ branchId, format = 'xlsx', filters 
         }
       }
       if (status && status !== 'all') {
-        if (status === 'cancelled') saleQuery.status = new RegExp('^cancelled$', 'i');
-        else if (status === 'completed') saleQuery.status = new RegExp('^completed$', 'i');
+        if (status === 'cancelled') saleQuery.status = { $in: ['cancelled', 'Cancelled'] };
+        else if (status === 'completed') saleQuery.status = { $in: ['completed', 'Completed'] };
       }
       const walkInSales = await Sale.find(saleQuery).sort({ date: -1, time: -1 }).limit(5000).lean();
       walkInSales.forEach((sale) => {

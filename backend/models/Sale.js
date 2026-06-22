@@ -287,6 +287,7 @@ saleSchema.index({ status: 1 });
 saleSchema.index({ customerPhone: 1, branchId: 1 });
 saleSchema.index({ customerId: 1, branchId: 1 });
 saleSchema.index({ appointmentId: 1 });
+saleSchema.index({ branchId: 1, staffId: 1, date: -1 }, { background: true });
 // shareToken: unique+sparse in schema already creates an index
 
 // Export both schema and model for flexibility

@@ -263,6 +263,7 @@ appointmentSchema.index(
   { slotKey: 1 },
   { unique: true, partialFilterExpression: { slotKey: { $exists: true, $type: 'string' } } }
 );
+appointmentSchema.index({ branchId: 1, leadSource: 1, date: 1 }, { background: true });
 
 // Export both schema and model for flexibility
 module.exports = {

@@ -60,7 +60,7 @@ const businessSchema = new mongoose.Schema({
       /** Up to 8 HTTPS or data-URL images for the public booking showcase carousel */
       showcaseImages: { type: [String], default: [] },
       /** Public booking hero background theme id */
-      bookingHeroTheme: { type: String, default: 'purple' },
+      bookingHeroTheme: { type: String, default: 'light-lavender' },
     },
 
     /** Monthly revenue target for branch-management overview (INR). */

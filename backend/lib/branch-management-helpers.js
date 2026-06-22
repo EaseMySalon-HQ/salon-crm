@@ -4,7 +4,7 @@
  * Merge keys: inventory uses SKU when present, else lowercased product/service name.
  */
 
-const COMPLETED = { $regex: /^completed$/i };
+const COMPLETED = { $in: ['completed', 'Completed'] };
 
 function catalogKey(name, sku) {
   const s = (sku || '').trim();

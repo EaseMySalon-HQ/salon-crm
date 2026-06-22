@@ -1,6 +1,6 @@
 "use client"
 
-import { Clock, MapPin, Phone, Sparkles, Zap, Wallet, UserRound } from "lucide-react"
+import { Clock, MapPin, Phone, Zap, Wallet, UserRound } from "lucide-react"
 import { BookingShowcaseCarousel } from "@/components/public-booking/booking-showcase-carousel"
 import { cn } from "@/lib/utils"
 import { resolveBookingHeroTheme } from "@/lib/booking-hero-themes"
@@ -47,7 +47,7 @@ export function BookingHero({ profile }: BookingHeroProps) {
             {profile.logoUrl ? (
               <div
                 className={cn(
-                  "hidden h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full border lg:flex",
+                  "flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full border",
                   isLight ? "border-slate-200 bg-white shadow-sm" : "border-white/10 bg-white/10"
                 )}
               >
@@ -61,7 +61,7 @@ export function BookingHero({ profile }: BookingHeroProps) {
             ) : (
               <div
                 className={cn(
-                  "hidden h-14 w-14 shrink-0 items-center justify-center rounded-full text-xl font-bold shadow-lg lg:flex",
+                  "flex h-14 w-14 shrink-0 items-center justify-center rounded-full text-xl font-bold shadow-lg",
                   isLight ? "text-white" : "text-white"
                 )}
                 style={{
@@ -74,17 +74,6 @@ export function BookingHero({ profile }: BookingHeroProps) {
             )}
             <div className="min-w-0 space-y-1">
               <h1 className="text-xl font-bold tracking-tight sm:text-2xl lg:text-3xl">{profile.name}</h1>
-              <span
-                className={cn(
-                  "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
-                  theme.badgeBorder,
-                  theme.badgeBg,
-                  theme.badgeText
-                )}
-              >
-                <Sparkles className="h-3 w-3" />
-                Online booking
-              </span>
               {tagline ? (
                 <p className={cn("pt-0.5 text-sm", isLight ? "text-slate-600" : "text-white/70")}>{tagline}</p>
               ) : (
@@ -123,47 +112,60 @@ export function BookingHero({ profile }: BookingHeroProps) {
 
           <div
             className={cn(
-              "flex border-t pt-4 lg:grid lg:grid-cols-3 lg:gap-3 lg:pt-5",
+              "hidden border-t pt-4 md:block lg:pt-5",
               isLight ? "border-slate-200/80" : "border-white/10"
             )}
           >
-            {HIGHLIGHTS.map(({ icon: Icon, title, detail }, index) => (
-              <div
-                key={title}
-                className={cn(
-                  "flex min-w-0 flex-1 flex-col items-center px-2 text-center lg:items-start lg:rounded-xl lg:border lg:px-3 lg:py-3 lg:text-left lg:backdrop-blur-sm lg:transition",
-                  isLight
-                    ? "lg:border-slate-200/80 lg:bg-white/50 lg:hover:border-slate-300 lg:hover:bg-white/70"
-                    : "lg:border-white/10 lg:bg-white/5 lg:hover:border-white/20 lg:hover:bg-white/[0.07]",
-                  index > 0 && (isLight ? "border-l border-slate-200/80 lg:border-l-0" : "border-l border-white/10 lg:border-l-0")
-                )}
-              >
-                <Icon className="h-4 w-4" style={{ color: theme.accent }} aria-hidden />
-                <p
+            <p
+              className={cn(
+                "mb-3 text-[11px] font-medium uppercase tracking-wider",
+                isLight ? "text-slate-400" : "text-white/40"
+              )}
+            >
+              What to expect
+            </p>
+            <ul className="grid gap-3 md:grid-cols-3 md:gap-4" role="list">
+              {HIGHLIGHTS.map(({ icon: Icon, title, detail }) => (
+                <li
+                  key={title}
                   className={cn(
-                    "mt-1.5 text-[10px] font-semibold leading-snug sm:text-xs lg:mt-2",
-                    isLight ? "text-slate-800" : "text-white"
+                    "flex min-w-0 items-start gap-2.5 cursor-default select-none",
+                    isLight ? "text-slate-600" : "text-white/70"
                   )}
                 >
-                  {title}
-                </p>
-                <p
-                  className={cn(
-                    "mt-0.5 hidden text-[11px] leading-snug lg:block",
-                    isLight ? "text-slate-500" : "text-white/50"
-                  )}
-                >
-                  {detail}
-                </p>
-              </div>
-            ))}
+                  <Icon
+                    className="mt-0.5 h-4 w-4 shrink-0 opacity-70"
+                    style={{ color: theme.accent }}
+                    aria-hidden
+                  />
+                  <div className="min-w-0">
+                    <p
+                      className={cn(
+                        "text-xs font-medium leading-snug",
+                        isLight ? "text-slate-700" : "text-white/85"
+                      )}
+                    >
+                      {title}
+                    </p>
+                    <p
+                      className={cn(
+                        "mt-0.5 text-[11px] leading-snug",
+                        isLight ? "text-slate-500" : "text-white/45"
+                      )}
+                    >
+                      {detail}
+                    </p>
+                  </div>
+                </li>
+              ))}
+            </ul>
           </div>
         </div>
 
         <BookingShowcaseCarousel
           images={images}
           salonName={profile.name}
-          className="order-1 -mx-4 w-[calc(100%+2rem)] sm:-mx-6 sm:w-[calc(100%+3rem)] lg:order-2 lg:mx-0 lg:w-full lg:max-w-[420px] lg:justify-self-end [&>div]:rounded-none lg:[&>div]:rounded-2xl"
+          className="hidden lg:block order-1 -mx-4 w-[calc(100%+2rem)] sm:-mx-6 sm:w-[calc(100%+3rem)] lg:order-2 lg:mx-0 lg:w-full lg:max-w-[420px] lg:justify-self-end [&>div]:rounded-none lg:[&>div]:rounded-2xl"
         />
       </div>
     </section>

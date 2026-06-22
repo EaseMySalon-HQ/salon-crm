@@ -73,6 +73,10 @@ const FEATURE_ENFORCEMENT: Record<string, "gated" | "core" | "partial" | "planne
   staff_management: "core",
   basic_reports: "core",
   incentive_management: "gated",
+  lead_management: "gated",
+  membership: "gated",
+  packages: "gated",
+  prepaid_wallet: "gated",
   reward_points: "gated",
   feedback_management: "gated",
   online_booking: "gated",
@@ -136,6 +140,7 @@ export function PlanTemplateManager() {
     try {
       setLoading(true)
       const response = await fetch(`${API_URL}/admin/plans/config`, {
+        credentials: 'include',
         headers: adminRequestHeaders(),
       })
 
@@ -268,9 +273,11 @@ export function PlanTemplateManager() {
         : `${API_URL}/admin/plans/templates/${formData.id}`
       
       const method = isCreating ? 'POST' : 'PUT'
+      const featuresToSave = normalizePlanFeaturesForStorage(formData.features)
       
       const response = await fetch(url, {
         method,
+        credentials: 'include',
         headers: adminRequestHeaders({
           'Content-Type': 'application/json',
         }),
@@ -280,28 +287,42 @@ export function PlanTemplateManager() {
           description: formData.description,
           monthlyPrice: formData.monthlyPrice,
           yearlyPrice: formData.yearlyPrice,
-          features: normalizePlanFeaturesForStorage(formData.features),
+          features: featuresToSave,
           limits: formData.limits,
           support: formData.support,
         }),
       })
 
-      if (response.ok) {
-        const data = await response.json()
-        if (data.success) {
-          toast({
-            title: "Success",
-            description: isCreating ? "Plan template created successfully" : "Plan template updated successfully",
-          })
-          setIsEditDialogOpen(false)
-          setIsCreateDialogOpen(false)
-          fetchConfig() // Refresh the list
+      const data = await response.json().catch(() => null)
+
+      if (response.ok && data?.success) {
+        const savedTemplate = data.data?.template as Plan | undefined
+        if (savedTemplate) {
+          const savedFeatures = normalizePlanFeaturesForStorage(savedTemplate.features || [])
+          setPlans((prev) =>
+            prev.map((p) =>
+              p.id === savedTemplate.id
+                ? {
+                    ...p,
+                    ...savedTemplate,
+                    features: savedFeatures,
+                  }
+                : p
+            )
+          )
+          setFormData((prev) => ({ ...prev, features: savedFeatures }))
         }
+        toast({
+          title: "Success",
+          description: isCreating ? "Plan template created successfully" : "Plan template updated successfully",
+        })
+        setIsEditDialogOpen(false)
+        setIsCreateDialogOpen(false)
+        await fetchConfig()
       } else {
-        const error = await response.json()
         toast({
           title: "Error",
-          description: error.error || "Failed to save plan template",
+          description: data?.error || "Failed to save plan template",
           variant: "destructive",
         })
       }

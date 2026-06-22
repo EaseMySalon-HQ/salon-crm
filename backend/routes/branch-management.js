@@ -50,7 +50,7 @@ const guard = [
 ];
 
 const TZ = 'Asia/Kolkata';
-const COMPLETED = { $regex: /^completed$/i };
+const COMPLETED = { $in: ['completed', 'Completed'] };
 
 /* ------------------------------------------------------------------ */
 /* Date helpers                                                        */

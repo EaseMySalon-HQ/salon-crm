@@ -2,6 +2,7 @@ import { Suspense } from "react"
 import { PackageSellPage } from "@/components/packages/package-sell-page"
 import { ProtectedLayout } from "@/components/layout/protected-layout"
 import { ProtectedRoute } from "@/components/auth/protected-route"
+import { PlanFeaturePageGate } from "@/components/plan/plan-feature-page-gate"
 
 function SellFallback() {
   return (
@@ -15,9 +16,15 @@ export default function PackageSellRoutePage() {
   return (
     <ProtectedRoute requiredModule="sales">
       <ProtectedLayout>
-        <Suspense fallback={<SellFallback />}>
-          <PackageSellPage />
-        </Suspense>
+        <PlanFeaturePageGate
+          featureId="packages"
+          title="Packages"
+          description="Multi-session packages and sellable bundles are available on Growth and Pro plans."
+        >
+          <Suspense fallback={<SellFallback />}>
+            <PackageSellPage />
+          </Suspense>
+        </PlanFeaturePageGate>
       </ProtectedLayout>
     </ProtectedRoute>
   )

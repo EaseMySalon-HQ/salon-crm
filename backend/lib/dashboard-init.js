@@ -23,7 +23,7 @@ function monthServiceStaffFacetPipeline(branchId, startDate, endDate) {
       $match: {
         branchId,
         date: { $gte: startDate, $lte: endDate },
-        $nor: [{ status: /cancelled/i }],
+        status: { $nin: ['cancelled', 'Cancelled'] },
       },
     },
     { $unwind: '$items' },
@@ -113,6 +113,7 @@ async function buildDashboardInitPayload({
   user,
   chartRange = 'year',
   metricsRange = 'today',
+  appointmentsRange = 'today',
 }) {
   const {
     Service,
@@ -200,14 +201,14 @@ async function buildDashboardInitPayload({
     Sale.countDocuments({
       branchId: bid,
       date: { $gte: metricsStartDate, $lte: metricsEndDate },
-      status: { $regex: /^completed$/i },
+      status: { $in: ['completed', 'Completed'] },
     }),
     Sale.aggregate([
       {
         $match: {
           branchId: bid,
           date: { $gte: metricsStartDate, $lte: metricsEndDate },
-          status: { $regex: /^completed$/i },
+          status: { $in: ['completed', 'Completed'] },
         },
       },
       { $group: { _id: null, total: { $sum: { $ifNull: ['$grossTotal', 0] } } } },
@@ -219,10 +220,13 @@ async function buildDashboardInitPayload({
       in30.setDate(in30.getDate() + 30);
       const activeMatch = { branchId: bid, ...activeMembershipMongoMatch(today) };
       const totalActiveMembers = await MembershipSubscription.countDocuments(activeMatch);
-      const activeSubscriptions = await MembershipSubscription.find(activeMatch)
-        .populate('planId', 'price')
-        .lean();
-      const membershipRevenue = activeSubscriptions.reduce((sum, sub) => sum + (sub.planId?.price || 0), 0);
+      const [revenueAgg] = await MembershipSubscription.aggregate([
+        { $match: activeMatch },
+        { $lookup: { from: 'membershipplans', localField: 'planId', foreignField: '_id', as: 'plan' } },
+        { $unwind: { path: '$plan', preserveNullAndEmptyArrays: true } },
+        { $group: { _id: null, total: { $sum: { $ifNull: ['$plan.price', 0] } } } },
+      ]);
+      const membershipRevenue = revenueAgg ? revenueAgg.total : 0;
       const membersExpiringIn30Days = await MembershipSubscription.countDocuments({
         branchId: bid,
         ...expiringMembershipMongoMatch(today, in30),
@@ -359,7 +363,7 @@ async function buildDashboardInitPayload({
         $match: {
           branchId: bid,
           date: { $gte: yearStartDate, $lte: yearEndDate },
-          $nor: [{ status: /cancelled/i }],
+          status: { $nin: ['cancelled', 'Cancelled'] },
         },
       },
       {
@@ -375,7 +379,7 @@ async function buildDashboardInitPayload({
           branchId: bid,
           customerId: { $exists: true, $ne: null },
           date: { $gte: retentionStartDate, $lte: metricsEndDate },
-          $nor: [{ status: /cancelled/i }],
+          status: { $nin: ['cancelled', 'Cancelled'] },
         },
       },
       { $group: { _id: '$customerId', visits: { $sum: 1 } } },
@@ -397,7 +401,7 @@ async function buildDashboardInitPayload({
       branchId: bid,
       date: todayStr,
       // Walk-in cards are billing artifacts (see Appointment Value pipeline);
-      // exclude them from "Recent Appointments" so the list shows real bookings.
+      // exclude them from upcoming appointments so the list shows real bookings.
       leadSource: { $ne: 'Walk-in' },
     })
       .populate('clientId', 'name phone email')
@@ -410,7 +414,7 @@ async function buildDashboardInitPayload({
     Appointment.find({
       branchId: bid,
       date: { $gte: todayStr },
-      status: { $nin: ['cancelled', 'missed'] },
+      status: { $nin: ['cancelled', 'missed', 'cancelled_at_billing', 'completed'] },
       leadSource: { $ne: 'Walk-in' },
     })
       .populate('clientId', 'name phone email')
@@ -548,7 +552,7 @@ async function buildDashboardInitPayload({
         $match: {
           branchId: bid,
           date: { $gte: rangeStart, $lte: rangeEnd },
-          $nor: [{ status: /cancelled/i }],
+          status: { $nin: ['cancelled', 'Cancelled'] },
         },
       },
       {
@@ -667,9 +671,12 @@ async function buildDashboardInitPayload({
       _id: a._id,
       date: a.date,
       time: a.time,
+      startAt: a.startAt,
       status: a.status,
       price: a.price,
       duration: a.duration,
+      leadSource: a.leadSource,
+      createdBy: a.createdBy,
       staffName: primaryStaffName,
       clientId: a.clientId
         ? { _id: a.clientId._id, name: a.clientId.name, phone: a.clientId.phone, email: a.clientId.email }
@@ -696,11 +703,29 @@ async function buildDashboardInitPayload({
   }
 
   const todayStartMs = getStartOfDayIST(todayStr).getTime();
+  const end7Probe = parseDateIST(todayStr);
+  end7Probe.setDate(end7Probe.getDate() + 6);
+  const upcoming7EndStr = toDateStringIST(end7Probe);
+
+  function appointmentDateYmd(doc) {
+    const d = String(doc?.date || '').trim();
+    return d.length >= 10 ? d.slice(0, 10) : d;
+  }
+
+  const appointmentsRangeType = appointmentsRange === 'next7days' ? 'next7days' : 'today';
+  const upcomingLimit = appointmentsRangeType === 'today' ? 12 : 24;
+
   const upcomingSorted = upcomingCandidates
     .map((a) => ({ doc: a, t: appointmentInstant(a) }))
-    .filter((x) => x.t >= todayStartMs)
+    .filter((x) => {
+      const status = String(x.doc?.status || '').trim().toLowerCase();
+      if (x.t < todayStartMs || status === 'completed') return false;
+      const ymd = appointmentDateYmd(x.doc);
+      if (appointmentsRangeType === 'today') return ymd === todayStr;
+      return ymd >= todayStr && ymd <= upcoming7EndStr;
+    })
     .sort((a, b) => a.t - b.t)
-    .slice(0, 8)
+    .slice(0, upcomingLimit)
     .map((x) => mapAppointmentLean(x.doc));
 
   const data = {
