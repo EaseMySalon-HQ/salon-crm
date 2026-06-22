@@ -105,6 +105,11 @@ export function DateTimePicker({
 
   const selectedDateObj = isoToDate(selectedDate)
 
+  const visibleSlots = useMemo(
+    () => slots.filter((slot) => slot.reason !== "past"),
+    [slots]
+  )
+
   const istNow = useMemo(
     () =>
       new Date().toLocaleTimeString("en-IN", {
@@ -339,7 +344,7 @@ export function DateTimePicker({
           <p className={cn("text-sm font-semibold", BT.textPrimary)}>Closed on this day</p>
           <p className={cn("mt-1 text-xs", BT.textMuted)}>Please choose another date.</p>
         </div>
-      ) : slots.length === 0 ? (
+      ) : visibleSlots.length === 0 ? (
         <div className="flex min-h-[220px] flex-col items-center justify-center text-center">
           <p className={cn("text-sm font-semibold", BT.textPrimary)}>No slots available</p>
           <p className={cn("mt-1 text-xs", BT.textMuted)}>Try another date.</p>
@@ -355,13 +360,12 @@ export function DateTimePicker({
               view === "combined" ? "max-h-[320px] overflow-y-auto" : "max-h-none"
             )}
           >
-            {slots.map((slot) => {
+            {visibleSlots.map((slot) => {
               const isSelected =
                 selectedTime === slot.time ||
                 (selectedStartAt != null && selectedStartAt === slot.startAt)
               const isAvailable = slot.status === "available" || isSelected
               const isBooked = !isSelected && !isAvailable
-              const isPastSlot = slot.reason === "past"
 
               return (
                 <div
@@ -403,7 +407,7 @@ export function DateTimePicker({
                       )}
                     </span>
                   </button>
-                  {isBooked && !isPastSlot && onChangeStaff && (
+                  {isBooked && onChangeStaff && (
                     <button
                       type="button"
                       onClick={onChangeStaff}
