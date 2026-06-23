@@ -98,9 +98,7 @@ function createRateLimitStore(prefix, label) {
     client.on('error', (err) => {
       logger.warn('[rate-limit][%s] redis connection error: %s', label, err.message);
     });
-    void client.connect().catch((err) => {
-      logger.warn('[rate-limit][%s] redis connect: %s', label, err.message);
-    });
+    // ioredis auto-connects by default; explicit connect() duplicates the attempt.
   } catch (e) {
     logger.error('[rate-limit][%s] failed to create Redis client; using memory store: %s', label, e.message);
     return new MetricsMemoryStore(memoryStore, metricsTier);

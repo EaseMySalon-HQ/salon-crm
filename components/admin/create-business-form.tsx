@@ -1,7 +1,7 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { useRouter, useParams } from "next/navigation"
+import { Suspense, useState, useEffect, useCallback } from "react"
+import { useRouter, useParams, useSearchParams } from "next/navigation"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
@@ -15,16 +15,17 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast"
 import { adminRequestHeaders } from "@/lib/admin-request-headers"
 import { formatAdminPlanMonthlyPrice } from "@/lib/admin-plan-price"
+import { AdminLeadsAPI } from "@/lib/admin-api"
 
 // Create schema factory function
 const createBusinessSchema = (isEditMode: boolean) => z.object({
   // Business Information
   businessName: isEditMode ? z.string().optional() : z.string().min(2, "Business name must be at least 2 characters"),
   businessType: isEditMode ? z.enum(["salon", "spa", "barbershop", "beauty_clinic"]).optional() : z.enum(["salon", "spa", "barbershop", "beauty_clinic"]),
-  street: isEditMode ? z.string().optional() : z.string().min(5, "Street address is required"),
+  street: z.string().optional(),
   city: isEditMode ? z.string().optional() : z.string().min(2, "City is required"),
-  state: isEditMode ? z.string().optional() : z.string().min(2, "State is required"),
-  zipCode: isEditMode ? z.string().optional() : z.string().min(5, "ZIP code is required"),
+  state: z.string().optional(),
+  zipCode: z.string().optional(),
   country: z.string().default("India"),
   phone: isEditMode ? z.string().optional() : z.string().min(10, "Phone number is required"),
   email: isEditMode ? z.string().email("Valid email is required").optional() : z.string().email("Valid email is required"),
@@ -49,14 +50,22 @@ interface BusinessFormProps {
   businessId?: string
 }
 
-export function CreateBusinessForm({ mode = 'create', businessId }: BusinessFormProps) {
+function splitOwnerName(fullName: string): { first: string; last: string } {
+  const parts = String(fullName || "").trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return { first: "", last: "" }
+  if (parts.length === 1) return { first: parts[0], last: "" }
+  return { first: parts[0], last: parts.slice(1).join(" ") }
+}
+
+function CreateBusinessFormInner({ mode = 'create', businessId }: BusinessFormProps) {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [plans, setPlans] = useState<any[]>([])
   const { toast } = useToast()
   const router = useRouter()
   const params = useParams()
-  
+  const searchParams = useSearchParams()
+  const leadIdParam = searchParams.get("leadId")
   // Get business ID from params if not provided as prop
   const currentBusinessId = businessId || params?.id as string
   const isEditMode = mode === 'edit' || !!currentBusinessId
@@ -94,6 +103,77 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
       loadBusinessData()
     }
   }, [isEditMode, currentBusinessId])
+
+  const applyLeadPrefill = useCallback(
+    (lead: {
+      name: string
+      salonName?: string
+      city?: string
+      phone: string
+      email?: string
+    }) => {
+      const { first, last } = splitOwnerName(lead.name)
+      form.reset({
+        businessName: lead.salonName?.trim() || lead.name?.trim() || "",
+        businessType: "salon",
+        street: "",
+        city: lead.city?.trim() || "",
+        state: "",
+        zipCode: "",
+        country: "India",
+        phone: lead.phone?.trim() || "",
+        email: lead.email?.trim() || "",
+        website: "",
+        ownerFirstName: first,
+        ownerLastName: last,
+        ownerEmail: lead.email?.trim() || "",
+        ownerPhone: lead.phone?.trim() || "",
+        ownerPassword: "",
+        planId: "pro",
+        billingPeriod: "monthly",
+      })
+    },
+    [form]
+  )
+
+  useEffect(() => {
+    if (isEditMode || !leadIdParam) return
+
+    const name = searchParams.get("name")
+    const phone = searchParams.get("phone")
+    const email = searchParams.get("email")
+    const city = searchParams.get("city")
+    if (name || phone || email || city) {
+      applyLeadPrefill({
+        name: name || "",
+        salonName: name || "",
+        city: city || "",
+        phone: phone || "",
+        email: email || "",
+      })
+    }
+
+    let cancelled = false
+    ;(async () => {
+      try {
+        const lead = await AdminLeadsAPI.getById(leadIdParam)
+        if (!cancelled) applyLeadPrefill(lead)
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Failed to load lead for prefill:", error)
+          toast({
+            title: "Could not load lead details",
+            description: "You can still fill the form manually.",
+            variant: "destructive",
+          })
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [isEditMode, leadIdParam, applyLeadPrefill, toast, searchParams])
 
   const fetchPlans = async () => {
     try {
@@ -185,10 +265,10 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
           name: data.businessName || '',
           businessType: data.businessType || 'salon',
           address: {
-            street: data.street || 'Not provided',
-            city: data.city || '',
-            state: data.state || '',
-            zipCode: data.zipCode || '',
+            street: data.street?.trim() || 'Not provided',
+            city: data.city?.trim() || 'Not provided',
+            state: data.state?.trim() || 'NA',
+            zipCode: data.zipCode?.trim() || 'NA',
             country: data.country || 'India'
           },
           contact: {
@@ -251,10 +331,14 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
         // Create new business
         response = await fetch(`${API_URL}/admin/businesses`, {
           method: 'POST',
+          credentials: 'include',
           headers: adminRequestHeaders({
             'Content-Type': 'application/json',
           }),
-          body: JSON.stringify(businessData)
+          body: JSON.stringify({
+            ...businessData,
+            ...(leadIdParam ? { leadId: leadIdParam } : {}),
+          })
         })
       }
 
@@ -265,13 +349,19 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
           title: isEditMode ? "Business Updated Successfully" : "Business Created Successfully",
           description: isEditMode 
             ? `Business "${data.businessName}" has been updated successfully.`
-            : `Business "${data.businessName}" has been created with owner access.`,
+            : leadIdParam
+              ? `Business "${data.businessName}" was created with a 7-day Pro trial and the lead was marked as Trial.`
+              : `Business "${data.businessName}" has been created with owner access.`,
         })
-        router.push('/admin/businesses')
+        router.push(leadIdParam ? '/admin/leads' : '/admin/businesses')
       } else {
         toast({
           title: isEditMode ? "Update Failed" : "Creation Failed",
-          description: result.error || `Failed to ${isEditMode ? 'update' : 'create'} business`,
+          description:
+            result.error ||
+            result.message ||
+            result.details ||
+            `Failed to ${isEditMode ? 'update' : 'create'} business`,
           variant: "destructive",
         })
       }
@@ -372,7 +462,10 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
 
                     <div className="space-y-2">
                       <Label htmlFor="businessType" className="text-sm font-medium text-gray-700">{getLabel("Business Type")}</Label>
-                      <Select onValueChange={(value) => form.setValue("businessType", value as any)}>
+                      <Select
+                        value={form.watch("businessType")}
+                        onValueChange={(value) => form.setValue("businessType", value as any)}
+                      >
                         <SelectTrigger className="mt-1">
                           <SelectValue placeholder="Select business type" />
                         </SelectTrigger>
@@ -393,7 +486,7 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       <div className="md:col-span-2 space-y-2">
-                        <Label htmlFor="street" className="text-sm font-medium text-gray-700">{getLabel("Street Address")}</Label>
+                        <Label htmlFor="street" className="text-sm font-medium text-gray-700">{getLabel("Street Address", false)}</Label>
                         <Input
                           id="street"
                           placeholder="123 Beauty Street"
@@ -423,7 +516,7 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
                       </div>
 
                       <div className="space-y-2">
-                        <Label htmlFor="state" className="text-sm font-medium text-gray-700">{getLabel("State")}</Label>
+                        <Label htmlFor="state" className="text-sm font-medium text-gray-700">{getLabel("State", false)}</Label>
                         <Input
                           id="state"
                           placeholder="Maharashtra"
@@ -438,7 +531,7 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
                       </div>
 
                       <div className="space-y-2">
-                        <Label htmlFor="zipCode" className="text-sm font-medium text-gray-700">{getLabel("ZIP Code")}</Label>
+                        <Label htmlFor="zipCode" className="text-sm font-medium text-gray-700">{getLabel("ZIP Code", false)}</Label>
                         <Input
                           id="zipCode"
                           placeholder="400001"
@@ -528,72 +621,85 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
                     Pricing Plan
                   </CardTitle>
                   <CardDescription className="text-purple-600">
-                    Select a pricing plan for this business
+                    {leadIdParam
+                      ? "This lead receives a 7-day Pro trial when the business is created"
+                      : "Select a pricing plan for this business"}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="p-6 space-y-6">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="space-y-2">
-                      <Label htmlFor="planId" className="text-sm font-medium text-gray-700">{getLabel("Plan")}</Label>
-                      <Select 
-                        value={form.watch("planId")} 
-                        onValueChange={(value) => form.setValue("planId", value)}
-                      >
-                        <SelectTrigger className="mt-1">
-                          <SelectValue placeholder="Select a plan" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {plans.map((plan) => (
-                            <SelectItem key={plan.id} value={plan.id}>
-                              {plan.name}
-                              {plan.monthlyPrice != null
-                                ? ` — ${formatAdminPlanMonthlyPrice(plan.monthlyPrice)}/mo`
-                                : ""}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      {form.formState.errors.planId && (
-                        <p className="text-sm text-red-600">
-                          {form.formState.errors.planId.message}
-                        </p>
+                  {leadIdParam ? (
+                    <div className="rounded-lg border border-violet-200 bg-violet-50 p-4">
+                      <div className="font-semibold text-violet-900">Pro · 7-day trial</div>
+                      <p className="mt-1 text-sm text-violet-700">
+                        No billing until the trial ends. The linked lead will move to Trial status.
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="space-y-2">
+                          <Label htmlFor="planId" className="text-sm font-medium text-gray-700">{getLabel("Plan")}</Label>
+                          <Select 
+                            value={form.watch("planId")} 
+                            onValueChange={(value) => form.setValue("planId", value)}
+                          >
+                            <SelectTrigger className="mt-1">
+                              <SelectValue placeholder="Select a plan" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {plans.map((plan) => (
+                                <SelectItem key={plan.id} value={plan.id}>
+                                  {plan.name}
+                                  {plan.monthlyPrice != null
+                                    ? ` — ${formatAdminPlanMonthlyPrice(plan.monthlyPrice)}/mo`
+                                    : ""}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          {form.formState.errors.planId && (
+                            <p className="text-sm text-red-600">
+                              {form.formState.errors.planId.message}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="billingPeriod" className="text-sm font-medium text-gray-700">{getLabel("Billing Period")}</Label>
+                          <Select 
+                            value={form.watch("billingPeriod")} 
+                            onValueChange={(value) => form.setValue("billingPeriod", value as "monthly" | "yearly")}
+                          >
+                            <SelectTrigger className="mt-1">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="monthly">Monthly</SelectItem>
+                              <SelectItem value="yearly">Yearly (Save 20%)</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+
+                      {form.watch("planId") && (
+                        <div className="mt-4 p-4 bg-gray-50 rounded-lg">
+                          {(() => {
+                            const selectedPlan = plans.find(p => p.id === form.watch("planId"))
+                            if (!selectedPlan) return null
+                            return (
+                              <div>
+                                <div className="font-semibold text-sm text-gray-700 mb-2">
+                                  {selectedPlan.name} - {selectedPlan.description}
+                                </div>
+                                <div className="text-xs text-gray-600">
+                                  Includes {selectedPlan.features.length} features • {selectedPlan.limits.locations === Infinity ? 'Unlimited' : selectedPlan.limits.locations} location(s)
+                                </div>
+                              </div>
+                            )
+                          })()}
+                        </div>
                       )}
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="billingPeriod" className="text-sm font-medium text-gray-700">{getLabel("Billing Period")}</Label>
-                      <Select 
-                        value={form.watch("billingPeriod")} 
-                        onValueChange={(value) => form.setValue("billingPeriod", value as "monthly" | "yearly")}
-                      >
-                        <SelectTrigger className="mt-1">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="monthly">Monthly</SelectItem>
-                          <SelectItem value="yearly">Yearly (Save 20%)</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-
-                  {form.watch("planId") && (
-                    <div className="mt-4 p-4 bg-gray-50 rounded-lg">
-                      {(() => {
-                        const selectedPlan = plans.find(p => p.id === form.watch("planId"))
-                        if (!selectedPlan) return null
-                        return (
-                          <div>
-                            <div className="font-semibold text-sm text-gray-700 mb-2">
-                              {selectedPlan.name} - {selectedPlan.description}
-                            </div>
-                            <div className="text-xs text-gray-600">
-                              Includes {selectedPlan.features.length} features • {selectedPlan.limits.locations === Infinity ? 'Unlimited' : selectedPlan.limits.locations} location(s)
-                            </div>
-                          </div>
-                        )
-                      })()}
-                    </div>
+                    </>
                   )}
                 </CardContent>
               </Card>
@@ -733,5 +839,21 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
         </form>
       </div>
     </div>
+  )
+}
+
+export function CreateBusinessForm(props: BusinessFormProps) {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 p-6">
+          <div className="flex items-center justify-center min-h-[400px]">
+            <Loader2 className="h-12 w-12 animate-spin text-indigo-600" />
+          </div>
+        </div>
+      }
+    >
+      <CreateBusinessFormInner {...props} />
+    </Suspense>
   )
 }

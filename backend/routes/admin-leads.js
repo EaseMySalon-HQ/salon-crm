@@ -13,6 +13,7 @@ const { setupMainDatabase } = require('../middleware/business-db');
 const { authenticateAdmin, checkAdminPermission } = require('../middleware/admin-auth');
 const { logAdminActivity, getClientIp } = require('../utils/admin-logger');
 const { notifyPlatformAdminsPendingLead } = require('../lib/notify-platform-leads-pending');
+const { linkPlatformLeadToBusiness } = require('../lib/link-platform-lead-to-business');
 
 function adminDisplayName(admin) {
   return (
@@ -297,6 +298,18 @@ router.put('/:id', checkAdminPermission('leads', 'update'), async (req, res) => 
       notes !== undefined ? { statusNoteSnapshot: String(notes) } : {};
 
     if (status !== undefined) {
+      if (lead.status === 'converted' && status !== 'converted') {
+        return res.status(400).json({
+          success: false,
+          error: 'Converted leads cannot be changed to another status.',
+        });
+      }
+      if (lead.status === 'trial' && !['trial', 'converted', 'lost'].includes(status)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Trial leads can only be marked as Converted or Lost.',
+        });
+      }
       if (lead.status !== status) {
         activities.push({
           leadId: lead._id,
@@ -413,64 +426,32 @@ router.put('/:id', checkAdminPermission('leads', 'update'), async (req, res) => 
 
 router.post('/:id/convert', checkAdminPermission('leads', 'update'), async (req, res) => {
   try {
-    const { PlatformLead, PlatformLeadActivity, Business } = getPlatformLeadModels(req);
+    const models = getPlatformLeadModels(req);
     const { businessId } = req.body;
 
     if (!businessId) {
       return res.status(400).json({ success: false, error: 'businessId is required' });
     }
 
-    const lead = await PlatformLead.findById(req.params.id);
-    if (!lead) {
-      return res.status(404).json({ success: false, error: 'Lead not found' });
-    }
-    if (lead.status === 'converted') {
-      return res.status(400).json({ success: false, error: 'Lead has already been converted' });
-    }
+    await linkPlatformLeadToBusiness(models, {
+      leadId: req.params.id,
+      businessId,
+      admin: req.admin,
+    });
 
-    const business = await Business.findById(businessId);
-    if (!business) {
-      return res.status(404).json({ success: false, error: 'Business not found' });
-    }
-
-    const oldStatus = lead.status;
-    lead.status = 'converted';
-    lead.convertedToBusinessId = business._id;
-    lead.convertedAt = new Date();
-    await lead.save();
-
-    const performedBy = req.admin._id;
-    const performedByName = adminDisplayName(req.admin);
-
-    await PlatformLeadActivity.insertMany([
-      {
-        leadId: lead._id,
-        activityType: 'status_changed',
-        performedBy,
-        performedByName,
-        previousValue: oldStatus,
-        newValue: 'converted',
-        field: 'status',
-        description: `Status changed from ${oldStatus} to converted`,
-      },
-      {
-        leadId: lead._id,
-        activityType: 'converted',
-        performedBy,
-        performedByName,
-        newValue: business._id,
-        field: 'convertedToBusinessId',
-        description: `Linked to business ${business.name || business.businessName || business._id}`,
-        details: { businessName: business.name || business.businessName },
-      },
-    ]);
-
-    const populatedLead = await PlatformLead.findById(lead._id)
+    const { PlatformLead } = models;
+    const populatedLead = await PlatformLead.findById(req.params.id)
       .populate('assignedAdminId', 'firstName lastName email name')
       .populate('convertedToBusinessId', 'name businessName');
 
     res.json({ success: true, data: populatedLead });
   } catch (error) {
+    if (error.code === 'NOT_FOUND') {
+      return res.status(404).json({ success: false, error: error.message });
+    }
+    if (error.code === 'ALREADY_CONVERTED') {
+      return res.status(400).json({ success: false, error: error.message });
+    }
     logger.error('Admin convert lead error:', error);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }

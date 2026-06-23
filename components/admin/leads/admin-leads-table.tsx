@@ -180,11 +180,12 @@ export function AdminLeadsTable({ leads, onRefresh, onEdit, onConvert }: AdminLe
         const date = new Date(followUpDate)
         const today = new Date()
         today.setHours(0, 0, 0, 0)
-        const isConverted = row.original.status === "converted"
-        const isOverdue = !isConverted && date < today
+        const isLinked =
+          row.original.status === "converted" || row.original.status === "trial"
+        const isOverdue = !isLinked && date < today
         return (
           <span
-            className={`flex items-center gap-1.5 text-sm ${isOverdue ? "text-red-600" : isConverted ? "text-slate-500" : ""}`}
+            className={`flex items-center gap-1.5 text-sm ${isOverdue ? "text-red-600" : isLinked ? "text-slate-500" : ""}`}
           >
             <Calendar className="h-3.5 w-3.5" />
             {date.toLocaleDateString()}
@@ -213,7 +214,7 @@ export function AdminLeadsTable({ leads, onRefresh, onEdit, onConvert }: AdminLe
       id: "actions",
       cell: ({ row }) => {
         const lead = row.original
-        const isConverted = lead.status === "converted"
+        const isLinked = lead.status === "converted" || lead.status === "trial"
         const businessId =
           typeof lead.convertedToBusinessId === "object" && lead.convertedToBusinessId
             ? lead.convertedToBusinessId._id
@@ -235,13 +236,13 @@ export function AdminLeadsTable({ leads, onRefresh, onEdit, onConvert }: AdminLe
                   Edit
                 </DropdownMenuItem>
               )}
-              {!isConverted && canEdit && (
+              {!isLinked && canEdit && (
                 <DropdownMenuItem onClick={() => onConvert(lead)}>
                   <ArrowRight className="mr-2 h-4 w-4" />
                   Link to business
                 </DropdownMenuItem>
               )}
-              {isConverted && businessId && (
+              {isLinked && businessId && (
                 <DropdownMenuItem asChild>
                   <Link href={`/admin/businesses/${businessId}`}>
                     <ExternalLink className="mr-2 h-4 w-4" />
@@ -249,7 +250,7 @@ export function AdminLeadsTable({ leads, onRefresh, onEdit, onConvert }: AdminLe
                   </Link>
                 </DropdownMenuItem>
               )}
-              {canDelete && !isConverted && (
+              {canDelete && !isLinked && (
                 <>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem

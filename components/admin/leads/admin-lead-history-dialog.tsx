@@ -42,7 +42,7 @@ import { useToast } from "@/hooks/use-toast"
 import { Loader2 } from "lucide-react"
 
 const statusUpdateSchema = z.object({
-  status: z.enum(["new", "follow-up", "converted", "lost"]),
+  status: z.enum(["new", "follow-up", "trial", "converted", "lost"]),
   followUpDate: z.string().optional(),
   notes: z.string().optional(),
 })
@@ -87,7 +87,7 @@ export function AdminLeadHistoryDialog({
   useEffect(() => {
     if (!open || !lead._id) return
     form.reset({
-      status: lead.status,
+      status: lead.status === "trial" ? "converted" : lead.status,
       followUpDate: lead.followUpDate
         ? new Date(lead.followUpDate).toISOString().split("T")[0]
         : "",
@@ -195,9 +195,16 @@ export function AdminLeadHistoryDialog({
         {canEdit && lead.status !== "converted" && (
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-base">Add status update</CardTitle>
+              <CardTitle className="text-base">
+                {lead.status === "trial" ? "Close trial outcome" : "Add status update"}
+              </CardTitle>
             </CardHeader>
             <CardContent>
+              {lead.status === "trial" && (
+                <p className="mb-4 text-sm text-slate-600">
+                  This lead is on trial. Mark as Converted if they subscribe, or Lost if they do not continue.
+                </p>
+              )}
               <Form {...form}>
                 <form onSubmit={form.handleSubmit(onAddStatus)} className="space-y-4">
                   <FormField
@@ -213,9 +220,18 @@ export function AdminLeadHistoryDialog({
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
-                            <SelectItem value="follow-up">Follow-up</SelectItem>
-                            <SelectItem value="converted">Converted</SelectItem>
-                            <SelectItem value="lost">Lost</SelectItem>
+                            {lead.status === "trial" ? (
+                              <>
+                                <SelectItem value="converted">Converted</SelectItem>
+                                <SelectItem value="lost">Lost</SelectItem>
+                              </>
+                            ) : (
+                              <>
+                                <SelectItem value="follow-up">Follow-up</SelectItem>
+                                <SelectItem value="converted">Converted</SelectItem>
+                                <SelectItem value="lost">Lost</SelectItem>
+                              </>
+                            )}
                           </SelectContent>
                         </Select>
                         <FormMessage />

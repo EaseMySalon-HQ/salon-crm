@@ -91,6 +91,7 @@ export function AdminLeadsPage() {
       total: leads.length,
       new: leads.filter((l) => l.status === "new").length,
       followUp: leads.filter((l) => l.status === "follow-up").length,
+      trial: leads.filter((l) => l.status === "trial").length,
       converted: leads.filter((l) => l.status === "converted").length,
       lost: leads.filter((l) => l.status === "lost").length,
     }),
@@ -130,11 +131,12 @@ export function AdminLeadsPage() {
         )}
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         {[
           { label: "Total", value: stats.total, className: "" },
           { label: "New", value: stats.new, className: "text-blue-600" },
           { label: "Follow-up", value: stats.followUp, className: "text-orange-600" },
+          { label: "Trial", value: stats.trial, className: "text-violet-600" },
           { label: "Converted", value: stats.converted, className: "text-green-600" },
           { label: "Lost", value: stats.lost, className: "text-slate-600" },
         ].map((s) => (
@@ -172,6 +174,7 @@ export function AdminLeadsPage() {
                 <SelectItem value="all">All statuses</SelectItem>
                 <SelectItem value="new">New</SelectItem>
                 <SelectItem value="follow-up">Follow-up</SelectItem>
+                <SelectItem value="trial">Trial</SelectItem>
                 <SelectItem value="converted">Converted</SelectItem>
                 <SelectItem value="lost">Lost</SelectItem>
               </SelectContent>

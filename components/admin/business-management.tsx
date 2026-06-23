@@ -23,6 +23,7 @@ import {
   Copy,
   Check,
   Mail,
+  Wallet,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -35,6 +36,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { useToast } from "@/hooks/use-toast"
 import { PlanEditDialog } from "./plan-edit-dialog"
 import { BusinessActivityLogsDialog } from "./business-activity-logs-dialog"
+import { AddBusinessWalletBalanceDialog } from "./add-business-wallet-balance-dialog"
 import {
   Dialog,
   DialogContent,
@@ -148,6 +150,8 @@ export function BusinessManagement() {
   const [isPlanDialogOpen, setIsPlanDialogOpen] = useState(false)
   const [activityLogsBusiness, setActivityLogsBusiness] = useState<Business | null>(null)
   const [isActivityLogsOpen, setIsActivityLogsOpen] = useState(false)
+  const [walletCreditBusiness, setWalletCreditBusiness] = useState<Business | null>(null)
+  const [isWalletCreditOpen, setIsWalletCreditOpen] = useState(false)
   const [ownerPasswordResetDialog, setOwnerPasswordResetDialog] = useState<{
     password: string
     businessName: string
@@ -263,7 +267,7 @@ export function BusinessManagement() {
                 ...owner,
                 name: [owner.firstName, owner.lastName].filter(Boolean).join(" ") || owner.name || "—",
               } : null,
-              plan: planInfo?.plan || null,
+              plan: b.plan || planInfo?.plan || null,
             }
           })
           setBusinesses(list)
@@ -505,6 +509,12 @@ export function BusinessManagement() {
   const viewActivityLogs = (business: Business) => {
     setActivityLogsBusiness(business)
     setIsActivityLogsOpen(true)
+  }
+
+  const queueWalletCreditFromMenu = (b: Business) => {
+    setRowMenuOpenId(null)
+    setWalletCreditBusiness(b)
+    setIsWalletCreditOpen(true)
   }
 
   const location = (b: Business) => {
@@ -834,6 +844,15 @@ export function BusinessManagement() {
                                 <CreditCard className="h-4 w-4 mr-2" />
                                 Manage Plan
                               </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onSelect={(e) => {
+                                  e.preventDefault()
+                                  queueWalletCreditFromMenu(b)
+                                }}
+                              >
+                                <Wallet className="h-4 w-4 mr-2" />
+                                Add balance to wallet
+                              </DropdownMenuItem>
                               <DropdownMenuSeparator />
                               {!b.settings?.platformEmailDisabled ? (
                                 <DropdownMenuItem
@@ -942,6 +961,18 @@ export function BusinessManagement() {
           onOpenChange={(open) => {
             setIsActivityLogsOpen(open)
             if (!open) setActivityLogsBusiness(null)
+          }}
+        />
+      )}
+
+      {walletCreditBusiness && (
+        <AddBusinessWalletBalanceDialog
+          businessId={walletCreditBusiness._id}
+          businessName={walletCreditBusiness.name}
+          open={isWalletCreditOpen}
+          onOpenChange={(open) => {
+            setIsWalletCreditOpen(open)
+            if (!open) setWalletCreditBusiness(null)
           }}
         />
       )}

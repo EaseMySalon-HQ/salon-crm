@@ -71,7 +71,7 @@ const whatsappMessageSchema = new mongoose.Schema(
       index: true,
     },
 
-    metaMessageId: { type: String, default: null, index: true },
+    metaMessageId: { type: String, default: null },
     dedupeKey: { type: String, default: null },
 
     conversationId: {
@@ -128,7 +128,10 @@ whatsappMessageSchema.index({ businessId: 1, status: 1, timestamp: -1 });
 whatsappMessageSchema.index({ businessId: 1, recipientPhone: 1, timestamp: -1 }, { background: true });
 whatsappMessageSchema.index({ campaignId: 1, status: 1 });
 whatsappMessageSchema.index({ clientId: 1, timestamp: -1 });
-whatsappMessageSchema.index({ metaMessageId: 1 }, { sparse: true });
+whatsappMessageSchema.index(
+  { metaMessageId: 1 },
+  { sparse: true, name: 'metaMessageId_1_sparse', background: true }
+);
 
 module.exports = {
   schema: whatsappMessageSchema,

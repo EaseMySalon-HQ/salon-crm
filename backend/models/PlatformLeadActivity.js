@@ -18,6 +18,7 @@ const platformLeadActivitySchema = new mongoose.Schema({
       'admin_changed',
       'notes_updated',
       'converted',
+      'trial_started',
       'updated',
     ],
     required: true,

@@ -14,6 +14,11 @@ const {
 } = require('../lib/business-metrics');
 const databaseManager = require('../config/database-manager');
 const modelFactory = require('../models/model-factory');
+const { seedDefaultTenantData } = require('../lib/seed-default-tenant-data');
+const { applyInitialBusinessPlan, buildLeadTrialPlanPayload, invalidatePlanCache } = require('../lib/apply-initial-business-plan');
+const { linkPlatformLeadToBusiness } = require('../lib/link-platform-lead-to-business');
+const { creditBusinessWalletFromAdmin } = require('../lib/admin-business-wallet-credit');
+const { getPlanInfo } = require('../lib/entitlements');
 const { generateNextBusinessCode } = require('../lib/generate-business-code');
 const crypto = require('crypto');
 const emailService = require('../services/email-service');
@@ -216,7 +221,7 @@ router.get('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermis
     }
 
     if (plan && plan !== 'all') {
-      query['subscription.plan'] = plan;
+      query['plan.planId'] = plan;
     }
 
     const [businesses, total] = await Promise.all([
@@ -238,6 +243,7 @@ router.get('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermis
       invoicesCount: b.invoicesCount,
       revenue: b.revenue,
       nextBillingDate: b.nextBillingDate,
+      plan: getPlanInfo(b),
     }));
 
     res.json({
@@ -538,7 +544,9 @@ router.post('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermi
     
     const {
       businessInfo,
-      ownerInfo
+      ownerInfo,
+      plan: planPayload,
+      leadId,
     } = req.body;
 
     // Handle both data structures - ownerInfo as separate field or nested under businessInfo.owner
@@ -637,10 +645,10 @@ router.post('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermi
 
     // Build address and contact from whatever the user filled (same as in Business Settings)
     const address = {
-      street: (businessInfo.address?.street || businessInfo.location?.street) || 'Not provided',
-      city: businessInfo.address?.city || businessInfo.location?.city || '',
-      state: businessInfo.address?.state || businessInfo.location?.state || '',
-      zipCode: businessInfo.address?.zipCode || businessInfo.location?.zipCode || '',
+      street: String(businessInfo.address?.street || businessInfo.location?.street || '').trim() || 'Not provided',
+      city: String(businessInfo.address?.city || businessInfo.location?.city || '').trim() || 'Not provided',
+      state: String(businessInfo.address?.state || businessInfo.location?.state || '').trim() || 'NA',
+      zipCode: String(businessInfo.address?.zipCode || businessInfo.location?.zipCode || '').trim() || 'NA',
       country: businessInfo.address?.country || businessInfo.location?.country || 'India'
     };
     const contact = {
@@ -701,7 +709,21 @@ router.post('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermi
       status: 'active'
     });
 
+    try {
+      if (leadId) {
+        applyInitialBusinessPlan(business, buildLeadTrialPlanPayload('pro'));
+      } else {
+        applyInitialBusinessPlan(business, planPayload);
+      }
+    } catch (planError) {
+      if (planError.code === 'INVALID_PLAN') {
+        return res.status(400).json({ success: false, error: planError.message });
+      }
+      throw planError;
+    }
+
     await business.save();
+    invalidatePlanCache(business._id);
 
     // Set the owner's primary/default branch only on their first business. For
     // subsequent branches we leave User.branchId untouched so existing single-branch
@@ -751,9 +773,31 @@ router.post('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermi
       
       await defaultSettings.save();
       logger.debug(`✅ Default business settings created for ${business.name}`);
+
+      await seedDefaultTenantData(businessModels, business._id, {
+        businessCode: business.code,
+        logger,
+      });
     } catch (settingsError) {
       logger.error('Error creating default business settings:', settingsError);
       // Don't fail the business creation if settings creation fails
+    }
+
+    if (leadId) {
+      try {
+        await linkPlatformLeadToBusiness(req.mainModels, {
+          leadId,
+          businessId: business._id,
+          admin: req.admin,
+          applyBusinessTrial: false,
+        });
+      } catch (leadError) {
+        if (leadError.code === 'ALREADY_CONVERTED') {
+          logger.warn('Lead %s already converted when linking new business %s', leadId, business._id);
+        } else {
+          logger.error('Error linking lead after business create:', leadError);
+        }
+      }
     }
 
     res.status(201).json({
@@ -772,6 +816,9 @@ router.post('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermi
   } catch (error) {
     logger.error('Create business error:', error);
     logger.error('Error stack:', error.stack);
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ success: false, error: error.message });
+    }
     res.status(500).json({ success: false, error: 'Internal server error', details: error.message });
   }
 });
@@ -832,6 +879,91 @@ router.patch(
       res.status(500).json({ success: false, error: 'Internal server error' });
     }
   }
+);
+
+router.get(
+  '/businesses/:id/wallet',
+  setupMainDatabase,
+  authenticateAdmin,
+  checkAdminPermission('businesses', 'view'),
+  async (req, res) => {
+    try {
+      const { Business } = req.mainModels;
+      const business = await Business.findById(req.params.id).select('wallet name status').lean();
+      if (!business) {
+        return res.status(404).json({ success: false, error: 'Business not found' });
+      }
+      const balancePaise = Number(business?.wallet?.balancePaise || 0);
+      res.json({
+        success: true,
+        data: {
+          businessId: business._id,
+          businessName: business.name,
+          status: business.status,
+          balancePaise,
+          balanceRupees: balancePaise / 100,
+        },
+      });
+    } catch (error) {
+      logger.error('Get business wallet error:', error);
+      res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+  },
+);
+
+router.post(
+  '/businesses/:id/wallet/credit',
+  setupMainDatabase,
+  authenticateAdmin,
+  checkAdminPermission('businesses', 'update'),
+  async (req, res) => {
+    try {
+      const { Business } = req.mainModels;
+      const WalletTransaction = req.mainConnection.model(
+        'WalletTransaction',
+        require('../models/WalletTransaction').schema,
+      );
+      const { amountRupees, note } = req.body || {};
+
+      const result = await creditBusinessWalletFromAdmin({
+        Business,
+        WalletTransaction,
+        businessId: req.params.id,
+        amountRupees,
+        note,
+        admin: req.admin,
+      });
+
+      logAdminActivity({
+        adminId: req.admin,
+        action: 'update',
+        module: 'businesses',
+        resourceId: req.params.id,
+        resourceType: 'Business',
+        details: {
+          walletCredit: true,
+          amountRupees: result.amountRupees,
+          newBalanceRupees: result.newBalanceRupees,
+          transactionId: result.transactionId,
+          note: note != null ? String(note).trim() : '',
+        },
+        ipAddress: getClientIp(req),
+        userAgent: req.headers['user-agent'],
+      }).catch((err) => logger.error('Failed to log admin activity:', err));
+
+      res.json({
+        success: true,
+        data: result,
+        message: `Added ₹${result.amountRupees.toFixed(2)} to messaging wallet`,
+      });
+    } catch (error) {
+      if (error.status === 400 || error.status === 404) {
+        return res.status(error.status).json({ success: false, error: error.message });
+      }
+      logger.error('Admin wallet credit error:', error);
+      res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+  },
 );
 
 // Update Business
