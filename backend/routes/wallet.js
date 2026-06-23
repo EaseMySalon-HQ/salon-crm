@@ -21,6 +21,7 @@ const {
   sendWalletRechargeInvoice,
   buildInvoicePDFForTransaction,
 } = require('../lib/send-wallet-invoice');
+const { isWalletTaxInvoiceEligible } = require('../lib/wallet-tax-invoice-eligibility');
 
 const MIN_RECHARGE_RUPEES = 10;
 const MAX_RECHARGE_RUPEES = 50000;
@@ -125,6 +126,7 @@ router.get('/transactions', authenticateToken, setupMainDatabase, async (req, re
           channel: t.channel,
           messageCategory: t.messageCategory,
           provider: t.provider,
+          taxInvoiceEligible: isWalletTaxInvoiceEligible(t),
           description: t.description,
           balanceAfterPaise: t.balanceAfterPaise,
           balanceAfterRupees: paiseToRupees(t.balanceAfterPaise),
@@ -394,6 +396,9 @@ router.get('/invoice/:transactionId', authenticateToken, setupMainDatabase, asyn
         return res.status(403).json({ success: false, error: err.message });
       }
       if (code === 'INVALID_TYPE') {
+        return res.status(400).json({ success: false, error: err.message });
+      }
+      if (code === 'NOT_INVOICE_ELIGIBLE') {
         return res.status(400).json({ success: false, error: err.message });
       }
       throw err;
