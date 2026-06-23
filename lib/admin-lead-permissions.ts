@@ -25,12 +25,15 @@ export const LEAD_SOURCE_LABELS: Record<string, string> = {
 export const LEAD_STATUS_COLORS: Record<string, string> = {
   new: "bg-blue-100 text-blue-800",
   "follow-up": "bg-orange-100 text-orange-800",
+  trial: "bg-violet-100 text-violet-800",
   converted: "bg-green-100 text-green-800",
   lost: "bg-gray-100 text-gray-800",
 }
 
 export function formatLeadStatus(status: string): string {
-  return status.charAt(0).toUpperCase() + status.slice(1).replace("-", " ")
+  if (status === "follow-up") return "Follow-up"
+  if (status === "trial") return "Trial"
+  return status.charAt(0).toUpperCase() + status.slice(1)
 }
 
 export function adminAssigneeName(

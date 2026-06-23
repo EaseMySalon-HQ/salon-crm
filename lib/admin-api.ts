@@ -297,7 +297,7 @@ export class AdminGstAPI {
 
 // ── Platform leads ───────────────────────────────────────────────────────
 
-export type PlatformLeadStatus = "new" | "follow-up" | "converted" | "lost"
+export type PlatformLeadStatus = "new" | "follow-up" | "trial" | "converted" | "lost"
 export type PlatformLeadSource =
   | "walk-in"
   | "phone"

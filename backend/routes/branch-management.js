@@ -22,6 +22,7 @@ const {
 } = require('../lib/get-all-branches');
 const databaseManager = require('../config/database-manager');
 const modelFactory = require('../models/model-factory');
+const { seedDefaultTenantData } = require('../lib/seed-default-tenant-data');
 const { generateNextBusinessCode } = require('../lib/generate-business-code');
 const { logger } = require('../utils/logger');
 const {
@@ -824,6 +825,10 @@ router.post('/branches/add', guard, validate(addBranchSchema), async (req, res) 
         enableTax: true,
       });
       await defaultSettings.save();
+      await seedDefaultTenantData(businessModels, business._id, {
+        businessCode: business.code,
+        logger,
+      });
     } catch (settingsError) {
       logger.error('add-branch: default settings creation failed:', settingsError.message);
       // Don't fail branch creation if seed settings fail.

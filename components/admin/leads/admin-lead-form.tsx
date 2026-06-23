@@ -26,7 +26,7 @@ const formSchema = z.object({
   phone: z.string().regex(/^\d{10}$/, { message: "Phone number must be exactly 10 digits." }),
   email: z.string().email({ message: "Please enter a valid email." }).optional().or(z.literal("")),
   source: z.enum(["walk-in", "phone", "website", "social", "referral", "other"]),
-  status: z.enum(["new", "follow-up", "converted", "lost"]),
+  status: z.enum(["new", "follow-up", "trial", "converted", "lost"]),
   interestedIn: z.string().optional(),
   assignedAdminId: z.string().optional(),
   followUpDate: z.string().optional(),
@@ -257,7 +257,11 @@ export function AdminLeadForm({
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Status</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
+                    <Select
+                      onValueChange={field.onChange}
+                      value={field.value}
+                      disabled={isEditMode && lead?.status === "converted"}
+                    >
                       <FormControl>
                         <SelectTrigger>
                           <SelectValue />
@@ -269,9 +273,20 @@ export function AdminLeadForm({
                             New
                           </SelectItem>
                         )}
-                        <SelectItem value="follow-up">Follow-up</SelectItem>
-                        <SelectItem value="converted">Converted</SelectItem>
-                        <SelectItem value="lost">Lost</SelectItem>
+                        {lead?.status === "trial" ? (
+                          <>
+                            <SelectItem value="converted">Converted</SelectItem>
+                            <SelectItem value="lost">Lost</SelectItem>
+                          </>
+                        ) : lead?.status === "converted" ? (
+                          <SelectItem value="converted">Converted</SelectItem>
+                        ) : (
+                          <>
+                            <SelectItem value="follow-up">Follow-up</SelectItem>
+                            <SelectItem value="converted">Converted</SelectItem>
+                            <SelectItem value="lost">Lost</SelectItem>
+                          </>
+                        )}
                       </SelectContent>
                     </Select>
                     <FormMessage />

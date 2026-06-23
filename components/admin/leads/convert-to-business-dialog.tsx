@@ -95,8 +95,8 @@ export function ConvertToBusinessDialog({
       setSubmitting(true)
       await AdminLeadsAPI.convert(lead._id, businessId)
       toast({
-        title: "Lead converted",
-        description: "Lead linked to the selected business.",
+        title: "Trial started",
+        description: "Lead linked to the selected business with a 7-day Pro trial.",
       })
       onSuccess()
       onOpenChange(false)
@@ -110,11 +110,14 @@ export function ConvertToBusinessDialog({
 
   const handleCreateBusiness = () => {
     const params = new URLSearchParams()
-    if (lead.salonName) params.set("name", lead.salonName)
-    else if (lead.name) params.set("name", lead.name)
+    const businessName = lead.salonName?.trim() || lead.name?.trim()
+    if (businessName) params.set("name", businessName)
+    if (lead.city?.trim()) params.set("city", lead.city.trim())
     if (lead.phone) params.set("phone", lead.phone)
     if (lead.email) params.set("email", lead.email)
     params.set("leadId", lead._id)
+    params.set("planId", "pro")
+    params.set("billingPeriod", "monthly")
     onOpenChange(false)
     router.push(`/admin/businesses/new?${params.toString()}`)
   }
@@ -125,8 +128,8 @@ export function ConvertToBusinessDialog({
         <DialogHeader>
           <DialogTitle>Link to business</DialogTitle>
           <DialogDescription>
-            Mark <strong>{lead.name}</strong> as converted by linking an existing tenant, or create a
-            new business.
+            Link <strong>{lead.name}</strong> to an existing tenant to start a 7-day Pro trial, or
+            create a new business.
           </DialogDescription>
         </DialogHeader>
 
@@ -165,7 +168,7 @@ export function ConvertToBusinessDialog({
             Cancel
           </Button>
           <Button onClick={handleConvert} disabled={submitting || !businessId}>
-            {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Link & convert"}
+            {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Link & start trial"}
           </Button>
         </DialogFooter>
       </DialogContent>
