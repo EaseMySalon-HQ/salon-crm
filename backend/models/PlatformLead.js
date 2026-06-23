@@ -45,7 +45,7 @@ const platformLeadSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['new', 'follow-up', 'converted', 'lost'],
+    enum: ['new', 'follow-up', 'trial', 'converted', 'lost'],
     default: 'new',
   },
   gender: {

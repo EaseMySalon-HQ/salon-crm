@@ -19,6 +19,7 @@ const { logger } = require('../utils/logger');
 const emailService = require('../services/email-service');
 const { generateWalletInvoicePDF } = require('../utils/wallet-invoice-pdf');
 const { writeInvoiceRow } = require('./invoice-ledger');
+const { isWalletTaxInvoiceEligible } = require('./wallet-tax-invoice-eligibility');
 
 // ──────────────────────────────────────────────────────────────────────────
 // Seller defaults — come from env vars so deploys can customise without code
@@ -358,6 +359,11 @@ async function buildInvoicePDFForTransaction({
   if (txDoc.type !== 'credit') {
     const err = new Error('Invoice is only generated for credit transactions');
     err.code = 'INVALID_TYPE';
+    throw err;
+  }
+  if (!isWalletTaxInvoiceEligible(txDoc)) {
+    const err = new Error('Tax invoice is not issued for platform admin credits');
+    err.code = 'NOT_INVOICE_ELIGIBLE';
     throw err;
   }
   if (

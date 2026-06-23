@@ -42,6 +42,11 @@ const walletTransactionSchema = new mongoose.Schema({
     default: null,
     index: true
   },
+  /** When false, no GST tax invoice is generated (e.g. platform admin credits). */
+  taxInvoiceEligible: {
+    type: Boolean,
+    default: true,
+  },
   channel: {
     type: String,
     enum: ['sms', 'whatsapp', null],

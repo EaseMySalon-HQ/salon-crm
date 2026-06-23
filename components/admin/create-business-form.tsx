@@ -1,30 +1,40 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { useRouter, useParams } from "next/navigation"
+import { Suspense, useState, useEffect, useCallback } from "react"
+import { useRouter, useParams, useSearchParams } from "next/navigation"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
-import { ArrowLeft, Building2, User, Loader2, Phone, MapPin, CreditCard } from "lucide-react"
+import { ArrowLeft, Building2, User, Loader2, Phone, MapPin, CreditCard, Copy, Check } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast"
 import { adminRequestHeaders } from "@/lib/admin-request-headers"
 import { formatAdminPlanMonthlyPrice } from "@/lib/admin-plan-price"
+import { AdminLeadsAPI } from "@/lib/admin-api"
 
 // Create schema factory function
 const createBusinessSchema = (isEditMode: boolean) => z.object({
   // Business Information
   businessName: isEditMode ? z.string().optional() : z.string().min(2, "Business name must be at least 2 characters"),
   businessType: isEditMode ? z.enum(["salon", "spa", "barbershop", "beauty_clinic"]).optional() : z.enum(["salon", "spa", "barbershop", "beauty_clinic"]),
-  street: isEditMode ? z.string().optional() : z.string().min(5, "Street address is required"),
+  street: z.string().optional(),
   city: isEditMode ? z.string().optional() : z.string().min(2, "City is required"),
-  state: isEditMode ? z.string().optional() : z.string().min(2, "State is required"),
-  zipCode: isEditMode ? z.string().optional() : z.string().min(5, "ZIP code is required"),
+  state: z.string().optional(),
+  zipCode: z.string().optional(),
   country: z.string().default("India"),
   phone: isEditMode ? z.string().optional() : z.string().min(10, "Phone number is required"),
   email: isEditMode ? z.string().email("Valid email is required").optional() : z.string().email("Valid email is required"),
@@ -32,10 +42,10 @@ const createBusinessSchema = (isEditMode: boolean) => z.object({
   
   // Owner Information
   ownerFirstName: isEditMode ? z.string().optional() : z.string().min(2, "First name is required"),
-  ownerLastName: isEditMode ? z.string().optional() : z.string().min(2, "Last name is required"),
+  ownerLastName: z.string().optional(),
   ownerEmail: isEditMode ? z.string().email("Valid email is required").optional() : z.string().email("Valid email is required"),
   ownerPhone: isEditMode ? z.string().optional() : z.string().min(10, "Phone number is required"),
-  ownerPassword: isEditMode ? z.string().optional() : z.string().min(6, "Password must be at least 6 characters"),
+  ownerPassword: z.string().optional(),
   
   // Plan Information
   planId: isEditMode ? z.string().optional() : z.string().min(1, "Plan selection is required"),
@@ -49,14 +59,87 @@ interface BusinessFormProps {
   businessId?: string
 }
 
-export function CreateBusinessForm({ mode = 'create', businessId }: BusinessFormProps) {
+function splitOwnerName(fullName: string): { first: string; last: string } {
+  const parts = String(fullName || "").trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return { first: "", last: "" }
+  if (parts.length === 1) return { first: parts[0], last: "" }
+  return { first: parts[0], last: parts.slice(1).join(" ") }
+}
+
+function buildTrialCredentialsMessage({
+  firstName,
+  email,
+  password,
+}: {
+  firstName: string
+  email: string
+  password: string
+}) {
+  return `Hi ${firstName} 👋
+
+Thank you for taking the time to connect with us today.
+
+As discussed during the demo, we've activated your EaseMySalon trial account so you can explore the platform and see how it fits into your salon's day-to-day operations.
+
+🔗 Login:  https://www.easemysalon.in/login
+📧 Username: ${email}
+🔑 Password: ${password}
+
+We've already configured your trial account with:
+
+✅ 2 Staff Members
+✅ 2 Sample Clients
+✅ 4 Sample Services
+✅ ₹10 Wallet Balance
+
+Over the next few days, I recommend trying a few real scenarios such as creating appointments, generating bills, managing clients, and exploring reports.
+
+The goal isn't just to evaluate software—it's to see how EaseMySalon can help streamline operations, improve client retention, and support your salon's growth.
+
+If you have any questions while exploring, simply reply to this message or give me a call. I'll be happy to help.
+
+Looking forward to hearing your feedback.
+
+
+Team EaseMySalon`
+}
+
+async function copyTextToClipboard(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    try {
+      const ta = document.createElement("textarea")
+      ta.value = text
+      ta.style.position = "fixed"
+      ta.style.left = "-9999px"
+      document.body.appendChild(ta)
+      ta.focus()
+      ta.select()
+      const ok = document.execCommand("copy")
+      document.body.removeChild(ta)
+      return ok
+    } catch {
+      return false
+    }
+  }
+}
+
+function CreateBusinessFormInner({ mode = 'create', businessId }: BusinessFormProps) {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [plans, setPlans] = useState<any[]>([])
+  const [credentialsDialogOpen, setCredentialsDialogOpen] = useState(false)
+  const [credentialsDialogStep, setCredentialsDialogStep] = useState<"prompt" | "message">("prompt")
+  const [credentialsMessage, setCredentialsMessage] = useState("")
+  const [credentialsCopied, setCredentialsCopied] = useState(false)
+  const [postCreateRedirectPath, setPostCreateRedirectPath] = useState<string | null>(null)
   const { toast } = useToast()
   const router = useRouter()
   const params = useParams()
-  
+  const searchParams = useSearchParams()
+  const leadIdParam = searchParams.get("leadId")
   // Get business ID from params if not provided as prop
   const currentBusinessId = businessId || params?.id as string
   const isEditMode = mode === 'edit' || !!currentBusinessId
@@ -94,6 +177,77 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
       loadBusinessData()
     }
   }, [isEditMode, currentBusinessId])
+
+  const applyLeadPrefill = useCallback(
+    (lead: {
+      name: string
+      salonName?: string
+      city?: string
+      phone: string
+      email?: string
+    }) => {
+      const { first, last } = splitOwnerName(lead.name)
+      form.reset({
+        businessName: lead.salonName?.trim() || lead.name?.trim() || "",
+        businessType: "salon",
+        street: "",
+        city: lead.city?.trim() || "",
+        state: "",
+        zipCode: "",
+        country: "India",
+        phone: lead.phone?.trim() || "",
+        email: lead.email?.trim() || "",
+        website: "",
+        ownerFirstName: first,
+        ownerLastName: last,
+        ownerEmail: lead.email?.trim() || "",
+        ownerPhone: lead.phone?.trim() || "",
+        ownerPassword: "",
+        planId: "pro",
+        billingPeriod: "monthly",
+      })
+    },
+    [form]
+  )
+
+  useEffect(() => {
+    if (isEditMode || !leadIdParam) return
+
+    const name = searchParams.get("name")
+    const phone = searchParams.get("phone")
+    const email = searchParams.get("email")
+    const city = searchParams.get("city")
+    if (name || phone || email || city) {
+      applyLeadPrefill({
+        name: name || "",
+        salonName: name || "",
+        city: city || "",
+        phone: phone || "",
+        email: email || "",
+      })
+    }
+
+    let cancelled = false
+    ;(async () => {
+      try {
+        const lead = await AdminLeadsAPI.getById(leadIdParam)
+        if (!cancelled) applyLeadPrefill(lead)
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Failed to load lead for prefill:", error)
+          toast({
+            title: "Could not load lead details",
+            description: "You can still fill the form manually.",
+            variant: "destructive",
+          })
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [isEditMode, leadIdParam, applyLeadPrefill, toast, searchParams])
 
   const fetchPlans = async () => {
     try {
@@ -185,10 +339,10 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
           name: data.businessName || '',
           businessType: data.businessType || 'salon',
           address: {
-            street: data.street || 'Not provided',
-            city: data.city || '',
-            state: data.state || '',
-            zipCode: data.zipCode || '',
+            street: data.street?.trim() || 'Not provided',
+            city: data.city?.trim() || 'Not provided',
+            state: data.state?.trim() || 'NA',
+            zipCode: data.zipCode?.trim() || 'NA',
             country: data.country || 'India'
           },
           contact: {
@@ -213,7 +367,9 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
           lastName: data.ownerLastName || '',
           email: data.ownerEmail || '',
           phone: data.ownerPhone || '',
-          password: data.ownerPassword || ''
+          password: isEditMode
+            ? data.ownerPassword || ''
+            : (data.ownerPhone || '').trim(),
         },
         plan: {
           planId: data.planId || 'starter',
@@ -251,10 +407,14 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
         // Create new business
         response = await fetch(`${API_URL}/admin/businesses`, {
           method: 'POST',
+          credentials: 'include',
           headers: adminRequestHeaders({
             'Content-Type': 'application/json',
           }),
-          body: JSON.stringify(businessData)
+          body: JSON.stringify({
+            ...businessData,
+            ...(leadIdParam ? { leadId: leadIdParam } : {}),
+          })
         })
       }
 
@@ -265,13 +425,35 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
           title: isEditMode ? "Business Updated Successfully" : "Business Created Successfully",
           description: isEditMode 
             ? `Business "${data.businessName}" has been updated successfully.`
-            : `Business "${data.businessName}" has been created with owner access.`,
+            : leadIdParam
+              ? `Business "${data.businessName}" was created with a 7-day Pro trial and the lead was marked as Trial.`
+              : `Business "${data.businessName}" has been created with owner access.`,
         })
-        router.push('/admin/businesses')
+
+        if (isEditMode) {
+          router.push(leadIdParam ? '/admin/leads' : '/admin/businesses')
+        } else {
+          const redirectPath = leadIdParam ? '/admin/leads' : '/admin/businesses'
+          setPostCreateRedirectPath(redirectPath)
+          setCredentialsMessage(
+            buildTrialCredentialsMessage({
+              firstName: data.ownerFirstName || '',
+              email: data.ownerEmail || '',
+              password: (data.ownerPhone || '').trim(),
+            })
+          )
+          setCredentialsDialogStep("prompt")
+          setCredentialsCopied(false)
+          setCredentialsDialogOpen(true)
+        }
       } else {
         toast({
           title: isEditMode ? "Update Failed" : "Creation Failed",
-          description: result.error || `Failed to ${isEditMode ? 'update' : 'create'} business`,
+          description:
+            result.error ||
+            result.message ||
+            result.details ||
+            `Failed to ${isEditMode ? 'update' : 'create'} business`,
           variant: "destructive",
         })
       }
@@ -287,6 +469,40 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
     }
   }
 
+
+  const finishAfterCreate = () => {
+    setCredentialsDialogOpen(false)
+    setCredentialsDialogStep("prompt")
+    setCredentialsCopied(false)
+    if (postCreateRedirectPath) {
+      router.push(postCreateRedirectPath)
+    }
+  }
+
+  const handleShareCredentialsNo = () => {
+    finishAfterCreate()
+  }
+
+  const handleShareCredentialsYes = () => {
+    setCredentialsDialogStep("message")
+  }
+
+  const handleCopyCredentialsMessage = async () => {
+    const copied = await copyTextToClipboard(credentialsMessage)
+    if (copied) {
+      setCredentialsCopied(true)
+      toast({
+        title: "Copied to clipboard",
+        description: "The credentials message is ready to share.",
+      })
+    } else {
+      toast({
+        title: "Copy failed",
+        description: "Please select and copy the message manually.",
+        variant: "destructive",
+      })
+    }
+  }
 
   // Helper function to get label with optional asterisk
   const getLabel = (text: string, required: boolean = true) => {
@@ -372,7 +588,10 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
 
                     <div className="space-y-2">
                       <Label htmlFor="businessType" className="text-sm font-medium text-gray-700">{getLabel("Business Type")}</Label>
-                      <Select onValueChange={(value) => form.setValue("businessType", value as any)}>
+                      <Select
+                        value={form.watch("businessType")}
+                        onValueChange={(value) => form.setValue("businessType", value as any)}
+                      >
                         <SelectTrigger className="mt-1">
                           <SelectValue placeholder="Select business type" />
                         </SelectTrigger>
@@ -393,7 +612,7 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       <div className="md:col-span-2 space-y-2">
-                        <Label htmlFor="street" className="text-sm font-medium text-gray-700">{getLabel("Street Address")}</Label>
+                        <Label htmlFor="street" className="text-sm font-medium text-gray-700">{getLabel("Street Address", false)}</Label>
                         <Input
                           id="street"
                           placeholder="123 Beauty Street"
@@ -423,7 +642,7 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
                       </div>
 
                       <div className="space-y-2">
-                        <Label htmlFor="state" className="text-sm font-medium text-gray-700">{getLabel("State")}</Label>
+                        <Label htmlFor="state" className="text-sm font-medium text-gray-700">{getLabel("State", false)}</Label>
                         <Input
                           id="state"
                           placeholder="Maharashtra"
@@ -438,7 +657,7 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
                       </div>
 
                       <div className="space-y-2">
-                        <Label htmlFor="zipCode" className="text-sm font-medium text-gray-700">{getLabel("ZIP Code")}</Label>
+                        <Label htmlFor="zipCode" className="text-sm font-medium text-gray-700">{getLabel("ZIP Code", false)}</Label>
                         <Input
                           id="zipCode"
                           placeholder="400001"
@@ -528,72 +747,85 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
                     Pricing Plan
                   </CardTitle>
                   <CardDescription className="text-purple-600">
-                    Select a pricing plan for this business
+                    {leadIdParam
+                      ? "This lead receives a 7-day Pro trial when the business is created"
+                      : "Select a pricing plan for this business"}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="p-6 space-y-6">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="space-y-2">
-                      <Label htmlFor="planId" className="text-sm font-medium text-gray-700">{getLabel("Plan")}</Label>
-                      <Select 
-                        value={form.watch("planId")} 
-                        onValueChange={(value) => form.setValue("planId", value)}
-                      >
-                        <SelectTrigger className="mt-1">
-                          <SelectValue placeholder="Select a plan" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {plans.map((plan) => (
-                            <SelectItem key={plan.id} value={plan.id}>
-                              {plan.name}
-                              {plan.monthlyPrice != null
-                                ? ` — ${formatAdminPlanMonthlyPrice(plan.monthlyPrice)}/mo`
-                                : ""}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      {form.formState.errors.planId && (
-                        <p className="text-sm text-red-600">
-                          {form.formState.errors.planId.message}
-                        </p>
+                  {leadIdParam ? (
+                    <div className="rounded-lg border border-violet-200 bg-violet-50 p-4">
+                      <div className="font-semibold text-violet-900">Pro · 7-day trial</div>
+                      <p className="mt-1 text-sm text-violet-700">
+                        No billing until the trial ends. The linked lead will move to Trial status.
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="space-y-2">
+                          <Label htmlFor="planId" className="text-sm font-medium text-gray-700">{getLabel("Plan")}</Label>
+                          <Select 
+                            value={form.watch("planId")} 
+                            onValueChange={(value) => form.setValue("planId", value)}
+                          >
+                            <SelectTrigger className="mt-1">
+                              <SelectValue placeholder="Select a plan" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {plans.map((plan) => (
+                                <SelectItem key={plan.id} value={plan.id}>
+                                  {plan.name}
+                                  {plan.monthlyPrice != null
+                                    ? ` — ${formatAdminPlanMonthlyPrice(plan.monthlyPrice)}/mo`
+                                    : ""}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          {form.formState.errors.planId && (
+                            <p className="text-sm text-red-600">
+                              {form.formState.errors.planId.message}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="billingPeriod" className="text-sm font-medium text-gray-700">{getLabel("Billing Period")}</Label>
+                          <Select 
+                            value={form.watch("billingPeriod")} 
+                            onValueChange={(value) => form.setValue("billingPeriod", value as "monthly" | "yearly")}
+                          >
+                            <SelectTrigger className="mt-1">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="monthly">Monthly</SelectItem>
+                              <SelectItem value="yearly">Yearly (Save 20%)</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+
+                      {form.watch("planId") && (
+                        <div className="mt-4 p-4 bg-gray-50 rounded-lg">
+                          {(() => {
+                            const selectedPlan = plans.find(p => p.id === form.watch("planId"))
+                            if (!selectedPlan) return null
+                            return (
+                              <div>
+                                <div className="font-semibold text-sm text-gray-700 mb-2">
+                                  {selectedPlan.name} - {selectedPlan.description}
+                                </div>
+                                <div className="text-xs text-gray-600">
+                                  Includes {selectedPlan.features.length} features • {selectedPlan.limits.locations === Infinity ? 'Unlimited' : selectedPlan.limits.locations} location(s)
+                                </div>
+                              </div>
+                            )
+                          })()}
+                        </div>
                       )}
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="billingPeriod" className="text-sm font-medium text-gray-700">{getLabel("Billing Period")}</Label>
-                      <Select 
-                        value={form.watch("billingPeriod")} 
-                        onValueChange={(value) => form.setValue("billingPeriod", value as "monthly" | "yearly")}
-                      >
-                        <SelectTrigger className="mt-1">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="monthly">Monthly</SelectItem>
-                          <SelectItem value="yearly">Yearly (Save 20%)</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-
-                  {form.watch("planId") && (
-                    <div className="mt-4 p-4 bg-gray-50 rounded-lg">
-                      {(() => {
-                        const selectedPlan = plans.find(p => p.id === form.watch("planId"))
-                        if (!selectedPlan) return null
-                        return (
-                          <div>
-                            <div className="font-semibold text-sm text-gray-700 mb-2">
-                              {selectedPlan.name} - {selectedPlan.description}
-                            </div>
-                            <div className="text-xs text-gray-600">
-                              Includes {selectedPlan.features.length} features • {selectedPlan.limits.locations === Infinity ? 'Unlimited' : selectedPlan.limits.locations} location(s)
-                            </div>
-                          </div>
-                        )
-                      })()}
-                    </div>
+                    </>
                   )}
                 </CardContent>
               </Card>
@@ -631,7 +863,7 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
                     </div>
 
                     <div className="space-y-2">
-                      <Label htmlFor="ownerLastName" className="text-sm font-medium text-gray-700">{getLabel("Last Name")}</Label>
+                      <Label htmlFor="ownerLastName" className="text-sm font-medium text-gray-700">{getLabel("Last Name", false)}</Label>
                       <Input
                         id="ownerLastName"
                         placeholder="Doe"
@@ -674,16 +906,22 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
                           {form.formState.errors.ownerPhone.message}
                         </p>
                       )}
+                      {!isEditMode && (
+                        <p className="text-xs text-gray-500">
+                          The owner&apos;s mobile number will be used as the initial login password.
+                        </p>
+                      )}
                     </div>
 
+                    {isEditMode && (
                     <div className="md:col-span-2 space-y-2">
                       <Label htmlFor="ownerPassword" className="text-sm font-medium text-gray-700">
-                        {isEditMode ? 'New Password (Optional)' : 'Password *'}
+                        New Password (Optional)
                       </Label>
                       <Input
                         id="ownerPassword"
                         type="password"
-                        placeholder={isEditMode ? "Leave blank to keep current password" : "Enter a strong password"}
+                        placeholder="Leave blank to keep current password"
                         {...form.register("ownerPassword")}
                         className="mt-1"
                       />
@@ -693,12 +931,10 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
                         </p>
                       )}
                       <p className="text-xs text-gray-500">
-                        {isEditMode 
-                          ? "Only enter a new password if you want to change it. Leave blank to keep the current password."
-                          : "This will be the login password for the business owner"
-                        }
+                        Only enter a new password if you want to change it. Leave blank to keep the current password.
                       </p>
                     </div>
+                    )}
                   </div>
               </CardContent>
             </Card>
@@ -732,6 +968,86 @@ export function CreateBusinessForm({ mode = 'create', businessId }: BusinessForm
           </div>
         </form>
       </div>
+
+      {!isEditMode && (
+        <Dialog
+          open={credentialsDialogOpen}
+          onOpenChange={(open) => {
+            if (!open) finishAfterCreate()
+            else setCredentialsDialogOpen(true)
+          }}
+        >
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+            {credentialsDialogStep === "prompt" ? (
+              <>
+                <DialogHeader>
+                  <DialogTitle>Share credentials?</DialogTitle>
+                  <DialogDescription>
+                    Do you want to share the credentials with the business owner?
+                  </DialogDescription>
+                </DialogHeader>
+                <DialogFooter className="gap-2 sm:gap-0">
+                  <Button type="button" variant="outline" onClick={handleShareCredentialsNo}>
+                    No
+                  </Button>
+                  <Button type="button" onClick={handleShareCredentialsYes}>
+                    Yes
+                  </Button>
+                </DialogFooter>
+              </>
+            ) : (
+              <>
+                <DialogHeader>
+                  <DialogTitle>Credentials message</DialogTitle>
+                  <DialogDescription>
+                    Copy this message and send it to the business owner.
+                  </DialogDescription>
+                </DialogHeader>
+                <Textarea
+                  readOnly
+                  value={credentialsMessage}
+                  rows={18}
+                  className="font-mono text-sm resize-none"
+                />
+                <DialogFooter className="gap-2 sm:gap-0">
+                  <Button type="button" variant="outline" onClick={finishAfterCreate}>
+                    Done
+                  </Button>
+                  <Button type="button" onClick={handleCopyCredentialsMessage}>
+                    {credentialsCopied ? (
+                      <>
+                        <Check className="mr-2 h-4 w-4" />
+                        Copied
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="mr-2 h-4 w-4" />
+                        Copy message
+                      </>
+                    )}
+                  </Button>
+                </DialogFooter>
+              </>
+            )}
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
+  )
+}
+
+export function CreateBusinessForm(props: BusinessFormProps) {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 p-6">
+          <div className="flex items-center justify-center min-h-[400px]">
+            <Loader2 className="h-12 w-12 animate-spin text-indigo-600" />
+          </div>
+        </div>
+      }
+    >
+      <CreateBusinessFormInner {...props} />
+    </Suspense>
   )
 }

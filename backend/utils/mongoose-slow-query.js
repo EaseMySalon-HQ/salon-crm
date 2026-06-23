@@ -86,6 +86,16 @@ function extractCommandDetail(event) {
 
 const attachedClients = new WeakSet();
 
+function isBenignIndexSyncFailure(commandName, failure) {
+  if (commandName !== 'createIndexes') return false;
+  const msg = String(failure || '').toLowerCase();
+  return (
+    msg.includes('already exists') ||
+    msg.includes('same name as the requested index') ||
+    msg.includes('index options are equivalent')
+  );
+}
+
 /**
  * @param {import('mongoose').Connection} connection
  */
@@ -125,6 +135,7 @@ function registerSlowQueryMonitoring(connection) {
     client.on('commandFailed', (event) => {
       const name = event.commandName;
       if (!name || IGNORE_COMMANDS.has(name)) return;
+      if (isBenignIndexSyncFailure(name, event.failure)) return;
 
       const detail = extractCommandDetail(event);
       logger.warn('Failed MongoDB command', {
