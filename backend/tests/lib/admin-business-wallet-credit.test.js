@@ -65,8 +65,9 @@ describe('admin-business-wallet-credit', () => {
         type: 'credit',
         amountPaise: 25000,
         provider: 'system',
+        taxInvoiceEligible: false,
         balanceAfterPaise: 26000,
-        description: expect.stringContaining('Welcome bonus'),
+        description: 'Trial account Credit',
       }),
     );
   });

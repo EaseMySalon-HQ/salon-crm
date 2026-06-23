@@ -3,14 +3,6 @@
 const MIN_ADMIN_WALLET_CREDIT_RUPEES = 1;
 const MAX_ADMIN_WALLET_CREDIT_RUPEES = 50000;
 
-function adminDisplayName(admin) {
-  if (!admin) return 'Platform admin';
-  if (admin.firstName || admin.lastName) {
-    return `${admin.firstName || ''} ${admin.lastName || ''}`.trim();
-  }
-  return admin.name || admin.email || 'Platform admin';
-}
-
 function parseCreditAmountPaise(amountRupees) {
   const amount = Number(amountRupees);
   if (
@@ -63,17 +55,14 @@ async function creditBusinessWalletFromAdmin({
     .lean();
 
   const newBalancePaise = Number(updated?.wallet?.balancePaise || 0);
-  const noteTrim = note != null ? String(note).trim() : '';
-  const adminLabel = adminDisplayName(admin);
-  const description = noteTrim
-    ? `Platform admin credit by ${adminLabel}: ${noteTrim}`
-    : `Platform admin credit by ${adminLabel}`;
+  const description = 'Trial account Credit';
 
   const txn = await WalletTransaction.create({
     businessId,
     type: 'credit',
     amountPaise,
     provider: 'system',
+    taxInvoiceEligible: false,
     description,
     balanceAfterPaise: newBalancePaise,
     timestamp: new Date(),

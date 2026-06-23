@@ -3592,6 +3592,8 @@ export interface WalletTransaction {
   channel: "sms" | "whatsapp" | null
   messageCategory: "promotional" | "transactional" | null
   provider: WalletProvider | "system"
+  /** False for platform admin credits — no GST tax invoice. */
+  taxInvoiceEligible?: boolean
   description: string | null
   balanceAfterPaise: number
   balanceAfterRupees: number

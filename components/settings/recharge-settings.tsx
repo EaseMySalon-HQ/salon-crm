@@ -116,6 +116,17 @@ function channelLabel(c: string | null | undefined) {
   return c
 }
 
+function walletTransactionDescription(tx: WalletTransaction) {
+  if (
+    tx.type === "credit" &&
+    (tx.taxInvoiceEligible === false ||
+      (tx.description || "").toLowerCase().startsWith("platform admin credit"))
+  ) {
+    return "Trial account Credit"
+  }
+  return tx.description || "—"
+}
+
 function BalanceCard({
   balanceRupees,
   loading,
@@ -650,8 +661,8 @@ function TransactionHistory({ refreshKey }: { refreshKey: number }) {
                       </Badge>
                     </TableCell>
                     <TableCell>{channelLabel(t.channel)}</TableCell>
-                    <TableCell className="max-w-[240px] truncate" title={t.description || ""}>
-                      {t.description || "—"}
+                    <TableCell className="max-w-[240px] truncate" title={walletTransactionDescription(t)}>
+                      {walletTransactionDescription(t)}
                     </TableCell>
                     <TableCell>{providerLabel(t.provider)}</TableCell>
                     <TableCell
@@ -667,7 +678,7 @@ function TransactionHistory({ refreshKey }: { refreshKey: number }) {
                       {formatRupees(t.balanceAfterRupees)}
                     </TableCell>
                     <TableCell className="text-right">
-                      {t.type === "credit" ? (
+                      {t.type === "credit" && t.taxInvoiceEligible !== false ? (
                         <Button
                           variant="ghost"
                           size="sm"
