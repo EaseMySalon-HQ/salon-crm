@@ -387,14 +387,16 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
   return (
     <header
       className={cn(
-        "fathers-day-nav sticky top-0 z-30 w-full shrink-0 overflow-hidden px-4 py-3 shadow-sm backdrop-blur-sm sm:px-6 sm:py-4 lg:px-8",
+        "fathers-day-nav sticky top-0 z-30 w-full shrink-0 px-4 py-3 shadow-sm backdrop-blur-sm sm:px-6 sm:py-4 lg:px-8",
         fathersDayNav
           ? "relative border-b border-amber-400/25"
           : "border-b border-gray-200/60 bg-gradient-to-r from-white via-slate-50 to-blue-50/30"
       )}
     >
       {fathersDayNav && navBannerConfig ? (
-        <NavBannerBackground theme={navBannerConfig.theme} />
+        <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
+          <NavBannerBackground theme={navBannerConfig.theme} />
+        </div>
       ) : null}
       <div
         className={cn(
@@ -473,7 +475,7 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
           {/* Client search — opens client details drawer on select */}
           <div
             ref={clientSearchRef}
-            className="relative z-40 min-w-0 w-full max-w-[7.5rem] sm:max-w-[9rem] md:max-w-[10rem] lg:max-w-[12rem] xl:max-w-56"
+            className="relative z-50 min-w-0 w-full max-w-[7.5rem] sm:max-w-[9rem] md:max-w-[10rem] lg:max-w-[12rem] xl:max-w-56"
           >
             <Search className="pointer-events-none absolute left-2.5 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-slate-400 sm:h-4 sm:w-4" />
             <Input
@@ -494,7 +496,7 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
             {clientSearchOpen && clientResults.length > 0 && (
               <ul
                 role="listbox"
-                className="absolute left-0 right-0 top-full mt-1 max-h-56 overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+                className="absolute left-0 right-0 top-full z-50 mt-1 max-h-56 overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
               >
                 {clientResults.map((c) => {
                   const id = c._id || c.id

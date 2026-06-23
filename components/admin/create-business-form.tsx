@@ -5,12 +5,21 @@ import { useRouter, useParams, useSearchParams } from "next/navigation"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
-import { ArrowLeft, Building2, User, Loader2, Phone, MapPin, CreditCard } from "lucide-react"
+import { ArrowLeft, Building2, User, Loader2, Phone, MapPin, CreditCard, Copy, Check } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast"
 import { adminRequestHeaders } from "@/lib/admin-request-headers"
@@ -33,10 +42,10 @@ const createBusinessSchema = (isEditMode: boolean) => z.object({
   
   // Owner Information
   ownerFirstName: isEditMode ? z.string().optional() : z.string().min(2, "First name is required"),
-  ownerLastName: isEditMode ? z.string().optional() : z.string().min(2, "Last name is required"),
+  ownerLastName: z.string().optional(),
   ownerEmail: isEditMode ? z.string().email("Valid email is required").optional() : z.string().email("Valid email is required"),
   ownerPhone: isEditMode ? z.string().optional() : z.string().min(10, "Phone number is required"),
-  ownerPassword: isEditMode ? z.string().optional() : z.string().min(6, "Password must be at least 6 characters"),
+  ownerPassword: z.string().optional(),
   
   // Plan Information
   planId: isEditMode ? z.string().optional() : z.string().min(1, "Plan selection is required"),
@@ -57,10 +66,75 @@ function splitOwnerName(fullName: string): { first: string; last: string } {
   return { first: parts[0], last: parts.slice(1).join(" ") }
 }
 
+function buildTrialCredentialsMessage({
+  firstName,
+  email,
+  password,
+}: {
+  firstName: string
+  email: string
+  password: string
+}) {
+  return `Hi ${firstName} 👋
+
+Thank you for taking the time to connect with us today.
+
+As discussed during the demo, we've activated your EaseMySalon trial account so you can explore the platform and see how it fits into your salon's day-to-day operations.
+
+🔗 Login:  https://www.easemysalon.in/login
+📧 Username: ${email}
+🔑 Password: ${password}
+
+We've already configured your trial account with:
+
+✅ 2 Staff Members
+✅ 2 Sample Clients
+✅ 4 Sample Services
+✅ ₹10 Wallet Balance
+
+Over the next few days, I recommend trying a few real scenarios such as creating appointments, generating bills, managing clients, and exploring reports.
+
+The goal isn't just to evaluate software—it's to see how EaseMySalon can help streamline operations, improve client retention, and support your salon's growth.
+
+If you have any questions while exploring, simply reply to this message or give me a call. I'll be happy to help.
+
+Looking forward to hearing your feedback.
+
+
+Team EaseMySalon`
+}
+
+async function copyTextToClipboard(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    try {
+      const ta = document.createElement("textarea")
+      ta.value = text
+      ta.style.position = "fixed"
+      ta.style.left = "-9999px"
+      document.body.appendChild(ta)
+      ta.focus()
+      ta.select()
+      const ok = document.execCommand("copy")
+      document.body.removeChild(ta)
+      return ok
+    } catch {
+      return false
+    }
+  }
+}
+
 function CreateBusinessFormInner({ mode = 'create', businessId }: BusinessFormProps) {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [plans, setPlans] = useState<any[]>([])
+  const [credentialsDialogOpen, setCredentialsDialogOpen] = useState(false)
+  const [credentialsDialogStep, setCredentialsDialogStep] = useState<"prompt" | "message">("prompt")
+  const [credentialsMessage, setCredentialsMessage] = useState("")
+  const [credentialsCopied, setCredentialsCopied] = useState(false)
+  const [postCreateRedirectPath, setPostCreateRedirectPath] = useState<string | null>(null)
   const { toast } = useToast()
   const router = useRouter()
   const params = useParams()
@@ -293,7 +367,9 @@ function CreateBusinessFormInner({ mode = 'create', businessId }: BusinessFormPr
           lastName: data.ownerLastName || '',
           email: data.ownerEmail || '',
           phone: data.ownerPhone || '',
-          password: data.ownerPassword || ''
+          password: isEditMode
+            ? data.ownerPassword || ''
+            : (data.ownerPhone || '').trim(),
         },
         plan: {
           planId: data.planId || 'starter',
@@ -353,7 +429,23 @@ function CreateBusinessFormInner({ mode = 'create', businessId }: BusinessFormPr
               ? `Business "${data.businessName}" was created with a 7-day Pro trial and the lead was marked as Trial.`
               : `Business "${data.businessName}" has been created with owner access.`,
         })
-        router.push(leadIdParam ? '/admin/leads' : '/admin/businesses')
+
+        if (isEditMode) {
+          router.push(leadIdParam ? '/admin/leads' : '/admin/businesses')
+        } else {
+          const redirectPath = leadIdParam ? '/admin/leads' : '/admin/businesses'
+          setPostCreateRedirectPath(redirectPath)
+          setCredentialsMessage(
+            buildTrialCredentialsMessage({
+              firstName: data.ownerFirstName || '',
+              email: data.ownerEmail || '',
+              password: (data.ownerPhone || '').trim(),
+            })
+          )
+          setCredentialsDialogStep("prompt")
+          setCredentialsCopied(false)
+          setCredentialsDialogOpen(true)
+        }
       } else {
         toast({
           title: isEditMode ? "Update Failed" : "Creation Failed",
@@ -377,6 +469,40 @@ function CreateBusinessFormInner({ mode = 'create', businessId }: BusinessFormPr
     }
   }
 
+
+  const finishAfterCreate = () => {
+    setCredentialsDialogOpen(false)
+    setCredentialsDialogStep("prompt")
+    setCredentialsCopied(false)
+    if (postCreateRedirectPath) {
+      router.push(postCreateRedirectPath)
+    }
+  }
+
+  const handleShareCredentialsNo = () => {
+    finishAfterCreate()
+  }
+
+  const handleShareCredentialsYes = () => {
+    setCredentialsDialogStep("message")
+  }
+
+  const handleCopyCredentialsMessage = async () => {
+    const copied = await copyTextToClipboard(credentialsMessage)
+    if (copied) {
+      setCredentialsCopied(true)
+      toast({
+        title: "Copied to clipboard",
+        description: "The credentials message is ready to share.",
+      })
+    } else {
+      toast({
+        title: "Copy failed",
+        description: "Please select and copy the message manually.",
+        variant: "destructive",
+      })
+    }
+  }
 
   // Helper function to get label with optional asterisk
   const getLabel = (text: string, required: boolean = true) => {
@@ -737,7 +863,7 @@ function CreateBusinessFormInner({ mode = 'create', businessId }: BusinessFormPr
                     </div>
 
                     <div className="space-y-2">
-                      <Label htmlFor="ownerLastName" className="text-sm font-medium text-gray-700">{getLabel("Last Name")}</Label>
+                      <Label htmlFor="ownerLastName" className="text-sm font-medium text-gray-700">{getLabel("Last Name", false)}</Label>
                       <Input
                         id="ownerLastName"
                         placeholder="Doe"
@@ -780,16 +906,22 @@ function CreateBusinessFormInner({ mode = 'create', businessId }: BusinessFormPr
                           {form.formState.errors.ownerPhone.message}
                         </p>
                       )}
+                      {!isEditMode && (
+                        <p className="text-xs text-gray-500">
+                          The owner&apos;s mobile number will be used as the initial login password.
+                        </p>
+                      )}
                     </div>
 
+                    {isEditMode && (
                     <div className="md:col-span-2 space-y-2">
                       <Label htmlFor="ownerPassword" className="text-sm font-medium text-gray-700">
-                        {isEditMode ? 'New Password (Optional)' : 'Password *'}
+                        New Password (Optional)
                       </Label>
                       <Input
                         id="ownerPassword"
                         type="password"
-                        placeholder={isEditMode ? "Leave blank to keep current password" : "Enter a strong password"}
+                        placeholder="Leave blank to keep current password"
                         {...form.register("ownerPassword")}
                         className="mt-1"
                       />
@@ -799,12 +931,10 @@ function CreateBusinessFormInner({ mode = 'create', businessId }: BusinessFormPr
                         </p>
                       )}
                       <p className="text-xs text-gray-500">
-                        {isEditMode 
-                          ? "Only enter a new password if you want to change it. Leave blank to keep the current password."
-                          : "This will be the login password for the business owner"
-                        }
+                        Only enter a new password if you want to change it. Leave blank to keep the current password.
                       </p>
                     </div>
+                    )}
                   </div>
               </CardContent>
             </Card>
@@ -838,6 +968,70 @@ function CreateBusinessFormInner({ mode = 'create', businessId }: BusinessFormPr
           </div>
         </form>
       </div>
+
+      {!isEditMode && (
+        <Dialog
+          open={credentialsDialogOpen}
+          onOpenChange={(open) => {
+            if (!open) finishAfterCreate()
+            else setCredentialsDialogOpen(true)
+          }}
+        >
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+            {credentialsDialogStep === "prompt" ? (
+              <>
+                <DialogHeader>
+                  <DialogTitle>Share credentials?</DialogTitle>
+                  <DialogDescription>
+                    Do you want to share the credentials with the business owner?
+                  </DialogDescription>
+                </DialogHeader>
+                <DialogFooter className="gap-2 sm:gap-0">
+                  <Button type="button" variant="outline" onClick={handleShareCredentialsNo}>
+                    No
+                  </Button>
+                  <Button type="button" onClick={handleShareCredentialsYes}>
+                    Yes
+                  </Button>
+                </DialogFooter>
+              </>
+            ) : (
+              <>
+                <DialogHeader>
+                  <DialogTitle>Credentials message</DialogTitle>
+                  <DialogDescription>
+                    Copy this message and send it to the business owner.
+                  </DialogDescription>
+                </DialogHeader>
+                <Textarea
+                  readOnly
+                  value={credentialsMessage}
+                  rows={18}
+                  className="font-mono text-sm resize-none"
+                />
+                <DialogFooter className="gap-2 sm:gap-0">
+                  <Button type="button" variant="outline" onClick={finishAfterCreate}>
+                    Done
+                  </Button>
+                  <Button type="button" onClick={handleCopyCredentialsMessage}>
+                    {credentialsCopied ? (
+                      <>
+                        <Check className="mr-2 h-4 w-4" />
+                        Copied
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="mr-2 h-4 w-4" />
+                        Copy message
+                      </>
+                    )}
+                  </Button>
+                </DialogFooter>
+              </>
+            )}
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   )
 }
