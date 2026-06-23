@@ -808,7 +808,6 @@ router.post('/businesses', setupMainDatabase, authenticateAdmin, checkAdminPermi
           id: owner._id,
           name: `${owner.firstName || ''} ${owner.lastName || ''}`.trim() || 'Business Owner',
           email: owner.email,
-          password: ownerData.password // Return plain password for admin
         }
       },
       message: 'Business created successfully'
