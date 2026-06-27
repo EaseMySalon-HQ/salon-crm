@@ -308,6 +308,8 @@ export type PlatformLeadSource =
 
 export interface PlatformLeadRow {
   _id: string
+  firstName?: string
+  lastName?: string
   name: string
   salonName?: string
   city?: string

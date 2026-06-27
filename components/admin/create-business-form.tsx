@@ -181,12 +181,16 @@ function CreateBusinessFormInner({ mode = 'create', businessId }: BusinessFormPr
   const applyLeadPrefill = useCallback(
     (lead: {
       name: string
+      firstName?: string
+      lastName?: string
       salonName?: string
       city?: string
       phone: string
       email?: string
     }) => {
-      const { first, last } = splitOwnerName(lead.name)
+      const split = splitOwnerName(lead.name)
+      const first = lead.firstName?.trim() || split.first
+      const last = lead.lastName?.trim() || split.last
       form.reset({
         businessName: lead.salonName?.trim() || lead.name?.trim() || "",
         businessType: "salon",

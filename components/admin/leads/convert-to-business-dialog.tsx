@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { AdminLeadsAPI, type PlatformLeadRow } from "@/lib/admin-api"
+import { getPlatformLeadDisplayName } from "@/lib/admin-lead-permissions"
 import { adminRequestHeaders } from "@/lib/admin-request-headers"
 import { Button } from "@/components/ui/button"
 import {
@@ -110,7 +111,7 @@ export function ConvertToBusinessDialog({
 
   const handleCreateBusiness = () => {
     const params = new URLSearchParams()
-    const businessName = lead.salonName?.trim() || lead.name?.trim()
+    const businessName = lead.salonName?.trim() || getPlatformLeadDisplayName(lead)
     if (businessName) params.set("name", businessName)
     if (lead.city?.trim()) params.set("city", lead.city.trim())
     if (lead.phone) params.set("phone", lead.phone)
@@ -128,7 +129,7 @@ export function ConvertToBusinessDialog({
         <DialogHeader>
           <DialogTitle>Link to business</DialogTitle>
           <DialogDescription>
-            Link <strong>{lead.name}</strong> to an existing tenant to start a 7-day Pro trial, or
+            Link <strong>{getPlatformLeadDisplayName(lead)}</strong> to an existing tenant to start a 7-day Pro trial, or
             create a new business.
           </DialogDescription>
         </DialogHeader>

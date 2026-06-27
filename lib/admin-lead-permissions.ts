@@ -36,6 +36,13 @@ export function formatLeadStatus(status: string): string {
   return status.charAt(0).toUpperCase() + status.slice(1)
 }
 
+type PlatformLeadAssigneeShape = {
+  name?: string
+  firstName?: string
+  lastName?: string
+  email?: string
+}
+
 export function adminAssigneeName(
   assigned: PlatformLeadAssigneeShape | string | null | undefined
 ): string {
@@ -49,11 +56,30 @@ export function adminAssigneeName(
   )
 }
 
-type PlatformLeadAssigneeShape = {
+type PlatformLeadContactShape = {
   name?: string
   firstName?: string
   lastName?: string
-  email?: string
+}
+
+export function getPlatformLeadFirstName(lead: PlatformLeadContactShape): string {
+  if (lead.firstName?.trim()) return lead.firstName.trim()
+  const legacy = lead.name?.trim() || ""
+  if (!legacy) return ""
+  return legacy.split(/\s+/)[0] || legacy
+}
+
+export function getPlatformLeadLastName(lead: PlatformLeadContactShape): string {
+  if (lead.lastName?.trim()) return lead.lastName.trim()
+  const legacy = lead.name?.trim() || ""
+  const parts = legacy.split(/\s+/).filter(Boolean)
+  return parts.length > 1 ? parts.slice(1).join(" ") : ""
+}
+
+export function getPlatformLeadDisplayName(lead: PlatformLeadContactShape): string {
+  const first = getPlatformLeadFirstName(lead)
+  const last = getPlatformLeadLastName(lead)
+  return [first, last].filter(Boolean).join(" ") || lead.name?.trim() || "—"
 }
 
 type PlatformLeadLocationShape = {
