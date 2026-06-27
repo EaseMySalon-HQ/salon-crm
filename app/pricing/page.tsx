@@ -5,9 +5,6 @@ import Link from "next/link"
 import {
   ArrowRight,
   CheckCircle2,
-  Headphones,
-  ShieldCheck,
-  Sparkles,
   ChevronDown,
   Building2,
 } from "lucide-react"
@@ -15,7 +12,7 @@ import {
 import { PublicShell } from "@/components/layout/public-shell"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { PricingAddOnCards } from "@/components/pricing/pricing-addon-cards"
+import { MoneyBackGuaranteeBanner } from "@/components/pricing/money-back-guarantee-banner"
 import { PricingFeatureMatrix } from "@/components/pricing/pricing-feature-matrix"
 import { PricingTierCards } from "@/components/pricing/pricing-tier-cards"
 import { BreadcrumbListSchema } from "@/components/seo/structured-data"
@@ -32,12 +29,6 @@ import {
   type PublicPlanPricing,
 } from "@/lib/public-pricing-api"
 import { toast } from "@/components/ui/use-toast"
-
-const TRUST_ITEMS = [
-  { icon: ShieldCheck, label: "99.99% uptime SLA" },
-  { icon: Sparkles, label: "Free setup, training & data migration" },
-  { icon: Headphones, label: "24/7 support available" },
-] as const
 
 function applyAdminPricing(
   plans: PricingPlan[],
@@ -111,71 +102,35 @@ export default function PricingPage() {
           <div className="absolute top-0 right-0 h-96 w-96 rounded-full bg-white blur-3xl" />
           <div className="absolute bottom-0 left-0 h-80 w-80 rounded-full bg-white blur-3xl" />
         </div>
-        <div className="container relative mx-auto max-w-4xl px-4 text-center sm:px-6 lg:px-8">
+        <div className="container relative mx-auto max-w-6xl px-4 text-center sm:px-6 lg:px-8">
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-purple-200/90">
             EaseMySalon · Salon OS for India
           </p>
-          <h1 className="mt-4 text-4xl font-bold tracking-tight sm:text-5xl lg:text-6xl">
-            Simple Pricing for Growing Salons
-          </h1>
-          <p className="mx-auto mt-5 max-w-2xl text-lg text-purple-100 sm:text-xl">
-            Run your salon on Free, unlock feedback &amp; loyalty on Growth, or go all-in with Pro — WhatsApp
-            automation included. All prices in ₹ per outlet,{" "}
-            <span className="font-medium text-white">GST exclusive</span>.
-          </p>
-          <div className="mt-10 flex flex-wrap items-center justify-center gap-3 sm:gap-4">
-            {TRUST_ITEMS.map(({ icon: Icon, label }) => (
-              <div
-                key={label}
-                className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm text-purple-100 backdrop-blur-sm"
-              >
-                <Icon className="h-4 w-4 shrink-0 text-emerald-300" aria-hidden />
-                <span>{label}</span>
-              </div>
-            ))}
+          <div className="mt-4 flex justify-center">
+            <h1 className="text-center text-3xl font-bold tracking-tight sm:text-4xl lg:text-[2rem] xl:text-4xl 2xl:text-5xl leading-tight lg:whitespace-nowrap">
+              Turning everyday salon operations into business growth.
+            </h1>
           </div>
+          <p className="mx-auto mt-5 max-w-5xl text-center text-base leading-snug text-purple-100 sm:text-lg">
+            <span className="block lg:whitespace-nowrap">
+              Fill more chairs with WhatsApp reminders and online booking — bring clients back with loyalty and
+              packages.
+            </span>
+            <span className="block lg:whitespace-nowrap">
+              Protect margins with GST billing, staff commissions, and sales reports that drive revenue growth.
+            </span>
+          </p>
         </div>
       </section>
 
       {/* Plans */}
       <section className="border-b border-slate-200 bg-white py-16 sm:py-20">
         <div className="container mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
-          <div className="mx-auto max-w-2xl text-center">
-            <h2 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Pick your tier</h2>
-            <p className="mt-2 text-sm text-slate-600 sm:text-base">
-              Start free, upgrade anytime — your data stays yours.
-            </p>
-          </div>
+          <MoneyBackGuaranteeBanner />
 
           <div className="mt-12">
             <PricingTierCards plans={plans} />
           </div>
-
-          <div className="mt-20">
-            <div className="mx-auto max-w-2xl text-center">
-              <Badge variant="secondary" className="mb-3 font-normal">
-                Optional add-ons
-              </Badge>
-              <h2 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
-                Plug in what you need
-              </h2>
-              <p className="mt-2 text-sm text-slate-600 sm:text-base">
-                Layer integrations on top of any plan. Setup and onboarding handled by our team.
-              </p>
-            </div>
-
-            <div className="mt-10">
-              <PricingAddOnCards />
-            </div>
-          </div>
-
-          <p className="mt-10 text-center text-xs text-slate-500 sm:text-sm">
-            Prices shown are monthly per outlet. For enterprise or custom multi-outlet agreements,{" "}
-            <Link href="/contact" className="font-medium text-[#7C3AED] underline-offset-2 hover:underline">
-              contact sales
-            </Link>
-            .
-          </p>
         </div>
       </section>
 
@@ -188,7 +143,7 @@ export default function PricingPage() {
             </Badge>
             <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">What&apos;s included</h2>
             <p className="mt-3 text-slate-600">
-              Compare Free, Growth, and Pro — from core salon ops to feedback, loyalty, and WhatsApp.
+              Compare Starter, Growth, and Pro — from core salon ops to feedback, loyalty, and WhatsApp.
               Integrations marked Add-on are available as paid extras where noted.
             </p>
           </div>

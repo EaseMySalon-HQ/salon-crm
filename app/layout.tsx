@@ -6,7 +6,6 @@ import { Toaster } from "@/components/ui/toaster"
 import { AuthProvider } from "@/lib/auth-context"
 import { AdminAuthProvider } from "@/lib/admin-auth-context"
 import { QueryProvider } from "@/components/providers/query-provider"
-import { CookieConsentBanner } from "@/components/gdpr/cookie-consent-banner"
 const inter = Inter({ subsets: ["latin"] })
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://www.easemysalon.in"
@@ -197,7 +196,6 @@ export default function RootLayout({
           <AdminAuthProvider>
             {children}
             <Toaster />
-            <CookieConsentBanner />
           </AdminAuthProvider>
           </QueryProvider>
         </AuthProvider>

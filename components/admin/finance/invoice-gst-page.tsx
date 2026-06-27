@@ -13,7 +13,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api"
 
 const PAGE_TITLE = "Invoice & GST"
 const PAGE_DESC =
-  "Tax-invoice issuer details and numbering controls for wallet recharges and plan billing"
+  "Tax-invoice issuer details and numbering controls for wallet recharges"
 
 export function FinanceInvoiceGstPage() {
   const { toast } = useToast()
@@ -38,10 +38,6 @@ export function FinanceInvoiceGstPage() {
           ...loaded,
           invoice: {
             ...inv,
-            planInvoicePrefix:
-              typeof inv.planInvoicePrefix === "string" && inv.planInvoicePrefix
-                ? inv.planInvoicePrefix
-                : "EMS/SUB",
             invoicePrefix:
               typeof inv.invoicePrefix === "string" && inv.invoicePrefix
                 ? inv.invoicePrefix

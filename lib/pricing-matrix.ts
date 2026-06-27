@@ -54,12 +54,12 @@ export const PRICING_PLANS: PricingPlan[] = [
           { label: "Inventory tracking", state: "included" },
           { label: "Walk-in management", state: "included" },
           { label: "Basic reports & dashboard", state: "included" },
+          { label: "Online booking (public link)", state: "included" },
         ],
       },
       {
         title: "Growth tools",
         items: [
-          { label: "Online booking (public link)", state: "locked" },
           { label: "Feedback management", state: "locked" },
           { label: "Loyalty & rewards", state: "locked" },
           { label: "WhatsApp (WABA) integration", state: "locked" },
@@ -83,14 +83,13 @@ export const PRICING_PLANS: PricingPlan[] = [
         title: "Everything in Starter, plus",
         items: [
           { label: "Post-visit feedback via SMS/WhatsApp", state: "included" },
-          { label: "Feedback management settings", state: "included" },
           { label: "Negative review alerts (instant)", state: "included" },
           { label: "Google review nudge automation", state: "included" },
           { label: "NPS dashboard & staff scoring", state: "included" },
           { label: "Points & rewards engine", state: "included" },
           { label: "Membership Program", state: "included" },
           { label: "Referral program", state: "included" },
-          { label: "Incentive management (commission profiles)", state: "included" },
+          { label: "Packages", state: "included" },
           { label: "Online booking (public link)", state: "included" },
         ],
       },
@@ -113,6 +112,7 @@ export const PRICING_PLANS: PricingPlan[] = [
       {
         title: "Everything in Growth, plus",
         items: [
+          { label: "Online booking (public link)", state: "included" },
           { label: "WABA — automated appointment reminders", state: "included" },
           { label: "Broadcast promotions to client list", state: "included" },
           { label: "Booking directly via WhatsApp", state: "included" },
@@ -151,7 +151,7 @@ export const FEATURE_CATEGORIES: FeatureCategory[] = [
       {
         feature: "Online booking (public link)",
         hint: "Shareable booking page for client self-scheduling",
-        starter: "no",
+        starter: "yes",
         growth: "yes",
         pro: "yes",
       },

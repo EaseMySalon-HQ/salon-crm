@@ -913,9 +913,9 @@ router.get(
           transactionId: invoice.sourceRef,
         });
       } else {
-        const { buildPlanInvoicePDFForTransaction } = require('../lib/send-plan-invoice');
-        built = await buildPlanInvoicePDFForTransaction({
-          transactionId: invoice.sourceRef,
+        return res.status(410).json({
+          success: false,
+          error: 'Subscription invoices are not issued for plan billing payments.',
         });
       }
 
