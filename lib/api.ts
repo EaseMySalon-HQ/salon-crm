@@ -4225,44 +4225,6 @@ export class PlanCheckoutAPI {
     )
     return response.data
   }
-
-  /**
-   * Download a GST tax-invoice PDF for a past plan-checkout transaction and
-   * trigger a browser download. Returns the filename, or throws on error.
-   */
-  static async downloadInvoice(transactionId: string): Promise<string> {
-    const response = await apiClient.get(`/plan/invoice/${transactionId}`, {
-      responseType: "blob",
-    })
-
-    const contentType = String(response.headers?.["content-type"] || "")
-    if (!contentType.includes("application/pdf")) {
-      let message = "Failed to download invoice"
-      try {
-        const text = await (response.data as Blob).text()
-        const parsed = JSON.parse(text)
-        message = parsed?.error || message
-      } catch {
-        // keep default message
-      }
-      throw new Error(message)
-    }
-
-    const disposition = String(response.headers?.["content-disposition"] || "")
-    const match = disposition.match(/filename="?([^"]+)"?/i)
-    const filename = match?.[1] || `invoice-${transactionId}.pdf`
-
-    const blob = new Blob([response.data as BlobPart], { type: "application/pdf" })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = filename
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    URL.revokeObjectURL(url)
-    return filename
-  }
 }
 
 export type { PaymentConfiguration, PaymentRedemptionLine } from "./payment-redemption-eligibility"

@@ -3,19 +3,18 @@
  *
  * Surface for the Settings → Plan & Billing → Proceed to Checkout button:
  *   POST /api/plan/checkout/order          — create payment order for a renewal/upgrade
- *   POST /api/plan/checkout/verify         — verify gateway callback, activate plan, email invoice
+ *   POST /api/plan/checkout/verify         — verify gateway callback and activate plan
  *   POST /api/plan/checkout/wallet         — debit messaging wallet and activate plan
  *   GET  /api/plan/checkout/status         — current pending-downgrade + last tx summary (for UI state)
  *   POST /api/plan/schedule-downgrade      — queue a lower-tier plan to apply at next renewal (no charge)
  *   DELETE /api/plan/schedule-downgrade    — cancel a previously scheduled downgrade
- *   GET  /api/plan/invoice/:transactionId  — download a GST tax invoice PDF for a past plan payment
+ *   GET  /api/plan/transactions            — paginated plan payment history (no tax invoices issued)
  *
  * Design notes
  * ────────────
  *  • Only the business owner can use these endpoints.
- *  • Charging logic mirrors the wallet-recharge flow — 18% GST is added on
- *    top of the list price; the gateway captures base + GST; the
- *    PlanInvoiceTransaction records both slices for audit.
+ *  • List prices come from admin PlanTemplate records (via plan-resolver),
+ *    falling back to built-in config only when no template is cached.
  *  • Renewals/upgrades extend the existing `renewalDate` by the selected
  *    period, so paying early doesn't burn days on the current cycle.
  *  • Downgrades are always scheduled for the next renewal — this endpoint
@@ -33,11 +32,8 @@ const { authenticateToken } = require('../middleware/auth');
 const { setupMainDatabase } = require('../middleware/business-db');
 const databaseManager = require('../config/database-manager');
 const paymentGateway = require('../lib/payment-gateway');
-const {
-  sendPlanRenewalInvoice,
-  buildPlanInvoicePDFForTransaction,
-} = require('../lib/send-plan-invoice');
-const { getPlanConfig } = require('../config/plans');
+const { sendPlanRenewalInvoice } = require('../lib/send-plan-invoice');
+const planResolver = require('../lib/plan-resolver');
 const { normalizePlanId, tierOf, isValidPlanId } = require('../lib/plan-id');
 const entitlementsCache = require('../lib/entitlements-cache');
 const { atomicDeduct } = require('../lib/wallet-deduction');
@@ -77,8 +73,9 @@ function requireOwner(req, res) {
   return true;
 }
 
-function getPlanPriceRupees(planId, billingPeriod) {
-  const cfg = getPlanConfig(planId);
+async function getPlanPriceRupees(planId, billingPeriod) {
+  await planResolver.refreshPlanTemplates();
+  const cfg = planResolver.resolvePlanConfig(planId);
   if (!cfg) return null;
   const raw =
     billingPeriod === 'yearly' ? cfg.yearlyPrice : cfg.monthlyPrice;
@@ -87,8 +84,8 @@ function getPlanPriceRupees(planId, billingPeriod) {
   return Number(raw);
 }
 
-function computeBreakdown(planId, billingPeriod) {
-  const price = getPlanPriceRupees(planId, billingPeriod);
+async function computeBreakdown(planId, billingPeriod) {
+  const price = await getPlanPriceRupees(planId, billingPeriod);
   if (price === null) return null;
   if (price === 0) {
     return {
@@ -145,7 +142,8 @@ function classifyKind({ previousPlanId, selectedPlanId, hasPriorPaidPlan }) {
 
 /**
  * Shared post-payment handler: mutate Business.plan, write ledger + audit rows,
- * enqueue the GST invoice email. Used by gateway verify and wallet checkout.
+ * and enqueue a confirmation email (no tax invoice). Used by gateway verify
+ * and wallet checkout.
  */
 async function finalizePlanCheckout({
   req,
@@ -198,7 +196,7 @@ async function finalizePlanCheckout({
   business.plan.pendingBillingPeriod = null;
   business.plan.pendingEffectiveAt = null;
 
-  const planConfig = getPlanConfig(planId);
+  const planConfig = planResolver.resolvePlanConfig(planId);
   if (planConfig?.limits) {
     if (!business.plan.addons) business.plan.addons = {};
     if (!business.plan.addons.sms) business.plan.addons.sms = {};
@@ -272,7 +270,7 @@ async function finalizePlanCheckout({
       triggeredByEmail: req.user?.email || null,
     }).catch(err => {
       logger.error(
-        '[plan-invoice] fire-and-forget send failed:',
+        '[plan-renewal-email] fire-and-forget send failed:',
         err?.message || err
       );
     });
@@ -375,7 +373,7 @@ router.post('/checkout/order', authenticateToken, setupMainDatabase, async (req,
       });
     }
 
-    const breakdown = computeBreakdown(planId, billingPeriod);
+    const breakdown = await computeBreakdown(planId, billingPeriod);
     if (!breakdown) {
       return res.status(400).json({
         success: false,
@@ -521,7 +519,7 @@ router.post('/checkout/verify', authenticateToken, setupMainDatabase, async (req
 
     // Cross-check the gateway-captured amount against what we expected to
     // charge. Tolerate ±1 paise of rounding slop.
-    const expected = computeBreakdown(planId, billingPeriod);
+    const expected = await computeBreakdown(planId, billingPeriod);
     if (!expected) {
       return res.status(400).json({
         success: false,
@@ -604,7 +602,7 @@ router.post('/checkout/wallet', authenticateToken, setupMainDatabase, async (req
       });
     }
 
-    const expected = computeBreakdown(planId, billingPeriod);
+    const expected = await computeBreakdown(planId, billingPeriod);
     if (!expected) {
       return res.status(400).json({
         success: false,
@@ -832,7 +830,7 @@ router.delete(
 
 // ── GET /checkout/status ────────────────────────────────────────────────────
 // Lightweight read used by the UI to show "Scheduled downgrade" chips and
-// the most recent checkout transaction (for the invoice link).
+// the most recent checkout transaction summary.
 router.get(
   '/checkout/status',
   authenticateToken,
@@ -882,8 +880,7 @@ router.get(
 
 // ── GET /transactions ───────────────────────────────────────────────────────
 // Paginated list of past plan-checkout payments for the current business.
-// Feeds the Billing History card on Settings → Plan & Billing so users can
-// download GST invoices for renewals / upgrades / plan changes.
+// Feeds the Billing History card on Settings → Plan & Billing.
 router.get(
   '/transactions',
   authenticateToken,
@@ -946,56 +943,6 @@ router.get(
       return res.status(500).json({
         success: false,
         error: err?.message || 'Failed to load plan transactions',
-      });
-    }
-  }
-);
-
-// ── GET /invoice/:transactionId ─────────────────────────────────────────────
-
-router.get(
-  '/invoice/:transactionId',
-  authenticateToken,
-  setupMainDatabase,
-  async (req, res) => {
-    try {
-      const businessId = req.user?.branchId;
-      if (!businessId) {
-        return res.status(400).json({ success: false, error: 'Business ID not found' });
-      }
-      const { transactionId } = req.params;
-      if (!transactionId || !/^[a-f0-9]{24}$/i.test(transactionId)) {
-        return res.status(400).json({ success: false, error: 'Invalid transaction id' });
-      }
-
-      let built;
-      try {
-        built = await buildPlanInvoicePDFForTransaction({
-          transactionId,
-          businessIdScope: businessId,
-        });
-      } catch (err) {
-        if (err?.code === 'FORBIDDEN') {
-          return res.status(403).json({ success: false, error: err.message });
-        }
-        if (err?.code === 'NOT_FOUND') {
-          return res.status(404).json({ success: false, error: err.message });
-        }
-        throw err;
-      }
-
-      const { pdfBuffer, invoiceNumber } = built;
-      const safeFilename = `${String(invoiceNumber).replace(/[^A-Za-z0-9_-]+/g, '_')}.pdf`;
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
-      res.setHeader('Content-Length', pdfBuffer.length);
-      res.setHeader('Cache-Control', 'private, no-store');
-      return res.end(pdfBuffer);
-    } catch (err) {
-      logger.error('[plan-checkout] Error downloading invoice:', err);
-      return res.status(500).json({
-        success: false,
-        error: err?.message || 'Failed to generate invoice',
       });
     }
   }

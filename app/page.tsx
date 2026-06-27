@@ -193,9 +193,6 @@ export default function MarketingHome() {
                 <p className="text-xl sm:text-2xl text-purple-100 max-w-2xl mx-auto lg:mx-0 leading-relaxed">
                   GST billing, WhatsApp appointments, staff commissions, and multi-branch reporting — one platform for salons in Mumbai, Delhi, Bangalore, Pune, and across India. <span className="font-semibold text-white">Reduce no-shows by 40%</span>, <span className="font-semibold text-white">cut billing time by 70%</span>, and <span className="font-semibold text-white">increase revenue by 35%</span>.
                 </p>
-                <p className="text-base sm:text-lg text-purple-200/90 max-w-2xl mx-auto lg:mx-0 leading-relaxed">
-                  Plans from ₹199/month per outlet (GST exclusive). Start with a 7-day free trial — no credit card required. Built for how Indian salons run: UPI payments, walk-ins, memberships, packages, and stylist commissions.
-                </p>
               </div>
               
               {/* CTAs */}
@@ -222,7 +219,7 @@ export default function MarketingHome() {
               <div className="flex flex-wrap items-center justify-center lg:justify-start gap-6 text-sm text-purple-200 pt-2">
                 <div className="flex items-center gap-2">
                   <CheckCircle2 className="h-4 w-4 text-emerald-300" />
-                  <span>7 Day Trial</span>
+                  <span>14 Day Money Back Guarantee</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <CheckCircle2 className="h-4 w-4 text-emerald-300" />
@@ -418,7 +415,7 @@ export default function MarketingHome() {
               { title: "Launch in 1 day", desc: "Dedicated concierge migrates data, trains teams and goes live overnight.", accent: "from-purple-50 to-indigo-50" },
               { title: "WhatsApp-native desk", desc: "Bookings, reminders and receipts flow over WhatsApp with zero manual chase.", accent: "from-emerald-50 to-teal-50" },
               { title: "CEO-grade dashboards", desc: "Revenue, repeat rate, branch health and commissions update in real time.", accent: "from-blue-50 to-cyan-50" },
-              { title: "VIP support", desc: "24/7 priority line, proactive audits and success playbooks for every plan.", accent: "from-rose-50 to-amber-50" },
+              { title: "VIP support", desc: "Dedicated Success manager, proactive audits and success playbooks for every plan.", accent: "from-rose-50 to-amber-50" },
             ].map((tile) => (
               <div
                 key={tile.title}

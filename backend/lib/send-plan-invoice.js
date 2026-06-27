@@ -1,15 +1,9 @@
 /**
- * Plan-subscription invoice sender.
+ * Plan-subscription renewal confirmation emails.
  *
- * Mirrors `send-wallet-invoice.js` but for self-service plan checkouts:
- *   - loads a PlanInvoiceTransaction + Business
- *   - allocates a fiscal-year sequential invoice number on the
- *     independent `SUB/<FY>` counter
- *   - renders a GST tax invoice PDF using the shared layout util
- *   - emails the PDF to the business contact (+ the admin who paid)
- *
- * Designed to be called fire-and-forget from the checkout verify route;
- * never throws.
+ * Sends a payment confirmation after self-service checkout. GST tax invoices
+ * are not issued for plan billing — wallet recharges use send-wallet-invoice.js.
+ * PDF generation helpers remain for legacy admin rows only.
  */
 
 'use strict';
@@ -109,7 +103,7 @@ function formatRupeesINR(paise) {
   })}`;
 }
 
-function buildEmailBody({ buyer, invoice, amounts, payment, meta }) {
+function buildEmailBody({ buyer, amounts, payment, meta }) {
   const greetingName = (buyer.name || '').split(' ')[0] || 'there';
   const periodLabel = meta.billingPeriod === 'yearly' ? 'annual' : 'monthly';
   const html = `
@@ -119,7 +113,7 @@ function buildEmailBody({ buyer, invoice, amounts, payment, meta }) {
     </div>
     <div style="border:1px solid #e2e8f0;border-top:0;padding:22px;border-radius:0 0 8px 8px;">
       <p>Hi ${greetingName},</p>
-      <p>Thanks for your payment. Your ${planLabel(meta.planId)} plan (${periodLabel} billing) is now active. A GST tax invoice is attached to this email for your records.</p>
+      <p>Thanks for your payment. Your ${planLabel(meta.planId)} plan (${periodLabel} billing) is now active.</p>
       <table style="width:100%;border-collapse:collapse;margin:18px 0;">
         <tr>
           <td style="padding:8px 0;color:#64748b;">${kindLabel(meta.kind)} — ${planLabel(meta.planId)} (${periodLabel})</td>
@@ -135,8 +129,7 @@ function buildEmailBody({ buyer, invoice, amounts, payment, meta }) {
         </tr>
       </table>
       <table style="width:100%;border-collapse:collapse;font-size:13px;color:#334155;">
-        <tr><td style="padding:4px 0;width:160px;color:#64748b;">Invoice #</td><td>${invoice.number}</td></tr>
-        <tr><td style="padding:4px 0;color:#64748b;">Next renewal date</td><td>${meta.newRenewalDate ? new Date(meta.newRenewalDate).toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' }) : '—'}</td></tr>
+        <tr><td style="padding:4px 0;width:160px;color:#64748b;">Next renewal date</td><td>${meta.newRenewalDate ? new Date(meta.newRenewalDate).toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' }) : '—'}</td></tr>
         <tr><td style="padding:4px 0;color:#64748b;">Payment provider</td><td>${String(payment.provider || '').toUpperCase()}</td></tr>
         <tr><td style="padding:4px 0;color:#64748b;">Payment ID</td><td>${payment.paymentId || '—'}</td></tr>
       </table>
@@ -154,12 +147,9 @@ function buildEmailBody({ buyer, invoice, amounts, payment, meta }) {
     `GST (${((amounts.gstRate || 0) * 100).toFixed(0)}%): ${formatRupeesINR(amounts.gstPaise)}`,
     `Total charged: ${formatRupeesINR(amounts.totalPaise)}`,
     ``,
-    `Invoice #: ${invoice.number}`,
     meta.newRenewalDate ? `Next renewal: ${new Date(meta.newRenewalDate).toLocaleDateString('en-IN')}` : '',
     `Payment provider: ${String(payment.provider || '').toUpperCase()}`,
     `Payment ID: ${payment.paymentId || '—'}`,
-    ``,
-    `A GST tax invoice PDF is attached.`,
     ``,
     `— EaseMySalon`,
   ]
@@ -284,20 +274,36 @@ async function buildPlanInvoicePDFForTransaction({
 
 async function sendPlanRenewalInvoice({ transactionId, triggeredByEmail } = {}) {
   try {
-    let built;
-    try {
-      built = await buildPlanInvoicePDFForTransaction({ transactionId });
-    } catch (err) {
-      return { success: false, error: err?.message || String(err) };
+    if (!transactionId) {
+      return { success: false, error: 'transactionId is required' };
     }
-    const { pdfBuffer, invoiceNumber, context, business, txDoc } = built;
+
+    const mainConnection = await databaseManager.getMainConnection();
+    const PlanInvoiceTransaction = mainConnection.model(
+      'PlanInvoiceTransaction',
+      require('../models/PlanInvoiceTransaction').schema
+    );
+    const Business = mainConnection.model(
+      'Business',
+      require('../models/Business').schema
+    );
+
+    const txDoc = await PlanInvoiceTransaction.findById(transactionId);
+    if (!txDoc) {
+      return { success: false, error: 'Transaction not found' };
+    }
+
+    const business = await Business.findById(txDoc.businessId).lean();
+    if (!business) {
+      return { success: false, error: 'Business not found' };
+    }
 
     const { isPlatformEmailDisabled } = require('./business-email-policy');
     if (isPlatformEmailDisabled(business)) {
       logger.info(
-        `[plan-invoice] Skipping invoice email — platform policy for business ${business._id}`
+        `[plan-renewal-email] Skipping — platform policy for business ${business._id}`
       );
-      return { success: true, skippedEmail: true, invoiceNumber };
+      return { success: true, skippedEmail: true };
     }
 
     const recipients = Array.from(
@@ -310,67 +316,72 @@ async function sendPlanRenewalInvoice({ transactionId, triggeredByEmail } = {}) 
 
     if (recipients.length === 0) {
       logger.warn(
-        `[plan-invoice] No recipient email on business ${business._id} — skipping email (PDF generated).`
+        `[plan-renewal-email] No recipient email on business ${business._id} — skipping send.`
       );
-    } else {
-      try {
-        await emailService.initialize();
-      } catch (initErr) {
-        logger.warn(
-          '[plan-invoice] Email service initialize failed, attempting send anyway:',
-          initErr?.message || initErr
-        );
-      }
-
-      if (!emailService.enabled) {
-        logger.warn(
-          `[plan-invoice] Email service not configured — skipping send for invoice ${invoiceNumber}.`
-        );
-      } else {
-        const emailCtx = {
-          ...context,
-          meta: {
-            kind: txDoc.kind,
-            planId: txDoc.planId,
-            billingPeriod: txDoc.billingPeriod,
-            newRenewalDate: txDoc.newRenewalDate,
-          },
-        };
-        const { html, text } = buildEmailBody(emailCtx);
-        const subject = `Tax Invoice ${invoiceNumber} — ${planLabel(
-          txDoc.planId
-        )} subscription`;
-
-        const result = await emailService.sendEmail({
-          to: recipients,
-          subject,
-          html,
-          text,
-          attachments: [
-            {
-              filename: `${invoiceNumber.replace(/[^A-Za-z0-9_-]+/g, '_')}.pdf`,
-              content: pdfBuffer,
-            },
-          ],
-        });
-
-        if (!result?.success) {
-          logger.error(
-            `[plan-invoice] Email send failed for invoice ${invoiceNumber}:`,
-            result?.error
-          );
-        } else {
-          logger.info(
-            `[plan-invoice] Invoice ${invoiceNumber} emailed to ${recipients.join(', ')}`
-          );
-        }
-      }
+      return { success: true, skippedEmail: true };
     }
 
-    return { success: true, invoiceNumber };
+    try {
+      await emailService.initialize();
+    } catch (initErr) {
+      logger.warn(
+        '[plan-renewal-email] Email service initialize failed, attempting send anyway:',
+        initErr?.message || initErr
+      );
+    }
+
+    if (!emailService.enabled) {
+      logger.warn('[plan-renewal-email] Email service not configured — skipping send.');
+      return { success: true, skippedEmail: true };
+    }
+
+    const buyer = buildBuyerContext(business);
+    const basePaise = Number(txDoc.amountPaise || 0);
+    const gstPaise = Number(txDoc.gstPaise || 0);
+    const gstRate = Number(txDoc.gstRate || 0);
+    const totalPaise =
+      Number(txDoc.totalChargedPaise || 0) || basePaise + gstPaise;
+    const periodLabel = txDoc.billingPeriod === 'yearly' ? 'annual' : 'monthly';
+
+    const emailCtx = {
+      buyer,
+      amounts: { basePaise, gstPaise, gstRate, totalPaise },
+      payment: {
+        provider: txDoc.provider,
+        paymentId: txDoc.providerPaymentId,
+      },
+      meta: {
+        kind: txDoc.kind,
+        planId: txDoc.planId,
+        billingPeriod: txDoc.billingPeriod,
+        newRenewalDate: txDoc.newRenewalDate,
+      },
+    };
+    const { html, text } = buildEmailBody(emailCtx);
+    const subject = `Your ${planLabel(txDoc.planId)} plan is active (${periodLabel})`;
+
+    const result = await emailService.sendEmail({
+      to: recipients,
+      subject,
+      html,
+      text,
+    });
+
+    if (!result?.success) {
+      logger.error(
+        `[plan-renewal-email] Send failed for transaction ${transactionId}:`,
+        result?.error
+      );
+      return { success: false, error: result?.error?.message || 'Email send failed' };
+    }
+
+    logger.info(
+      `[plan-renewal-email] Confirmation emailed to ${recipients.join(', ')} (tx ${transactionId})`
+    );
+    return { success: true };
   } catch (err) {
     logger.error(
-      '[plan-invoice] Unexpected error while sending plan invoice:',
+      '[plan-renewal-email] Unexpected error:',
       err?.message || err
     );
     return { success: false, error: err?.message || String(err) };
