@@ -1,18 +1,15 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useState } from "react"
 import { Controller, useForm } from "react-hook-form"
 import { z } from "zod"
 import { zodResolver } from "@hookform/resolvers/zod"
-import { DayPicker } from "react-day-picker"
 import {
   ArrowLeft,
   ArrowRight,
   Brush,
   Building2,
   Check,
-  ChevronLeft,
-  ChevronRight,
   Crown,
   Flower2,
   HandHeart,
@@ -69,64 +66,6 @@ const branchBuckets: BranchBucket[] = [
   { value: "10+", label: "10+", subtitle: "Chain / franchise", Icon: Building2 },
 ]
 
-/** 30-min start-times from 10:00 AM to 7:30 PM IST. */
-const timeSlots = Array.from({ length: 20 }, (_, index) => {
-  const totalMinutes = 10 * 60 + index * 30
-  const hour24 = Math.floor(totalMinutes / 60)
-  const minutes = totalMinutes % 60
-  const period = hour24 >= 12 ? "PM" : "AM"
-  const displayHour = hour24 % 12 || 12
-  const pad = (n: number) => String(n).padStart(2, "0")
-  return `${pad(displayHour)}:${pad(minutes)} ${period}`
-})
-
-function isoToDate(iso: string): Date | undefined {
-  if (!iso) return undefined
-  const parts = iso.split("-").map(Number)
-  if (parts.length !== 3 || parts.some((p) => Number.isNaN(p))) return undefined
-  return new Date(parts[0], parts[1] - 1, parts[2])
-}
-
-function dateToIso(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
-}
-
-function formatLongDate(d: Date): string {
-  return d.toLocaleDateString("en-IN", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  })
-}
-
-/** Parse a slot like "10:30 AM" to minutes since midnight (0–1439). */
-function slotToMinutes(slot: string): number {
-  const match = slot.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i)
-  if (!match) return 0
-  let h = Number(match[1])
-  const m = Number(match[2])
-  const period = match[3].toUpperCase()
-  if (period === "PM" && h !== 12) h += 12
-  if (period === "AM" && h === 12) h = 0
-  return h * 60 + m
-}
-
-/** Current wall-clock minutes-since-midnight in Asia/Kolkata. */
-function istMinutesSinceMidnight(at: Date): number {
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Kolkata",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).formatToParts(at)
-  const h = Number(parts.find((p) => p.type === "hour")?.value ?? 0)
-  const m = Number(parts.find((p) => p.type === "minute")?.value ?? 0)
-  return h * 60 + m
-}
-
-/** Minimum lead time before a slot is bookable, in minutes. */
-const SLOT_LEAD_TIME_MIN = 60
-
 const demoSchema = z.object({
   services: z.array(z.string()).min(1, "Pick at least one service"),
   branches: z.string().min(1, "Pick a branch count"),
@@ -142,8 +81,6 @@ const demoSchema = z.object({
     .optional(),
   salon: z.string().trim().min(2, "Salon / brand name is required"),
   city: z.string().trim().min(2, "City is required"),
-  preferredDate: z.string().min(1, "Pick a date"),
-  preferredSlot: z.string().min(1, "Pick a time slot"),
   notes: z
     .string()
     .trim()
@@ -170,8 +107,8 @@ const STEP_HEADINGS: Record<number, { title: string; sub?: string }> = {
     title: "Tell us about your business",
   },
   5: {
-    title: "Pick a time that works for you",
-    sub: "Live 30-min walkthrough · 7 days a week · India timezone (IST)",
+    title: "Almost done — what should we prepare?",
+    sub: "We'll reach out within 1 business day to schedule your live walkthrough.",
   },
 }
 
@@ -180,7 +117,7 @@ const STEP_FIELDS: Record<number, (keyof DemoFormValues)[]> = {
   2: ["branches"],
   3: ["name", "phone", "email"],
   4: ["salon", "city"],
-  5: ["preferredDate", "preferredSlot"],
+  5: ["notes"],
 }
 
 function Field({
@@ -214,27 +151,6 @@ export function DemoWizard() {
   const [successOpen, setSuccessOpen] = useState(false)
   const [successSummary, setSuccessSummary] = useState<DemoBookingSuccessSummary | null>(null)
 
-  const todayMidnight = useMemo(() => {
-    const d = new Date()
-    d.setHours(0, 0, 0, 0)
-    return d
-  }, [])
-
-  const [now, setNow] = useState<Date>(() => new Date())
-  useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 60_000)
-    return () => clearInterval(id)
-  }, [])
-
-  const istTime = now
-    .toLocaleTimeString("en-IN", {
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: true,
-      timeZone: "Asia/Kolkata",
-    })
-    .toLowerCase()
-
   const form = useForm<DemoFormValues>({
     resolver: zodResolver(demoSchema),
     mode: "onChange",
@@ -246,8 +162,6 @@ export function DemoWizard() {
       email: "",
       salon: "",
       city: "",
-      preferredDate: "",
-      preferredSlot: "",
       notes: "",
       website: "",
     },
@@ -271,10 +185,6 @@ export function DemoWizard() {
     setLoading(true)
 
     try {
-      const dateObj = isoToDate(values.preferredDate)
-      const dateLabel = dateObj ? formatLongDate(dateObj) : values.preferredDate
-      const preferredTime = `${dateLabel} · ${values.preferredSlot} IST`
-
       const res = await fetch(`${API_URL}/public/demo-lead`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -285,7 +195,6 @@ export function DemoWizard() {
           salon: values.salon,
           city: values.city,
           branches: values.branches,
-          preferredTime,
           services: values.services,
           message: values.notes.trim(),
           website: values.website || "",
@@ -316,7 +225,6 @@ export function DemoWizard() {
         name: values.name,
         salon: values.salon,
         email: values.email,
-        preferredTime,
       })
       setSuccessOpen(true)
       form.reset()
@@ -358,11 +266,7 @@ export function DemoWizard() {
           (watched.city?.trim().length ?? 0) >= 2
         )
       case 5:
-        return (
-          !!watched.preferredDate &&
-          !!watched.preferredSlot &&
-          (watched.notes?.trim().length ?? 0) >= 10
-        )
+        return (watched.notes?.trim().length ?? 0) >= 10
       default:
         return false
     }
@@ -622,222 +526,20 @@ export function DemoWizard() {
             </div>
           )}
 
-          {/* STEP 5 — Date + Time */}
+          {/* STEP 5 — Demo prep */}
           {step === 5 && (
-            <div className="mx-auto max-w-3xl space-y-5">
-              <Controller
-                control={form.control}
-                name="preferredDate"
-                render={({ field: dateField }) => {
-                  const selectedDateObj = isoToDate(dateField.value)
-                  return (
-                    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                      <div className="grid md:grid-cols-2">
-                        {/* LEFT — Calendar + timezone footer */}
-                        <div className="flex flex-col border-b border-slate-100 p-5 md:border-b-0 md:border-r md:p-6">
-                          <DayPicker
-                            mode="single"
-                            selected={selectedDateObj}
-                            onSelect={(date) => {
-                              if (!date) {
-                                dateField.onChange("")
-                                form.setValue("preferredSlot", "", { shouldValidate: false })
-                                return
-                              }
-                              const iso = dateToIso(date)
-                              if (iso !== dateField.value) {
-                                dateField.onChange(iso)
-                                form.setValue("preferredSlot", "", { shouldValidate: false })
-                              }
-                            }}
-                            disabled={{ before: todayMidnight }}
-                            startMonth={
-                              new Date(todayMidnight.getFullYear(), todayMidnight.getMonth(), 1)
-                            }
-                            endMonth={
-                              new Date(todayMidnight.getFullYear(), todayMidnight.getMonth() + 3, 1)
-                            }
-                            showOutsideDays={false}
-                            className="mx-auto w-full"
-                            classNames={{
-                              months: "flex flex-col",
-                              month: "flex flex-col gap-2",
-                              nav: "flex items-center justify-between px-1",
-                              button_previous:
-                                "inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-600 hover:bg-slate-100 disabled:opacity-30",
-                              button_next:
-                                "inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-600 hover:bg-slate-100 disabled:opacity-30",
-                              month_caption:
-                                "flex h-8 items-center justify-center text-base font-semibold text-slate-900",
-                              table: "w-full border-collapse",
-                              weekdays: "flex",
-                              weekday:
-                                "flex-1 py-1.5 text-center text-[11px] font-medium uppercase tracking-wide text-slate-500",
-                              week: "flex",
-                              day: "flex-1 aspect-square p-0.5",
-                              outside: "text-slate-300",
-                              disabled: "opacity-40",
-                            }}
-                            components={{
-                              Chevron: ({ orientation, className }) =>
-                                orientation === "left" ? (
-                                  <ChevronLeft className={cn("h-4 w-4", className)} aria-hidden />
-                                ) : (
-                                  <ChevronRight className={cn("h-4 w-4", className)} aria-hidden />
-                                ),
-                              DayButton: ({ day, modifiers, ...buttonProps }) => {
-                                const isSelected = !!modifiers.selected
-                                const isToday = !!modifiers.today
-                                const isDisabled = !!modifiers.disabled
-                                return (
-                                  <button
-                                    type="button"
-                                    disabled={isDisabled}
-                                    aria-label={day.date.toDateString()}
-                                    {...buttonProps}
-                                    className={cn(
-                                      "mx-auto flex h-9 w-9 items-center justify-center rounded-full text-sm transition-colors",
-                                      isDisabled && "cursor-not-allowed text-slate-300",
-                                      !isDisabled &&
-                                        !isSelected &&
-                                        !isToday &&
-                                        "font-medium text-slate-700 hover:bg-purple-50",
-                                      !isDisabled &&
-                                        isToday &&
-                                        !isSelected &&
-                                        "font-semibold text-slate-900 ring-1 ring-inset ring-slate-400",
-                                      isSelected &&
-                                        "bg-[#7C3AED] font-semibold text-white shadow-sm hover:bg-[#6D28D9]"
-                                    )}
-                                  >
-                                    {day.date.getDate()}
-                                  </button>
-                                )
-                              },
-                            }}
-                          />
-                          <div className="mt-4 border-t border-slate-100 pt-3 text-xs text-slate-500">
-                            Asia / Kolkata ({istTime})
-                          </div>
-                        </div>
-
-                        {/* RIGHT — slot list or empty state */}
-                        <div className="p-5 md:p-6">
-                          {selectedDateObj ? (
-                            (() => {
-                              const isTodaySelected =
-                                selectedDateObj.getTime() === todayMidnight.getTime()
-                              const cutoffMinutes =
-                                istMinutesSinceMidnight(now) + SLOT_LEAD_TIME_MIN
-                              const availableSlots = isTodaySelected
-                                ? timeSlots.filter(
-                                    (s) => slotToMinutes(s) >= cutoffMinutes
-                                  )
-                                : timeSlots
-
-                              if (availableSlots.length === 0) {
-                                return (
-                                  <div className="flex h-full min-h-[220px] flex-col items-center justify-center gap-2 px-4 text-center">
-                                    <p className="text-sm font-semibold text-slate-900">
-                                      No more slots available today
-                                    </p>
-                                    <p className="text-xs leading-relaxed text-slate-500">
-                                      Slots need at least 1&nbsp;hour of lead time. Pick another date
-                                      above to see available times.
-                                    </p>
-                                  </div>
-                                )
-                              }
-
-                              return (
-                                <Controller
-                                  control={form.control}
-                                  name="preferredSlot"
-                                  render={({ field: slotField }) => {
-                                    // If the previously-chosen slot is no longer available
-                                    // (e.g. clock advanced past it), clear it so the user re-picks.
-                                    const slotStillValid =
-                                      !slotField.value ||
-                                      availableSlots.includes(slotField.value)
-                                    if (!slotStillValid) {
-                                      queueMicrotask(() =>
-                                        form.setValue("preferredSlot", "", {
-                                          shouldValidate: false,
-                                        })
-                                      )
-                                    }
-                                    return (
-                                      <div className="flex h-full flex-col">
-                                        <p className="mb-4 text-center text-sm font-semibold text-slate-900">
-                                          {formatLongDate(selectedDateObj)}
-                                        </p>
-                                        <div className="grid gap-2 sm:max-h-[280px] sm:overflow-y-auto sm:pr-1">
-                                          {availableSlots.map((slot) => {
-                                            const isSelected = slotField.value === slot
-                                            return (
-                                              <button
-                                                key={slot}
-                                                type="button"
-                                                onClick={() => slotField.onChange(slot)}
-                                                className={cn(
-                                                  "rounded-xl border-2 px-4 py-2.5 text-sm font-semibold transition-all",
-                                                  isSelected
-                                                    ? "border-[#7C3AED] bg-[#7C3AED] text-white shadow-sm hover:bg-[#6D28D9]"
-                                                    : "border-slate-200 bg-white text-slate-700 hover:border-[#7C3AED]/40"
-                                                )}
-                                              >
-                                                {slot}
-                                              </button>
-                                            )
-                                          })}
-                                        </div>
-                                        {isTodaySelected ? (
-                                          <p className="mt-3 text-center text-[11px] text-slate-400">
-                                            Slots within the next hour are unavailable.
-                                          </p>
-                                        ) : null}
-                                      </div>
-                                    )
-                                  }}
-                                />
-                              )
-                            })()
-                          ) : (
-                            <div className="flex h-full min-h-[220px] items-center justify-center px-4 text-center text-sm text-slate-500">
-                              Select a date to view available times.
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )
-                }}
-              />
-
-              {(form.formState.errors.preferredDate?.message ||
-                form.formState.errors.preferredSlot?.message) ? (
-                <p className="text-center text-sm text-red-600">
-                  {form.formState.errors.preferredDate?.message ||
-                    form.formState.errors.preferredSlot?.message}
-                </p>
-              ) : null}
-
-              <div>
-                <label className="mb-2 block text-sm font-semibold text-slate-700">
-                  What should we prepare for your demo?
-                </label>
+            <div className="mx-auto max-w-md space-y-5">
+              <Field
+                label="What should we prepare for your demo?"
+                error={form.formState.errors.notes?.message}
+              >
                 <Textarea
-                  rows={3}
+                  rows={5}
                   placeholder="Top priorities, current challenges, or modules you want to see…"
                   aria-invalid={form.formState.errors.notes ? "true" : "false"}
                   {...form.register("notes")}
                 />
-                {form.formState.errors.notes ? (
-                  <p className="mt-1.5 text-sm text-red-600">
-                    {form.formState.errors.notes.message}
-                  </p>
-                ) : null}
-              </div>
+              </Field>
             </div>
           )}
 
