@@ -522,14 +522,15 @@ const whatsappTemplateListQuerySchema = z
 /** Marketing site “Book demo” form → admin platform lead */
 const publicDemoLeadSchema = z
   .object({
-    name: z.string().trim().min(2).max(120),
+    firstName: z.string().trim().min(2).max(120),
+    lastName: z.string().trim().max(120).optional().or(z.literal('')),
     phone: z.string().trim().min(10).max(20),
     email: emailSchema.optional(),
     salon: z.string().trim().min(2).max(200),
     city: z.string().trim().min(2).max(120),
     branches: z.string().trim().max(32).optional(),
     preferredTime: z.string().trim().max(80).optional(),
-    message: z.string().trim().min(10).max(4000),
+    message: z.string().trim().max(4000).optional().or(z.literal('')),
     services: z.array(z.string().trim().min(1).max(120)).max(20).optional(),
     /** Honeypot — must be empty; non-empty still validates but is ignored server-side */
     website: z.string().max(200).optional(),

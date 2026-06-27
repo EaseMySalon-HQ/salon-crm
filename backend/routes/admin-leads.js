@@ -14,6 +14,7 @@ const { authenticateAdmin, checkAdminPermission } = require('../middleware/admin
 const { logAdminActivity, getClientIp } = require('../utils/admin-logger');
 const { notifyPlatformAdminsPendingLead } = require('../lib/notify-platform-leads-pending');
 const { linkPlatformLeadToBusiness } = require('../lib/link-platform-lead-to-business');
+const { normalizeLeadContact } = require('../lib/platform-lead-contact');
 
 function adminDisplayName(admin) {
   return (
@@ -77,6 +78,8 @@ router.get('/', checkAdminPermission('leads', 'view'), async (req, res) => {
       const term = String(search).trim();
       query.$or = [
         { name: { $regex: term, $options: 'i' } },
+        { firstName: { $regex: term, $options: 'i' } },
+        { lastName: { $regex: term, $options: 'i' } },
         { salonName: { $regex: term, $options: 'i' } },
         { phone: { $regex: term, $options: 'i' } },
         { email: { $regex: term, $options: 'i' } },
@@ -158,6 +161,8 @@ router.post('/', checkAdminPermission('leads', 'create'), async (req, res) => {
   try {
     const { PlatformLead, PlatformLeadActivity } = getPlatformLeadModels(req);
     const {
+      firstName,
+      lastName,
       name,
       salonName,
       phone,
@@ -171,12 +176,15 @@ router.post('/', checkAdminPermission('leads', 'create'), async (req, res) => {
       notes,
     } = req.body;
 
-    if (!name || !phone) {
-      return res.status(400).json({ success: false, error: 'Name and phone are required' });
+    const contact = normalizeLeadContact({ firstName, lastName, name });
+    if (!contact.firstName || !phone) {
+      return res.status(400).json({ success: false, error: 'First name and phone are required' });
     }
 
     const newLead = new PlatformLead({
-      name: String(name).trim(),
+      firstName: contact.firstName,
+      lastName: contact.lastName,
+      name: contact.name,
       salonName: salonName ? String(salonName).trim() : '',
       phone: String(phone).trim(),
       email: email ? String(email).trim() : undefined,
@@ -272,6 +280,8 @@ router.put('/:id', checkAdminPermission('leads', 'update'), async (req, res) => 
   try {
     const { PlatformLead, PlatformLeadActivity } = getPlatformLeadModels(req);
     const {
+      firstName,
+      lastName,
       name,
       phone,
       salonName,
@@ -399,7 +409,18 @@ router.put('/:id', checkAdminPermission('leads', 'update'), async (req, res) => 
       });
     }
 
-    if (name) lead.name = String(name).trim();
+    if (firstName !== undefined || lastName !== undefined || name !== undefined) {
+      const contact = normalizeLeadContact({
+        firstName: firstName !== undefined ? firstName : lead.firstName,
+        lastName: lastName !== undefined ? lastName : lead.lastName,
+        name: name !== undefined ? name : lead.name,
+      });
+      if (contact.firstName) {
+        lead.firstName = contact.firstName;
+        lead.lastName = contact.lastName;
+        lead.name = contact.name;
+      }
+    }
     if (phone) lead.phone = String(phone).trim();
     if (salonName !== undefined) lead.salonName = salonName ? String(salonName).trim() : '';
     if (email !== undefined) lead.email = email ? String(email).trim() : '';

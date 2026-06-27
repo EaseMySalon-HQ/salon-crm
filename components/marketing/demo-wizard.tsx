@@ -69,7 +69,8 @@ const branchBuckets: BranchBucket[] = [
 const demoSchema = z.object({
   services: z.array(z.string()).min(1, "Pick at least one service"),
   branches: z.string().min(1, "Pick a branch count"),
-  name: z.string().trim().min(2, "Enter your full name"),
+  firstName: z.string().trim().min(2, "Enter your first name"),
+  lastName: z.string().trim().max(120).optional().or(z.literal("")),
   phone: z
     .string()
     .regex(/^\d{10}$/, "Enter a valid 10-digit mobile number"),
@@ -115,7 +116,7 @@ const STEP_HEADINGS: Record<number, { title: string; sub?: string }> = {
 const STEP_FIELDS: Record<number, (keyof DemoFormValues)[]> = {
   1: ["services"],
   2: ["branches"],
-  3: ["name", "phone", "email"],
+  3: ["firstName", "lastName", "phone", "email"],
   4: ["salon", "city"],
   5: ["notes"],
 }
@@ -157,7 +158,8 @@ export function DemoWizard() {
     defaultValues: {
       services: [],
       branches: "",
-      name: "",
+      firstName: "",
+      lastName: "",
       phone: "",
       email: "",
       salon: "",
@@ -189,7 +191,8 @@ export function DemoWizard() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: values.name,
+          firstName: values.firstName.trim(),
+          lastName: values.lastName?.trim() || undefined,
           phone: `+91${values.phone}`,
           email: values.email?.trim() ? values.email.trim() : undefined,
           salon: values.salon,
@@ -222,7 +225,7 @@ export function DemoWizard() {
       })
 
       setSuccessSummary({
-        name: values.name,
+        name: values.firstName.trim(),
         salon: values.salon,
         email: values.email,
       })
@@ -254,11 +257,11 @@ export function DemoWizard() {
       case 2:
         return !!watched.branches
       case 3: {
-        const nameOk = (watched.name?.trim().length ?? 0) >= 2
+        const firstNameOk = (watched.firstName?.trim().length ?? 0) >= 2
         const phoneOk = /^\d{10}$/.test(watched.phone || "")
         const emailValue = watched.email?.trim() ?? ""
         const emailOk = emailValue === "" || emailRe.test(emailValue)
-        return nameOk && phoneOk && emailOk
+        return firstNameOk && phoneOk && emailOk
       }
       case 4:
         return (
@@ -449,13 +452,29 @@ export function DemoWizard() {
           {/* STEP 3 — Identity */}
           {step === 3 && (
             <div className="mx-auto max-w-md space-y-5">
-              <Field label="Full name" error={form.formState.errors.name?.message}>
-                <Input
-                  {...form.register("name")}
-                  placeholder="Your name"
-                  autoComplete="name"
-                />
-              </Field>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <Field
+                  label="First name"
+                  error={form.formState.errors.firstName?.message}
+                >
+                  <Input
+                    {...form.register("firstName")}
+                    placeholder="First name"
+                    autoComplete="given-name"
+                  />
+                </Field>
+                <Field
+                  label="Last name"
+                  hint="Optional"
+                  error={form.formState.errors.lastName?.message}
+                >
+                  <Input
+                    {...form.register("lastName")}
+                    placeholder="Last name"
+                    autoComplete="family-name"
+                  />
+                </Field>
+              </div>
               <Field
                 label="Mobile number"
                 error={form.formState.errors.phone?.message}

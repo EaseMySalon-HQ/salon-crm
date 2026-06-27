@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { PlusCircle, Search } from "lucide-react"
 import { AdminLeadsAPI, type PlatformLeadRow } from "@/lib/admin-api"
 import type { AdminLeadAssignee } from "@/lib/admin-api"
-import { hasAdminLeadPermission } from "@/lib/admin-lead-permissions"
+import { hasAdminLeadPermission, getPlatformLeadDisplayName } from "@/lib/admin-lead-permissions"
 import { useAdminAuth } from "@/lib/admin-auth-context"
 import { AdminLeadsTable } from "@/components/admin/leads/admin-leads-table"
 import { AdminLeadForm } from "@/components/admin/leads/admin-lead-form"
@@ -78,11 +78,22 @@ export function AdminLeadsPage() {
     if (!searchQuery.trim()) return leads
     const q = searchQuery.toLowerCase()
     return leads.filter((lead) => {
-      const salon = lead.salonName?.toLowerCase() || ""
+      const first = lead.firstName?.toLowerCase() || ""
+      const last = lead.lastName?.toLowerCase() || ""
       const name = lead.name?.toLowerCase() || ""
+      const display = getPlatformLeadDisplayName(lead).toLowerCase()
+      const salon = lead.salonName?.toLowerCase() || ""
       const phone = lead.phone?.toLowerCase() || ""
       const email = lead.email?.toLowerCase() || ""
-      return name.includes(q) || salon.includes(q) || phone.includes(q) || email.includes(q)
+      return (
+        display.includes(q) ||
+        first.includes(q) ||
+        last.includes(q) ||
+        name.includes(q) ||
+        salon.includes(q) ||
+        phone.includes(q) ||
+        email.includes(q)
+      )
     })
   }, [leads, searchQuery])
 

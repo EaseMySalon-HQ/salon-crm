@@ -12,6 +12,7 @@ const { logger } = require('../utils/logger');
 const { validate } = require('../middleware/validate');
 const { publicDemoLeadSchema } = require('../validation/schemas');
 const { notifyPlatformAdminsPendingLead } = require('../lib/notify-platform-leads-pending');
+const { normalizeLeadContact } = require('../lib/platform-lead-contact');
 
 const router = express.Router();
 
@@ -38,7 +39,8 @@ router.post(
   async (req, res) => {
     try {
       const {
-        name,
+        firstName,
+        lastName,
         phone,
         email,
         salon,
@@ -64,6 +66,14 @@ router.post(
       }
 
       const { PlatformLead, PlatformLeadActivity } = req.mainModels;
+
+      const contact = normalizeLeadContact({ firstName, lastName });
+      if (!contact.firstName) {
+        return res.status(400).json({
+          success: false,
+          error: 'First name is required',
+        });
+      }
 
       const salonName = String(salon || '').trim();
       const cityName = String(city || '').trim();
@@ -94,6 +104,9 @@ router.post(
         if (cityName && !existing.city) existing.city = cityName;
         if (branchCount && !existing.branchCount) existing.branchCount = branchCount;
         if (preferredDemoTime) existing.preferredDemoTime = preferredDemoTime;
+        if (contact.firstName) existing.firstName = contact.firstName;
+        if (contact.lastName) existing.lastName = contact.lastName;
+        if (contact.name) existing.name = contact.name;
         if (email && !existing.email) existing.email = String(email).trim().toLowerCase();
         if (interestedServices.length > 0) {
           existing.interestedServices = [
@@ -117,7 +130,9 @@ router.post(
       }
 
       const newLead = new PlatformLead({
-        name: String(name).trim(),
+        firstName: contact.firstName,
+        lastName: contact.lastName,
+        name: contact.name,
         salonName,
         city: cityName,
         branchCount,

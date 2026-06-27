@@ -17,11 +17,14 @@ import { useToast } from "@/hooks/use-toast"
 import type { AdminLeadAssignee } from "@/lib/admin-api"
 import {
   getPlatformLeadDemoNotes,
+  getPlatformLeadFirstName,
   getPlatformLeadInterestedInDisplay,
+  getPlatformLeadLastName,
 } from "@/lib/admin-lead-permissions"
 
 const formSchema = z.object({
-  name: z.string().min(2, { message: "Name must be at least 2 characters." }),
+  firstName: z.string().min(2, { message: "First name must be at least 2 characters." }),
+  lastName: z.string().optional(),
   salonName: z.string().optional(),
   phone: z.string().regex(/^\d{10}$/, { message: "Phone number must be exactly 10 digits." }),
   email: z.string().email({ message: "Please enter a valid email." }).optional().or(z.literal("")),
@@ -54,7 +57,8 @@ export function AdminLeadForm({
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      name: "",
+      firstName: "",
+      lastName: "",
       salonName: "",
       phone: "",
       email: "",
@@ -76,7 +80,8 @@ export function AdminLeadForm({
           ? lead.assignedAdminId._id
           : (lead.assignedAdminId as string | undefined)
       form.reset({
-        name: lead.name || "",
+        firstName: getPlatformLeadFirstName(lead),
+        lastName: getPlatformLeadLastName(lead),
         salonName: lead.salonName || "",
         phone: lead.phone || "",
         email: lead.email || "",
@@ -158,20 +163,39 @@ export function AdminLeadForm({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <FormField
                 control={form.control}
-                name="name"
+                name="firstName"
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel className="flex items-center gap-2">
                       <User className="h-4 w-4" />
-                      Contact name *
+                      First name *
                     </FormLabel>
                     <FormControl>
-                      <Input placeholder="Contact person" {...field} />
+                      <Input placeholder="First name" autoComplete="given-name" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
               />
+              <FormField
+                control={form.control}
+                name="lastName"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="flex items-center gap-2">
+                      <User className="h-4 w-4" />
+                      Last name
+                    </FormLabel>
+                    <FormControl>
+                      <Input placeholder="Last name" autoComplete="family-name" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <FormField
                 control={form.control}
                 name="salonName"
