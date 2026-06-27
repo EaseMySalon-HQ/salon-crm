@@ -1699,10 +1699,23 @@ app.get('/api/business/plan', authenticateToken, async (req, res) => {
       });
     }
 
+    const planResolver = require('./lib/plan-resolver');
     const { cacheGet, cacheSet, businessPlanCacheKey } = require('./lib/cache');
     const planCacheKey = businessPlanCacheKey(businessId);
     const cachedPlan = await cacheGet(planCacheKey);
     if (cachedPlan) {
+      await planResolver.refreshPlanTemplates();
+      const cachedPlanId = cachedPlan.data?.plan?.planId;
+      if (cachedPlanId) {
+        const freshConfig = planResolver.resolvePlanConfig(cachedPlanId);
+        if (freshConfig) {
+          cachedPlan.data.plan.monthlyPrice = freshConfig.monthlyPrice;
+          cachedPlan.data.plan.yearlyPrice = freshConfig.yearlyPrice;
+          cachedPlan.data.plan.name = freshConfig.name;
+          cachedPlan.data.plan.planName = freshConfig.name;
+          cachedPlan.data.plan.description = freshConfig.description;
+        }
+      }
       return res.json(cachedPlan);
     }
 
@@ -1740,6 +1753,8 @@ app.get('/api/business/plan', authenticateToken, async (req, res) => {
     } catch (applyErr) {
       logger.warn('Could not apply pending plan change:', applyErr?.message || applyErr);
     }
+
+    await planResolver.refreshPlanTemplates();
 
     const { getPlanInfo } = require('./lib/entitlements');
     const planInfo = getPlanInfo(business);
@@ -1814,36 +1829,26 @@ app.get('/api/business/info', authenticateToken, async (req, res) => {
 });
 
 // New endpoint for authenticated business users to get available plans
-app.get('/api/business/plans', authenticateToken, setupMainDatabase, async (req, res) => {
+app.get('/api/business/plans', authenticateToken, async (req, res) => {
   try {
-    const { PlanTemplate } = req.mainModels;
-    const { getAllPlans } = require('./config/plans');
-    
-    // Checkout / upgrade: active DB templates only. If none exist yet (fresh
-    // install), fall back to built-in config seeds.
-    const dbPlans = await PlanTemplate.find({ isActive: true }).sort({ createdAt: 1 });
-    const configPlans = getAllPlans();
+    const planResolver = require('./lib/plan-resolver');
+    const { CANONICAL_PLAN_IDS } = require('./lib/plan-id');
 
-    const plans =
-      dbPlans.length > 0
-        ? dbPlans.map((dbPlan) => ({
-            id: dbPlan.id,
-            name: dbPlan.name,
-            description: dbPlan.description,
-            monthlyPrice: dbPlan.monthlyPrice,
-            yearlyPrice: dbPlan.yearlyPrice,
-            features: dbPlan.features || [],
-            limits: dbPlan.limits || {},
-          }))
-        : configPlans.map((plan) => ({
-            id: plan.id,
-            name: plan.name,
-            description: plan.description,
-            monthlyPrice: plan.monthlyPrice,
-            yearlyPrice: plan.yearlyPrice,
-            features: plan.features || [],
-            limits: plan.limits || {},
-          }));
+    await planResolver.refreshPlanTemplates();
+
+    const plans = CANONICAL_PLAN_IDS.map((id) => {
+      const plan = planResolver.resolvePlanConfig(id);
+      if (!plan || plan.isActive === false) return null;
+      return {
+        id: plan.id,
+        name: plan.name,
+        description: plan.description,
+        monthlyPrice: plan.monthlyPrice,
+        yearlyPrice: plan.yearlyPrice,
+        features: plan.features || [],
+        limits: plan.limits || {},
+      };
+    }).filter(Boolean);
 
     res.json({
       success: true,

@@ -9,7 +9,7 @@ const DEFAULT_PUBLIC_PRICING_MATRIX_CATEGORIES = [
       {
         feature: 'Online booking (public link)',
         hint: 'Shareable booking page for client self-scheduling',
-        starter: 'no',
+        starter: 'yes',
         growth: 'yes',
         pro: 'yes',
       },

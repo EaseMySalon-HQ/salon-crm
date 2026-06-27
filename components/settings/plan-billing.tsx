@@ -47,7 +47,17 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { Loader2, Download, History } from "lucide-react"
+import { Loader2, History } from "lucide-react"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
 
@@ -101,6 +111,7 @@ export function PlanBilling() {
   const [walletBalanceLoading, setWalletBalanceLoading] = useState(true)
   // Bumped after a successful checkout so the Billing History card refetches.
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0)
+  const [showCheckoutConfirm, setShowCheckoutConfirm] = useState(false)
 
   const loadWalletBalance = useCallback(async () => {
     setWalletBalanceLoading(true)
@@ -231,8 +242,8 @@ export function PlanBilling() {
       toast({
         title: "Payment successful",
         description: isPlanChange
-          ? `You're now on the ${planName} plan (${selectedBillingPeriod}). The amount was debited from your wallet. A tax invoice has been emailed and is available below.`
-          : `${planName} subscription renewed. The amount was debited from your wallet. A tax invoice has been emailed and is available below.`,
+          ? `You're now on the ${planName} plan (${selectedBillingPeriod}). The amount was debited from your wallet. A confirmation email has been sent.`
+          : `${planName} subscription renewed. The amount was debited from your wallet. A confirmation email has been sent.`,
       })
       await refetchPlan()
       await loadWalletBalance()
@@ -276,7 +287,21 @@ export function PlanBilling() {
   const formatPrice = (price: number | null) => {
     if (price === 0) return 'Free'
     if (price === null || price === undefined) return 'Custom'
-    return `₹${price.toLocaleString()}`
+    return `₹${price.toLocaleString('en-IN', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    })}`
+  }
+
+  const formatWalletAmount = (rupees: number) =>
+    `₹${rupees.toLocaleString('en-IN', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`
+
+  const confirmCheckout = async () => {
+    setShowCheckoutConfirm(false)
+    await handleRenew()
   }
 
   const formatDate = (date: string | Date | null) => {
@@ -354,6 +379,9 @@ export function PlanBilling() {
   const nextRenewalDate = calculateNextRenewalDate(planInfo.renewalDate, planInfo.billingPeriod)
   const postPaymentRenewalDate = calculatePostPaymentRenewalDate(planInfo.renewalDate, selectedBillingPeriod)
   const planStartDate = businessInfo?.createdAt || new Date().toISOString()
+
+  const catalogPlan = (planId: string) => availablePlans.find((p) => p.id === planId)
+  const currentCatalogPlan = catalogPlan(planInfo.planId)
   
   // Get selected plan details
   const selectedPlan = availablePlans.find(p => p.id === selectedPlanId) || {
@@ -392,9 +420,12 @@ export function PlanBilling() {
   const isUpgrade = selectedTier > currentTier
   const isDowngrade = selectedTier < currentTier
   
+  // Plan catalog prices (PlanTemplate via GET /business/plans) — not static config
+  const currentMonthlyPrice = currentCatalogPlan?.monthlyPrice ?? planInfo.monthlyPrice ?? 0
+  const currentYearlyPrice = currentCatalogPlan?.yearlyPrice ?? planInfo.yearlyPrice ?? 0
+  const currentMonthlyEquivalent = currentYearlyPrice ? currentYearlyPrice / 12 : null
+
   // Calculate price difference for display (normalize to same billing period for comparison)
-  const currentMonthlyPrice = planInfo.monthlyPrice || 0
-  const currentYearlyPrice = planInfo.yearlyPrice || 0
   const currentPriceForComparison = planInfo.billingPeriod === 'yearly'
     ? (currentYearlyPrice || currentMonthlyPrice * 12)
     : (currentMonthlyPrice || (currentYearlyPrice ? currentYearlyPrice / 12 : 0))
@@ -407,8 +438,8 @@ export function PlanBilling() {
   
   // Calculate current and new prices for display (in their respective billing periods)
   const currentPrice = planInfo.billingPeriod === 'yearly' 
-    ? (planInfo.yearlyPrice || 0)
-    : (planInfo.monthlyPrice || 0)
+    ? (currentYearlyPrice || 0)
+    : (currentMonthlyPrice || 0)
   const newPrice = renewalAmount || 0
 
   const renewalChargePaise = renewalAmount ? Math.round(renewalAmount * 100) : 0
@@ -417,6 +448,13 @@ export function PlanBilling() {
     renewalChargePaise > 0 &&
     walletBalanceRupees !== null &&
     walletBalanceRupees * 100 < renewalChargePaise
+
+  const walletBalanceAfter =
+    !isDowngrade &&
+    walletBalanceRupees !== null &&
+    renewalAmount != null
+      ? walletBalanceRupees - renewalAmount
+      : null
 
   // Pending downgrade (scheduled, not yet applied) — only populated by the
   // /checkout/schedule-downgrade endpoint.
@@ -606,18 +644,18 @@ export function PlanBilling() {
             <div className="flex items-center justify-between">
               <span className="text-sm text-gray-600">Monthly Cost</span>
               <span className="font-semibold text-gray-900">
-                {planInfo.billingPeriod === 'yearly' && monthlyEquivalent
-                  ? `${formatPrice(monthlyEquivalent)} / month`
-                  : selectedMonthlyPrice
-                  ? `${formatPrice(selectedMonthlyPrice)} / month`
+                {planInfo.billingPeriod === 'yearly' && currentMonthlyEquivalent
+                  ? `${formatPrice(currentMonthlyEquivalent)} / month`
+                  : currentMonthlyPrice
+                  ? `${formatPrice(currentMonthlyPrice)} / month`
                   : 'Custom'}
               </span>
             </div>
-            {planInfo.billingPeriod === 'yearly' && planInfo.yearlyPrice && (
+            {planInfo.billingPeriod === 'yearly' && currentYearlyPrice && (
               <div className="flex items-center justify-between">
                 <span className="text-sm text-gray-600">Annual Cost</span>
                 <span className="font-semibold text-gray-900">
-                  {formatPrice(planInfo.yearlyPrice)} / year
+                  {formatPrice(currentYearlyPrice)} / year
                 </span>
               </div>
             )}
@@ -670,8 +708,8 @@ export function PlanBilling() {
                     
                     // Normalize current plan price to selected billing period for comparison
                     const currentPlanPriceNormalized = selectedBillingPeriod === 'yearly'
-                      ? (planInfo.yearlyPrice || (planInfo.monthlyPrice ? planInfo.monthlyPrice * 12 : 0))
-                      : (planInfo.monthlyPrice || (planInfo.yearlyPrice ? planInfo.yearlyPrice / 12 : 0))
+                      ? (currentYearlyPrice || (currentMonthlyPrice ? currentMonthlyPrice * 12 : 0))
+                      : (currentMonthlyPrice || (currentYearlyPrice ? currentYearlyPrice / 12 : 0))
                     
                     const diff = planPrice && currentPlanPriceNormalized ? planPrice - currentPlanPriceNormalized : 0
 
@@ -724,7 +762,7 @@ export function PlanBilling() {
                                 </span>
                                 {!isCurrentPlan && diff !== 0 && (
                                   <span className={`font-medium ${diff > 0 ? 'text-green-600' : 'text-orange-600'}`}>
-                                    {diff > 0 ? '+' : ''}{formatPrice(diff)} {diff > 0 ? 'more' : 'less'} per {planInfo.billingPeriod === 'yearly' ? 'year' : 'month'}
+                                    {diff > 0 ? '+' : ''}{formatPrice(diff)} {diff > 0 ? 'more' : 'less'} per {selectedBillingPeriod === 'yearly' ? 'year' : 'month'}
                                   </span>
                                 )}
                               </div>
@@ -942,7 +980,7 @@ export function PlanBilling() {
 
               <div className="flex justify-end">
                 <Button
-                  onClick={handleRenew}
+                  onClick={() => setShowCheckoutConfirm(true)}
                   disabled={
                     isRenewing ||
                     (!isDowngrade && !renewalAmount) ||
@@ -1008,24 +1046,171 @@ export function PlanBilling() {
         </CardContent>
       </Card>
 
+      <AlertDialog open={showCheckoutConfirm} onOpenChange={setShowCheckoutConfirm}>
+        <AlertDialogContent className="max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {isDowngrade ? "Schedule plan downgrade?" : "Confirm checkout"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {isDowngrade
+                ? "Review the scheduled change below. No payment is taken now."
+                : "Review the plan charge and wallet debit before you pay."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          <div className="rounded-lg border bg-slate-50 divide-y divide-slate-200 text-sm">
+            {isPlanChange && (
+              <>
+                <div className="flex items-start justify-between gap-4 px-4 py-3">
+                  <span className="text-muted-foreground">Current plan</span>
+                  <span className="font-medium text-right">
+                    {planInfo.planName}
+                    <span className="block text-xs font-normal text-muted-foreground capitalize">
+                      {planInfo.billingPeriod} billing
+                    </span>
+                  </span>
+                </div>
+                <div className="flex items-start justify-between gap-4 px-4 py-3">
+                  <span className="text-muted-foreground">New plan</span>
+                  <span className="font-medium text-right text-blue-700">
+                    {selectedPlan.name}
+                    <span className="block text-xs font-normal text-blue-600/80 capitalize">
+                      {selectedBillingPeriod} billing
+                    </span>
+                  </span>
+                </div>
+              </>
+            )}
+            {!isPlanChange && (
+              <div className="flex items-start justify-between gap-4 px-4 py-3">
+                <span className="text-muted-foreground">Plan</span>
+                <span className="font-medium text-right">
+                  {selectedPlan.name}
+                  <span className="block text-xs font-normal text-muted-foreground capitalize">
+                    {selectedBillingPeriod} billing
+                  </span>
+                </span>
+              </div>
+            )}
+            {!isDowngrade && (
+              <>
+                <div className="flex items-start justify-between gap-4 px-4 py-3">
+                  <span className="text-muted-foreground">
+                    {selectedBillingPeriod === "yearly" ? "Annual plan fee" : "Monthly plan fee"}
+                  </span>
+                  <span className="font-medium tabular-nums">
+                    {renewalAmount ? formatPrice(renewalAmount) : "Custom"}
+                  </span>
+                </div>
+                <div className="flex items-start justify-between gap-4 px-4 py-3">
+                  <span className="text-muted-foreground">GST</span>
+                  <span className="text-right text-muted-foreground">
+                    Included in wallet balance
+                    <span className="block text-xs">Collected when you recharged</span>
+                  </span>
+                </div>
+                <div className="flex items-start justify-between gap-4 px-4 py-3">
+                  <span className="text-muted-foreground">Wallet debit</span>
+                  <span className="font-semibold tabular-nums text-blue-700">
+                    {renewalAmount ? formatPrice(renewalAmount) : "Custom"}
+                  </span>
+                </div>
+                {walletBalanceRupees !== null && (
+                  <div className="flex items-start justify-between gap-4 px-4 py-3">
+                    <span className="text-muted-foreground">Wallet balance</span>
+                    <span className="font-medium tabular-nums text-right">
+                      {formatWalletAmount(walletBalanceRupees)}
+                      {walletBalanceAfter !== null && (
+                        <span className="block text-xs font-normal text-muted-foreground">
+                          → {formatWalletAmount(walletBalanceAfter)} after payment
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                )}
+                <div className="flex items-start justify-between gap-4 px-4 py-3 bg-white">
+                  <span className="font-semibold text-gray-900">Total due now</span>
+                  <span className="text-lg font-bold tabular-nums text-blue-700">
+                    {renewalAmount ? formatPrice(renewalAmount) : "Custom"}
+                  </span>
+                </div>
+              </>
+            )}
+            {isDowngrade && (
+              <>
+                <div className="flex items-start justify-between gap-4 px-4 py-3">
+                  <span className="text-muted-foreground">Switch to</span>
+                  <span className="font-medium text-right">{selectedPlan.name}</span>
+                </div>
+                <div className="flex items-start justify-between gap-4 px-4 py-3">
+                  <span className="text-muted-foreground">Amount due now</span>
+                  <span className="font-semibold text-green-700">{formatPrice(0)}</span>
+                </div>
+              </>
+            )}
+            <div className="flex items-start justify-between gap-4 px-4 py-3">
+              <span className="text-muted-foreground">
+                {isDowngrade ? "Effective on" : "Next renewal after payment"}
+              </span>
+              <span className="font-medium text-right">
+                {formatDate(
+                  (isDowngrade
+                    ? nextRenewalDate
+                    : postPaymentRenewalDate
+                  ).toISOString()
+                )}
+              </span>
+            </div>
+          </div>
+
+          {!isDowngrade && (
+            <p className="text-xs text-muted-foreground">
+              A confirmation email will be sent after payment. No tax invoice is issued for plan billing.
+            </p>
+          )}
+
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isRenewing}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={isRenewing}
+              className={
+                isDowngrade
+                  ? "bg-orange-600 hover:bg-orange-700"
+                  : "bg-blue-600 hover:bg-blue-700"
+              }
+              onClick={(e) => {
+                e.preventDefault()
+                void confirmCheckout()
+              }}
+            >
+              {isRenewing ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Processing...
+                </>
+              ) : isDowngrade ? (
+                "Schedule downgrade"
+              ) : (
+                "Confirm & pay from wallet"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <BillingHistory refreshKey={historyRefreshKey} />
     </div>
   )
 }
 
 // ── Billing history ───────────────────────────────────────────────────────
-// Lists past plan-checkout payments (renewals, upgrades, plan changes) so
-// the owner can re-download the GST tax invoice PDF for any of them. The
-// invoice PDF is fetched from `GET /api/plan/invoice/:transactionId` via
-// `PlanCheckoutAPI.downloadInvoice`, which also streams the browser save
-// dialog.
+// Lists past plan-checkout payments (renewals, upgrades, plan changes).
 function BillingHistory({ refreshKey }: { refreshKey: number }) {
-  const { toast } = useToast()
   const [loading, setLoading] = useState(false)
   const [items, setItems] = useState<PlanTransaction[]>([])
   const [page, setPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
-  const [downloadingId, setDownloadingId] = useState<string | null>(null)
 
   const load = useCallback(async (targetPage: number) => {
     setLoading(true)
@@ -1052,24 +1237,6 @@ function BillingHistory({ refreshKey }: { refreshKey: number }) {
   useEffect(() => {
     load(1)
   }, [load, refreshKey])
-
-  const handleDownload = useCallback(
-    async (transactionId: string) => {
-      setDownloadingId(transactionId)
-      try {
-        await PlanCheckoutAPI.downloadInvoice(transactionId)
-      } catch (err: any) {
-        toast({
-          variant: "destructive",
-          title: "Download failed",
-          description: err?.message || "Could not download invoice",
-        })
-      } finally {
-        setDownloadingId(null)
-      }
-    },
-    [toast]
-  )
 
   const formatRupees = (paise: number) =>
     `₹${(Math.round(Number(paise) || 0) / 100).toLocaleString("en-IN", {
@@ -1120,7 +1287,7 @@ function BillingHistory({ refreshKey }: { refreshKey: number }) {
           <div>
             <CardTitle>Billing History</CardTitle>
             <CardDescription>
-              Past subscription payments with downloadable GST tax invoices
+              Past subscription payments from your messaging wallet
             </CardDescription>
           </div>
         </div>
@@ -1134,19 +1301,18 @@ function BillingHistory({ refreshKey }: { refreshKey: number }) {
               <TableHead>Plan</TableHead>
               <TableHead>Provider</TableHead>
               <TableHead className="text-right">Amount (incl. GST)</TableHead>
-              <TableHead className="text-right">Invoice</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={6} className="text-center py-10">
+                <TableCell colSpan={5} className="text-center py-10">
                   <Loader2 className="h-5 w-5 animate-spin inline" />
                 </TableCell>
               </TableRow>
             ) : items.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} className="text-center py-10 text-muted-foreground text-sm">
+                <TableCell colSpan={5} className="text-center py-10 text-muted-foreground text-sm">
                   No subscription payments yet. Your first renewal or upgrade will appear here.
                 </TableCell>
               </TableRow>
@@ -1170,27 +1336,6 @@ function BillingHistory({ refreshKey }: { refreshKey: number }) {
                   <TableCell className="text-sm capitalize">{t.provider}</TableCell>
                   <TableCell className="text-right font-medium whitespace-nowrap">
                     {formatRupees(t.totalChargedPaise || t.amountPaise + t.gstPaise)}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 px-2"
-                      onClick={() => handleDownload(t._id)}
-                      disabled={downloadingId === t._id}
-                      title={
-                        t.invoiceNumber
-                          ? `Download ${t.invoiceNumber}`
-                          : "Download GST invoice"
-                      }
-                    >
-                      {downloadingId === t._id ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <Download className="h-4 w-4" />
-                      )}
-                      <span className="sr-only">Download invoice</span>
-                    </Button>
                   </TableCell>
                 </TableRow>
               ))

@@ -23,6 +23,7 @@ const PLANS = {
       'cash_register',
       'staff_management',
       'basic_reports',
+      'online_booking',
       'gmb',
     ],
     limits: {
