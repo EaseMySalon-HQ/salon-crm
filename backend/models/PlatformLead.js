@@ -1,7 +1,19 @@
 const mongoose = require('mongoose');
 
 const platformLeadSchema = new mongoose.Schema({
-  /** Contact person name */
+  /** Contact first name */
+  firstName: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+  /** Contact last name (optional) */
+  lastName: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+  /** Denormalized full name for search / legacy integrations */
   name: {
     type: String,
     required: true,
@@ -92,6 +104,8 @@ platformLeadSchema.index({ status: 1, createdAt: -1 });
 platformLeadSchema.index({ assignedAdminId: 1 });
 platformLeadSchema.index({ followUpDate: 1 });
 platformLeadSchema.index({ phone: 1 });
+platformLeadSchema.index({ firstName: 1 });
+platformLeadSchema.index({ lastName: 1 });
 
 module.exports = {
   schema: platformLeadSchema,

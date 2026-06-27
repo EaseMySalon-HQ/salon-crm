@@ -17,8 +17,11 @@ import {
   adminAssigneeName,
   formatLeadStatus,
   getPlatformLeadDemoNotes,
+  getPlatformLeadDisplayName,
+  getPlatformLeadFirstName,
   getPlatformLeadInterestedInDisplay,
   getPlatformLeadInterestedServices,
+  getPlatformLeadLastName,
   hasAdminLeadPermission,
 } from "@/lib/admin-lead-permissions"
 import { useAdminAuth } from "@/lib/admin-auth-context"
@@ -133,7 +136,7 @@ export function AdminLeadHistoryDialog({
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 flex-wrap">
-            {lead.name}
+            {getPlatformLeadDisplayName(lead)}
             <Badge className={LEAD_STATUS_COLORS[lead.status] || ""}>
               {formatLeadStatus(lead.status)}
             </Badge>
@@ -146,7 +149,23 @@ export function AdminLeadHistoryDialog({
         </DialogHeader>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-          <div className="flex items-center gap-2 text-slate-600">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              First name
+            </p>
+            <p className="mt-1 font-medium text-slate-900">
+              {getPlatformLeadFirstName(lead) || "—"}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Last name
+            </p>
+            <p className="mt-1 font-medium text-slate-900">
+              {getPlatformLeadLastName(lead) || "—"}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 text-slate-600 sm:col-span-2">
             <Phone className="h-4 w-4" />
             {lead.phone}
           </div>

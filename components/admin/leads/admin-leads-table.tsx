@@ -26,6 +26,7 @@ import {
   LEAD_STATUS_COLORS,
   adminAssigneeName,
   formatLeadStatus,
+  getPlatformLeadDisplayName,
   hasAdminLeadPermission,
 } from "@/lib/admin-lead-permissions"
 import { useAdminAuth } from "@/lib/admin-auth-context"
@@ -111,7 +112,7 @@ export function AdminLeadsTable({ leads, onRefresh, onEdit, onConvert }: AdminLe
           }}
           className="text-left font-medium text-blue-600 hover:underline"
         >
-          {row.original.name}
+          {getPlatformLeadDisplayName(row.original)}
         </button>
       ),
     },
