@@ -249,7 +249,7 @@ let adminSettingsFallback = {
     dataRetention: {
       userDataRetentionDays: 365,
       businessDataRetentionDays: 2555,
-      logRetentionDays: 90,
+      logRetentionDays: 15,
       auditLogRetentionDays: 2555,
       tempDataRetentionDays: 7,
       autoCleanup: true

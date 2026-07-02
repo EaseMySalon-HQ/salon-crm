@@ -13,6 +13,7 @@ const STATIC_ENTRIES: Array<{
   { path: "/pricing", priority: 0.9, changeFrequency: "weekly" },
   { path: "/contact", priority: 0.8, changeFrequency: "monthly" },
   { path: "/demo", priority: 0.85, changeFrequency: "monthly" },
+  { path: "/how-it-works", priority: 0.8, changeFrequency: "monthly" },
   { path: "/faq", priority: 0.7, changeFrequency: "monthly" },
   { path: "/about", priority: 0.5, changeFrequency: "monthly" },
   { path: "/blog", priority: 0.75, changeFrequency: "weekly" },

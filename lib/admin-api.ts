@@ -314,6 +314,7 @@ export interface PlatformLeadRow {
   salonName?: string
   city?: string
   branchCount?: string
+  staffCount?: string
   preferredDemoTime?: string
   phone: string
   email?: string

@@ -5,7 +5,7 @@ import { format } from "date-fns"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
-import { ChevronDown, ChevronUp, Clock, FileText, Phone, Sparkles, User } from "lucide-react"
+import { ChevronDown, ChevronUp, Clock, FileText, Mail, Phone, User } from "lucide-react"
 import {
   AdminLeadsAPI,
   type PlatformLeadActivityRow,
@@ -20,7 +20,6 @@ import {
   getPlatformLeadDisplayName,
   getPlatformLeadFirstName,
   getPlatformLeadInterestedInDisplay,
-  getPlatformLeadInterestedServices,
   getPlatformLeadLastName,
   hasAdminLeadPermission,
 } from "@/lib/admin-lead-permissions"
@@ -70,7 +69,6 @@ export function AdminLeadHistoryDialog({
   const [submitting, setSubmitting] = useState(false)
   const [activityTimelineOpen, setActivityTimelineOpen] = useState(false)
   const canEdit = hasAdminLeadPermission(admin, "update")
-  const interestedServices = getPlatformLeadInterestedServices(lead)
   const demoNotes = getPlatformLeadDemoNotes(lead)
   const interestedInDisplay = getPlatformLeadInterestedInDisplay(lead)
 
@@ -165,44 +163,71 @@ export function AdminLeadHistoryDialog({
               {getPlatformLeadLastName(lead) || "—"}
             </p>
           </div>
-          <div className="flex items-center gap-2 text-slate-600 sm:col-span-2">
-            <Phone className="h-4 w-4" />
-            {lead.phone}
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Phone number
+            </p>
+            <p className="mt-1 flex items-center gap-2 font-medium text-slate-900">
+              <Phone className="h-4 w-4 text-muted-foreground" />
+              {lead.phone}
+            </p>
           </div>
-          {lead.email && (
-            <div className="flex items-center gap-2 text-slate-600 truncate">{lead.email}</div>
-          )}
-          {lead.city && <div className="text-slate-600">City: {lead.city}</div>}
-          {lead.branchCount && <div className="text-slate-600">Branches: {lead.branchCount}</div>}
-          {lead.preferredDemoTime && (
-            <div className="text-slate-600">Preferred: {lead.preferredDemoTime}</div>
-          )}
-          <div className="sm:col-span-2">
-            <div className="flex items-center gap-2 mb-2">
-              <Sparkles className="h-4 w-4 text-muted-foreground" />
-              <span className="text-sm font-medium text-muted-foreground">Interested Services</span>
-            </div>
-            {interestedServices.length > 0 ? (
-              <div className="flex flex-wrap gap-2">
-                {interestedServices.map((service) => (
-                  <Badge key={service} variant="secondary" className="text-sm px-3 py-1.5 font-normal">
-                    {service}
-                  </Badge>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground italic">No services selected</p>
-            )}
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Email
+            </p>
+            <p className="mt-1 flex items-center gap-2 font-medium text-slate-900 truncate">
+              {lead.email ? (
+                <>
+                  <Mail className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  {lead.email}
+                </>
+              ) : (
+                "—"
+              )}
+            </p>
           </div>
-          {demoNotes ? (
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Salon / brand name
+            </p>
+            <p className="mt-1 font-medium text-slate-900">{lead.salonName || "—"}</p>
+          </div>
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Locations
+            </p>
+            <p className="mt-1 font-medium text-slate-900">{lead.branchCount || "—"}</p>
+          </div>
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              No. of Staffs
+            </p>
+            <p className="mt-1 font-medium text-slate-900">{lead.staffCount || "—"}</p>
+          </div>
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              City
+            </p>
+            <p className="mt-1 font-medium text-slate-900">{lead.city || "—"}</p>
+          </div>
+          {lead.preferredDemoTime ? (
             <div className="sm:col-span-2">
-              <div className="flex items-center gap-2 mb-1">
-                <FileText className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm font-medium text-muted-foreground">Notes</span>
-              </div>
-              <p className="text-sm text-slate-600 whitespace-pre-wrap">{demoNotes}</p>
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Preferred time
+              </p>
+              <p className="mt-1 font-medium text-slate-900">{lead.preferredDemoTime}</p>
             </div>
           ) : null}
+          <div className="sm:col-span-2">
+            <div className="flex items-center gap-2 mb-1">
+              <FileText className="h-4 w-4 text-muted-foreground" />
+              <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                What should we prepare for your demo?
+              </span>
+            </div>
+            <p className="text-sm text-slate-600 whitespace-pre-wrap">{demoNotes || "—"}</p>
+          </div>
           {interestedInDisplay ? (
             <div className="sm:col-span-2 flex gap-2 text-slate-600">
               <FileText className="h-4 w-4 shrink-0 mt-0.5" />

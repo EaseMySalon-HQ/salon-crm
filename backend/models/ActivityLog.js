@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { TENANT_ACTIVITY_LOG_RETENTION_SECONDS } = require('../constants/tenant-log-retention');
 
 const metadataSchema = new mongoose.Schema(
   {
@@ -67,6 +68,11 @@ const activityLogSchema = new mongoose.Schema(
 activityLogSchema.index({ businessId: 1, createdAt: -1 });
 activityLogSchema.index({ action: 1 });
 activityLogSchema.index({ actorType: 1 });
+// MongoDB TTL — purge tenant audit rows after retention window (bypasses mongoose immutability hooks).
+activityLogSchema.index(
+  { createdAt: 1 },
+  { expireAfterSeconds: TENANT_ACTIVITY_LOG_RETENTION_SECONDS }
+);
 
 function blockMutate() {
   throw new Error('ActivityLog is immutable');

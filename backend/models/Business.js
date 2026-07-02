@@ -233,6 +233,8 @@ const businessSchema = new mongoose.Schema({
       default: 'monthly' 
     },
     renewalDate: { type: Date },
+    /** Last time tenant used self-service 1-day billing grace while suspended */
+    lastOneDayGraceExtensionAt: { type: Date, default: null },
     isTrial: { type: Boolean, default: false },
     trialEndsAt: { type: Date },
     // Scheduled downgrade: when a business picks a lower-tier plan from
