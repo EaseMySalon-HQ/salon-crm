@@ -504,6 +504,18 @@ export class AuthAPI {
     return response.data
   }
 
+  static async extendBillingOneDay(): Promise<
+    ApiResponse<{
+      renewalDate: string | null
+      businessSuspended: boolean
+      nextBillingDate: string | null
+      billingOneDayExtensionAvailable: boolean
+    }>
+  > {
+    const response = await apiClient.post('/auth/billing-one-day-extension')
+    return response.data
+  }
+
   static async refreshToken(): Promise<ApiResponse & { csrfToken?: string }> {
     const response = await apiClient.post('/auth/refresh')
     return response.data

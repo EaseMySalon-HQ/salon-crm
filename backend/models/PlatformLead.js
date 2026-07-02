@@ -35,6 +35,11 @@ const platformLeadSchema = new mongoose.Schema({
     trim: true,
     default: '',
   },
+  staffCount: {
+    type: String,
+    trim: true,
+    default: '',
+  },
   preferredDemoTime: {
     type: String,
     trim: true,

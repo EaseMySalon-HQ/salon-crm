@@ -37,6 +37,8 @@ export interface User {
   nextBillingDate?: string | null
   suspensionSupportEmail?: string
   suspensionSupportPhone?: string
+  /** Owner/admin can request a one-time 1-day grace while suspended */
+  billingOneDayExtensionAvailable?: boolean
 }
 
 interface AuthContextType {

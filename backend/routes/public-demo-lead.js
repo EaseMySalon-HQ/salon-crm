@@ -46,6 +46,7 @@ router.post(
         salon,
         city,
         branches,
+        staffCount,
         preferredTime,
         message,
         services,
@@ -78,6 +79,7 @@ router.post(
       const salonName = String(salon || '').trim();
       const cityName = String(city || '').trim();
       const branchCount = branches != null ? String(branches).trim() : '';
+      const staffCountValue = staffCount != null ? String(staffCount).trim() : '';
       const preferredDemoTime = preferredTime != null ? String(preferredTime).trim() : '';
       const demoNotes = String(message || '').trim();
       const interestedServices = Array.isArray(services)
@@ -103,6 +105,7 @@ router.post(
         if (salonName && !existing.salonName) existing.salonName = salonName;
         if (cityName && !existing.city) existing.city = cityName;
         if (branchCount && !existing.branchCount) existing.branchCount = branchCount;
+        if (staffCountValue && !existing.staffCount) existing.staffCount = staffCountValue;
         if (preferredDemoTime) existing.preferredDemoTime = preferredDemoTime;
         if (contact.firstName) existing.firstName = contact.firstName;
         if (contact.lastName) existing.lastName = contact.lastName;
@@ -120,7 +123,7 @@ router.post(
           activityType: 'updated',
           performedByName: 'Website demo form',
           description: 'Repeat demo booking from website',
-          details: { preferredDemoTime, demoNotes, interestedServices },
+          details: { preferredDemoTime, demoNotes, interestedServices, staffCount: staffCountValue },
         });
 
         return res.json({
@@ -136,6 +139,7 @@ router.post(
         salonName,
         city: cityName,
         branchCount,
+        staffCount: staffCountValue,
         preferredDemoTime,
         phone: normalizedPhone,
         email: email ? String(email).trim().toLowerCase() : undefined,
@@ -161,6 +165,7 @@ router.post(
         details: {
           city: cityName,
           branchCount,
+          staffCount: staffCountValue,
           preferredDemoTime,
           demoNotes,
           interestedServices,

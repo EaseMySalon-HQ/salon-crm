@@ -225,21 +225,34 @@ const authenticateToken = (req, res, next) => {
       if (req.user.branchId) {
         const Business = mainConnection.model('Business', require('../models/Business').schema);
         const { isAccessBlockedBySuspension, buildSuspensionMeta } = require('../lib/suspension-grace');
-        const business = await Business.findById(req.user.branchId).select('status plan suspendedAt updatedAt').lean();
+        const { canUseOneDayBillingExtension } = require('../lib/billing-one-day-extension');
+        const business = await Business.findById(req.user.branchId)
+          .select('status plan suspendedAt updatedAt')
+          .lean();
         req.businessStatus = business?.status;
         if (!business) {
           req.businessSuspended = false;
           req.businessNextBillingDate = null;
+          req.billingOneDayExtensionAvailable = false;
         } else {
           const suspensionMeta = buildSuspensionMeta(business);
           req.businessSuspended = suspensionMeta.businessSuspended;
           req.planRenewalWarningDaysLeft = suspensionMeta.planRenewalWarningDaysLeft;
           req.planRenewalExpiringToday = suspensionMeta.planRenewalExpiringToday;
           req.businessNextBillingDate = suspensionMeta.nextBillingDate;
+          const canExtend =
+            canUseOneDayBillingExtension(business) &&
+            (req.user.role === 'admin' || req.user.isOwner === true);
+          req.billingOneDayExtensionAvailable = canExtend;
         }
 
         const normalizedPath = `${req.baseUrl || ''}${req.path || ''}`.split('?')[0];
-        const authOnlyPaths = new Set(['/api/auth/profile', '/api/auth/logout', '/api/auth/refresh']);
+        const authOnlyPaths = new Set([
+          '/api/auth/profile',
+          '/api/auth/logout',
+          '/api/auth/refresh',
+          '/api/auth/billing-one-day-extension',
+        ]);
         const accessBlocked = business && isAccessBlockedBySuspension(business);
         if (accessBlocked && !authOnlyPaths.has(normalizedPath)) {
           const supportEmail = process.env.SUSPENSION_SUPPORT_EMAIL || 'support@easemysalon.in';

@@ -1,9 +1,11 @@
 "use client"
 
-import { AlertTriangle, Calendar, LogOut, Mail, Phone } from "lucide-react"
+import { useState } from "react"
+import { AlertTriangle, Calendar, Clock, LogOut, Mail, Phone } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { toast } from "@/components/ui/use-toast"
 
 const DEFAULT_EMAIL = "support@easemysalon.in"
 
@@ -24,6 +26,8 @@ interface AccountSuspendedProps {
   nextBillingDate?: string | null
   supportEmail?: string
   supportPhone?: string
+  billingOneDayExtensionAvailable?: boolean
+  onExtendSubscription?: () => Promise<boolean>
   onLogout?: () => void
 }
 
@@ -32,8 +36,11 @@ export function AccountSuspended({
   nextBillingDate,
   supportEmail,
   supportPhone,
+  billingOneDayExtensionAvailable = false,
+  onExtendSubscription,
   onLogout,
 }: AccountSuspendedProps) {
+  const [extending, setExtending] = useState(false)
   const formatted = formatNextBilling(nextBillingDate)
   const email =
     supportEmail ||
@@ -43,6 +50,23 @@ export function AccountSuspended({
     supportPhone ||
     (typeof process !== "undefined" && process.env.NEXT_PUBLIC_SUSPENSION_SUPPORT_PHONE) ||
     ""
+
+  const handleExtend = async () => {
+    if (!onExtendSubscription || extending) return
+    setExtending(true)
+    try {
+      const ok = await onExtendSubscription()
+      if (!ok) {
+        toast({
+          title: "Could not extend subscription",
+          description: "Please contact support if you need more time.",
+          variant: "destructive",
+        })
+      }
+    } finally {
+      setExtending(false)
+    }
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 py-12 px-4 sm:px-6 lg:px-8">
@@ -82,6 +106,28 @@ export function AccountSuspended({
                 </div>
               </div>
             )}
+
+            {billingOneDayExtensionAvailable && onExtendSubscription ? (
+              <div className="rounded-lg border border-[#7C3AED]/20 bg-white px-4 py-4 space-y-3">
+                <div className="flex items-start gap-3">
+                  <Clock className="h-5 w-5 text-[#7C3AED] shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-medium text-slate-900">Need a little more time?</p>
+                    <p className="text-sm text-slate-600 mt-1">
+                      Extend your subscription by 1 day to restore access while you sort out billing.
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  className="w-full bg-[#7C3AED] hover:bg-[#6D28D9]"
+                  disabled={extending}
+                  onClick={handleExtend}
+                >
+                  {extending ? "Extending…" : "Extend subscription for 1 day"}
+                </Button>
+              </div>
+            ) : null}
 
             <Alert className="border-slate-200 bg-white">
               <AlertTriangle className="h-4 w-4 text-amber-600" />
