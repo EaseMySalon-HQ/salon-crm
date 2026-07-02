@@ -41,7 +41,7 @@ export const PRICING_PLANS: PricingPlan[] = [
     monthlyInr: 199,
     annualInr: 1990,
     annualSavingsInr: 398,
-    ctaLabel: "Start 7 Day Trial",
+    ctaLabel: "Book a Free Demo",
     ctaStyle: "neutral",
     featureSections: [
       {
@@ -76,7 +76,7 @@ export const PRICING_PLANS: PricingPlan[] = [
     annualInr: 6990,
     annualSavingsInr: 1398,
     popular: true,
-    ctaLabel: "Start 7 Day Trial",
+    ctaLabel: "Book a Free Demo",
     ctaStyle: "primary-blue",
     featureSections: [
       {
@@ -106,7 +106,7 @@ export const PRICING_PLANS: PricingPlan[] = [
     monthlyInr: 999,
     annualInr: 9990,
     annualSavingsInr: 1998,
-    ctaLabel: "Start 7 Day Trial",
+    ctaLabel: "Book a Free Demo",
     ctaStyle: "neutral",
     featureSections: [
       {

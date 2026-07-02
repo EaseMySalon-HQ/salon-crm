@@ -53,7 +53,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
     dataRetention: {
       userDataRetentionDays: 365,
       businessDataRetentionDays: 2555, // 7 years
-      logRetentionDays: 90,
+      logRetentionDays: 15,
       auditLogRetentionDays: 2555,
       tempDataRetentionDays: 7,
       autoCleanup: true
@@ -87,7 +87,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
         const next = { ...prev, ...propSettings }
         if (!next.database || typeof next.database !== 'object') next.database = { connectionString: 'mongodb://localhost:27017/ease_my_salon_main', maxConnections: 10, connectionTimeout: 30000, socketTimeout: 30000, retryWrites: true, readPreference: 'primary', writeConcern: 'majority', ...(prev?.database || {}), ...(propSettings?.database || {}) }
         if (!next.backup || typeof next.backup !== 'object') next.backup = prev?.backup || {}
-        const defaultDataRetention = { userDataRetentionDays: 365, businessDataRetentionDays: 2555, logRetentionDays: 90, auditLogRetentionDays: 2555, tempDataRetentionDays: 7, autoCleanup: true }
+        const defaultDataRetention = { userDataRetentionDays: 365, businessDataRetentionDays: 2555, logRetentionDays: 15, auditLogRetentionDays: 2555, tempDataRetentionDays: 7, autoCleanup: true }
         if (!next.dataRetention || typeof next.dataRetention !== 'object') next.dataRetention = { ...defaultDataRetention, ...(prev?.dataRetention || {}), ...(propSettings?.dataRetention || {}) }
         const defaultPerformance = { slowQueryThreshold: 100, maxQueryTime: 30, enableQueryLogging: true, enableIndexMonitoring: true, enableConnectionPooling: true, enableProfiling: false }
         if (!next.performance || typeof next.performance !== 'object') next.performance = { ...defaultPerformance, ...(prev?.performance || {}), ...(propSettings?.performance || {}) }
@@ -425,7 +425,7 @@ export function DatabaseSettings({ settings: propSettings, onSettingsChange }: D
                 type="number"
                 min="7"
                 max="365"
-                value={settings.dataRetention?.logRetentionDays ?? 90}
+                value={settings.dataRetention?.logRetentionDays ?? 15}
                 onChange={(e) => handleSettingChange('dataRetention.logRetentionDays', parseInt(e.target.value))}
                 className="w-full"
               />

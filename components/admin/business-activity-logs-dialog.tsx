@@ -154,7 +154,7 @@ export function BusinessActivityLogsDialog({
             Activity Logs — {businessName}
           </DialogTitle>
           <DialogDescription>
-            Audit trail for this business (salon staff and system events). New entries appear as actions occur.
+            Audit trail for this business (salon staff and system events). Entries are kept for the last 15 days.
           </DialogDescription>
         </DialogHeader>
 

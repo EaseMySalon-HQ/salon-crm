@@ -1650,6 +1650,7 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
           suspensionSupportEmail:
             process.env.SUSPENSION_SUPPORT_EMAIL || 'support@easemysalon.in',
           suspensionSupportPhone: process.env.SUSPENSION_SUPPORT_PHONE || undefined,
+          billingOneDayExtensionAvailable: !!req.billingOneDayExtensionAvailable,
         },
         csrfToken: csrfTokenProfile,
       });
@@ -1684,6 +1685,67 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
       success: false,
       error: 'Internal server error'
     });
+  }
+});
+
+app.post('/api/auth/billing-one-day-extension', authenticateToken, async (req, res) => {
+  try {
+    if (!req.user?.branchId) {
+      return res.status(400).json({
+        success: false,
+        error: 'NOT_TENANT_USER',
+        message: 'Billing extension is only available for salon accounts.',
+      });
+    }
+
+    if (req.user.isImpersonation) {
+      return res.status(403).json({
+        success: false,
+        error: 'FORBIDDEN',
+        message: 'Cannot extend billing while impersonating.',
+      });
+    }
+
+    if (req.user.role !== 'admin' && req.user.isOwner !== true) {
+      return res.status(403).json({
+        success: false,
+        error: 'FORBIDDEN',
+        message: 'Only the business owner or an admin can extend billing.',
+      });
+    }
+
+    const mainConnection = await require('./config/database-manager').getMainConnection();
+    const Business = mainConnection.model('Business', require('./models/Business').schema);
+    const { applyOneDayBillingExtension } = require('./lib/billing-one-day-extension');
+    const { buildSuspensionMeta } = require('./lib/suspension-grace');
+
+    const result = await applyOneDayBillingExtension(Business, req.user.branchId);
+    if (!result.ok) {
+      return res.status(400).json({
+        success: false,
+        error: result.error,
+        message: result.message,
+      });
+    }
+
+    const business = await Business.findById(req.user.branchId).select('status plan suspendedAt').lean();
+    const suspensionMeta = buildSuspensionMeta(business);
+    const csrfToken = setCsrfCookie(res);
+
+    return res.json({
+      success: true,
+      message: 'Subscription extended by 1 day. Your account is active again.',
+      data: {
+        renewalDate: result.renewalDate ? new Date(result.renewalDate).toISOString() : null,
+        businessSuspended: suspensionMeta.businessSuspended,
+        nextBillingDate: suspensionMeta.nextBillingDate,
+        billingOneDayExtensionAvailable: false,
+      },
+      csrfToken,
+    });
+  } catch (error) {
+    logger.error('[auth/billing-one-day-extension]', error);
+    return res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
@@ -18567,6 +18629,9 @@ const server = app.listen(PORT, '0.0.0.0', async () => {
 
   const { startClientWalletExpiryJob } = require('./jobs/client-wallet-expiry-job');
   startClientWalletExpiryJob();
+
+  const { startTenantActivityLogRetentionJob } = require('./jobs/tenant-activity-log-retention');
+  startTenantActivityLogRetentionJob();
 
   // Setup WhatsApp appointment reminder cron job (every 30 min)
   const { setupAppointmentReminderJob } = require('./jobs/appointment-reminder');

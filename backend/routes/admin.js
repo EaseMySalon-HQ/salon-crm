@@ -12,6 +12,7 @@ const {
   syncOverdueBillingSuspensions,
   syncAllOverdueBillingSuspensions,
 } = require('../lib/business-metrics');
+const { tenantActivityLogCreatedAtFilter } = require('../constants/tenant-log-retention');
 const databaseManager = require('../config/database-manager');
 const modelFactory = require('../models/model-factory');
 const { seedDefaultTenantData } = require('../lib/seed-default-tenant-data');
@@ -483,11 +484,7 @@ router.get(
       const bid = new mongoose.Types.ObjectId(businessId);
       const query = { businessId: bid };
 
-      if (startDate || endDate) {
-        query.createdAt = {};
-        if (startDate) query.createdAt.$gte = new Date(startDate);
-        if (endDate) query.createdAt.$lte = new Date(endDate);
-      }
+      query.createdAt = tenantActivityLogCreatedAtFilter(startDate, endDate);
       if (actionFilter && String(actionFilter).trim()) {
         query.action = String(actionFilter).trim();
       }

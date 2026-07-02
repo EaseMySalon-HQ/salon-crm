@@ -2,11 +2,10 @@
 
 import { useState } from "react"
 import Link from "next/link"
-import { ArrowUpRight, Check, Lock } from "lucide-react"
+import { ArrowUpRight } from "lucide-react"
 
-import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
-import type { PlanFeatureItem, PricingPlan } from "@/lib/pricing-matrix"
+import type { PricingPlan } from "@/lib/pricing-matrix"
 
 type BillingCycle = "monthly" | "annual"
 
@@ -16,36 +15,6 @@ function formatInr(n: number) {
     currency: "INR",
     maximumFractionDigits: 0,
   }).format(n)
-}
-
-function FeatureRow({ item }: { item: PlanFeatureItem }) {
-  if (item.state === "included") {
-    return (
-      <li className="flex gap-3 text-sm leading-snug text-slate-700">
-        <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 stroke-[2.5]" aria-hidden />
-        <span>{item.label}</span>
-      </li>
-    )
-  }
-  if (item.state === "addon") {
-    return (
-      <li className="flex gap-3 text-sm leading-snug text-slate-500">
-        <Lock className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" aria-hidden />
-        <span className="flex flex-wrap items-center gap-2">
-          {item.label}
-          <Badge className="border-0 bg-amber-100 px-2 py-0 text-[10px] font-semibold uppercase tracking-wide text-amber-700 hover:bg-amber-100">
-            Add-on
-          </Badge>
-        </span>
-      </li>
-    )
-  }
-  return (
-    <li className="flex gap-3 text-sm leading-snug text-slate-400">
-      <Lock className="mt-0.5 h-4 w-4 shrink-0 text-slate-300" aria-hidden />
-      <span>{item.label}</span>
-    </li>
-  )
 }
 
 function TierCard({ plan, billingCycle }: { plan: PricingPlan; billingCycle: BillingCycle }) {
@@ -69,7 +38,7 @@ function TierCard({ plan, billingCycle }: { plan: PricingPlan; billingCycle: Bil
         </div>
       ) : null}
 
-      <div className="flex flex-col px-6 pb-6 pt-10 sm:px-7">
+      <div className="flex flex-1 flex-col px-6 pb-6 pt-10 sm:px-7">
         <h3 className="text-sm font-bold uppercase tracking-[0.14em] text-slate-900">
           {plan.id === "starter" ? "STARTER" : plan.id === "pro" ? "PRO" : plan.name.toUpperCase()}
         </h3>
@@ -100,23 +69,6 @@ function TierCard({ plan, billingCycle }: { plan: PricingPlan; billingCycle: Bil
           {plan.ctaLabel}
           <ArrowUpRight className="h-4 w-4" aria-hidden />
         </Link>
-      </div>
-
-      <div className="mx-6 border-t border-slate-100 sm:mx-7" />
-
-      <div className="flex flex-1 flex-col gap-6 px-6 py-6 sm:px-7 sm:py-7">
-        {plan.featureSections.map((section) => (
-          <div key={section.title}>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-              {section.title}
-            </p>
-            <ul className="mt-3 space-y-2.5">
-              {section.items.map((item) => (
-                <FeatureRow key={item.label} item={item} />
-              ))}
-            </ul>
-          </div>
-        ))}
       </div>
     </article>
   )

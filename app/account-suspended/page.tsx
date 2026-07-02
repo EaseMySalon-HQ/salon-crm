@@ -1,13 +1,15 @@
 "use client"
 
-import { useEffect } from "react"
+import { useEffect, useCallback } from "react"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
+import { AuthAPI } from "@/lib/api"
 import { buildLoginRedirectHref } from "@/lib/auth-utils"
 import { AccountSuspended } from "@/components/auth/account-suspended"
+import { setCsrfTokenPersisted } from "@/lib/csrf"
 
 export default function AccountSuspendedPage() {
-  const { user, isLoading, logout } = useAuth()
+  const { user, isLoading, logout, updateUser } = useAuth()
   const router = useRouter()
 
   useEffect(() => {
@@ -21,6 +23,33 @@ export default function AccountSuspendedPage() {
       router.replace("/dashboard")
     }
   }, [isLoading, user, router])
+
+  const handleExtendSubscription = useCallback(async (): Promise<boolean> => {
+    try {
+      const response = await AuthAPI.extendBillingOneDay()
+      if (!response.success || !response.data) {
+        return false
+      }
+
+      if (response.csrfToken && typeof response.csrfToken === "string") {
+        setCsrfTokenPersisted(response.csrfToken)
+      }
+
+      updateUser({
+        businessSuspended: response.data.businessSuspended,
+        nextBillingDate: response.data.nextBillingDate,
+        billingOneDayExtensionAvailable: response.data.billingOneDayExtensionAvailable,
+      })
+
+      if (!response.data.businessSuspended) {
+        router.replace("/dashboard")
+      }
+
+      return true
+    } catch {
+      return false
+    }
+  }, [router, updateUser])
 
   if (isLoading || !user) {
     return (
@@ -42,6 +71,8 @@ export default function AccountSuspendedPage() {
       nextBillingDate={user.nextBillingDate}
       supportEmail={user.suspensionSupportEmail}
       supportPhone={user.suspensionSupportPhone}
+      billingOneDayExtensionAvailable={user.billingOneDayExtensionAvailable}
+      onExtendSubscription={handleExtendSubscription}
       onLogout={() => logout()}
     />
   )
