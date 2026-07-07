@@ -1,10 +1,6 @@
-import { AdminLayout } from "@/components/admin/admin-layout"
-import { PlanPromoManager } from "@/components/admin/plan-promo-manager"
+import { redirect } from "next/navigation"
 
-export default function AdminPlanPromosPage() {
-  return (
-    <AdminLayout>
-      <PlanPromoManager />
-    </AdminLayout>
-  )
+/** Legacy URL — promo codes live under Admin → Business → Promo/Coupons. */
+export default function LegacyAdminPlanPromosPage() {
+  redirect("/admin/promo-coupons")
 }

@@ -1,8 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
-import Link from "next/link"
-import { ArrowLeft, Loader2, Pencil, Plus, Ticket } from "lucide-react"
+import { Loader2, Pencil, Plus, Ticket } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -245,15 +244,9 @@ export function PlanPromoManager() {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <Button variant="ghost" size="sm" className="mb-2 -ml-2 text-muted-foreground" asChild>
-            <Link href="/admin/plans">
-              <ArrowLeft className="h-4 w-4 mr-1" />
-              Back to Plan Templates
-            </Link>
-          </Button>
-          <h1 className="text-3xl font-bold text-gray-900">Plan promo codes</h1>
+          <h1 className="text-3xl font-bold text-gray-900">Promo/Coupons</h1>
           <p className="text-gray-600 mt-1">
-            Create coupons for self-service plan checkout (Settings → Plan &amp; Billing).
+            Create plan checkout coupons for tenants (Settings → Plan &amp; Billing).
           </p>
         </div>
         <Button onClick={openCreate}>

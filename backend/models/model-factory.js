@@ -234,6 +234,12 @@ class ModelFactory {
         require('./PlatformLeadActivity').schema,
         connection
       ),
+      PlanPromoCode: this.getModel('PlanPromoCode', require('./PlanPromoCode').schema, connection),
+      PlanPromoRedemption: this.getModel(
+        'PlanPromoRedemption',
+        require('./PlanPromoRedemption').schema,
+        connection
+      ),
 
       // WhatsApp Business module (Meta Cloud API)
       WhatsAppAccount: this.getModel('WhatsAppAccount', require('./WhatsAppAccount').schema, connection),

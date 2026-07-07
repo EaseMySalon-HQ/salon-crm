@@ -539,6 +539,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/admin/settings', require('./routes/admin-settings'));
 app.use('/api/admin/gst', require('./routes/admin-gst-reports'));
 app.use('/api/admin/plans', require('./routes/admin-plans'));
+app.use('/api/admin/plan-promos', require('./routes/admin-plan-promos'));
 app.use('/api/admin/access', require('./routes/admin-access'));
 app.use('/api/admin/logs', require('./routes/admin-logs'));
 app.use('/api/admin/leads', require('./routes/admin-leads'));
