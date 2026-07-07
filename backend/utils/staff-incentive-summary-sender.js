@@ -10,6 +10,8 @@ const { isPlatformEmailDisabled } = require('../lib/business-email-policy');
 const { hasFeature } = require('../lib/entitlements');
 const { buildStaffIncentiveSummaryForRange } = require('../lib/staff-incentive-monthly-data');
 
+const { staffEmailPreferenceFindQuery } = require('../lib/admin-email-preferences');
+
 const EMAIL_DELAY_MS = 600;
 
 /**
@@ -22,19 +24,13 @@ async function resolveStaffIncentiveRecipients(business, businessModels, mainCon
   let recipients = [];
 
   if (recipientStaffIds.length > 0) {
-    recipients = await Staff.find({
-      _id: { $in: recipientStaffIds },
-      'emailNotifications.enabled': true,
-      'emailNotifications.preferences.staffIncentiveSummary': true,
-      email: { $exists: true, $ne: '' },
-    }).lean();
+    recipients = await Staff.find(
+      staffEmailPreferenceFindQuery('staffIncentiveSummary', { recipientStaffIds })
+    ).lean();
   } else {
-    recipients = await Staff.find({
-      branchId: business._id,
-      'emailNotifications.enabled': true,
-      'emailNotifications.preferences.staffIncentiveSummary': true,
-      email: { $exists: true, $ne: '' },
-    }).lean();
+    recipients = await Staff.find(
+      staffEmailPreferenceFindQuery('staffIncentiveSummary', { branchId: business._id })
+    ).lean();
   }
 
   const User = mainConnection.model('User', require('../models/User').schema);

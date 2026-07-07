@@ -47,6 +47,7 @@ import {
   DollarSign,
   Calculator,
   MessageSquare,
+  Award,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { StaffAPI } from "@/lib/api"
@@ -249,6 +250,8 @@ const SETTINGS_CATEGORIES = [
   { id: "currency_settings", label: "Currency Settings", icon: DollarSign, adminOnly: false },
   { id: "tax_settings", label: "Tax Settings", icon: Calculator, adminOnly: false },
   { id: "payment_settings", label: "Payment Settings", icon: CreditCard, adminOnly: true },
+  { id: "payroll_settings", label: "Attendance & Payroll", icon: Banknote, adminOnly: true },
+  { id: "incentive_settings", label: "Incentive Management", icon: Award, adminOnly: true },
   { id: "pos_settings", label: "POS Settings", icon: Receipt, adminOnly: true },
   { id: "notification_settings", label: "Notifications", icon: Bell, adminOnly: false },
   { id: "feedback", label: "Feedback Management", icon: MessageSquare, adminOnly: false },

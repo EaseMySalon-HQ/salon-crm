@@ -153,6 +153,17 @@ const createStaffBodySchema = z
       )
       .optional(),
     avatar: z.string().max(7_000_000).optional(),
+    shiftId: z.string().max(64).optional(),
+    payrollOverrides: z
+      .object({
+        useBusinessRules: z.boolean().optional(),
+        salary: z.union([z.coerce.number().min(0), z.string(), z.null()]).optional(),
+        lateDeductionEnabled: z.boolean().nullable().optional(),
+        overtimeEnabled: z.boolean().nullable().optional(),
+        commissionPercent: z.union([z.coerce.number().min(0).max(200), z.string(), z.null()]).optional(),
+      })
+      .passthrough()
+      .optional(),
   })
   .strict();
 
@@ -172,6 +183,7 @@ const staffUpdateBodySchema = z
     password: z.string().optional(),
     isActive: z.boolean().optional(),
     workSchedule: z.array(z.unknown()).optional(),
+    shiftId: z.string().max(64).optional(),
     permissions: z.array(z.unknown()).optional(),
     permissionsTemplate: z.string().nullable().optional(),
     avatar: z.string().max(7_000_000).optional(),

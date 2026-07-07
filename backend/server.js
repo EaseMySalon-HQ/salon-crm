@@ -49,6 +49,7 @@ const {
   buildAnalyticsStaffTab,
   buildAnalyticsStaffDrillDown,
 } = require('./lib/analytics-tabs');
+const { staffEmailPreferenceFindQuery } = require('./lib/admin-email-preferences');
 
 // Import database manager and middleware
 const databaseManager = require('./config/database-manager');
@@ -56,6 +57,8 @@ const modelFactory = require('./models/model-factory');
 // Central feature-gating registry (cache-backed; see config/feature-routes.js)
 const { gate, FEATURE } = require('./config/feature-routes');
 const INCENTIVE_MANAGEMENT = gate(FEATURE.INCENTIVE_MANAGEMENT);
+const PAYROLL = gate(FEATURE.PAYROLL);
+const ATTENDANCE = gate(FEATURE.ATTENDANCE);
 const MEMBERSHIP = gate(FEATURE.MEMBERSHIP);
 const LEAD_MANAGEMENT = gate(FEATURE.LEAD_MANAGEMENT);
 const { setupBusinessDatabase, setupMainDatabase } = require('./middleware/business-db');
@@ -84,6 +87,62 @@ const BillArchive = require('./models/BillArchive').model;
 
 const ACTIVITY_ACTIONS = require('./constants/activity-log-actions');
 const { scheduleActivityLog, tenantActorTypeFromRole } = require('./utils/activity-logger');
+
+/**
+ * Normalize `payrollOverrides` payload from staff create/update requests.
+ * Returns a stable object shape or null if input is unusable.
+ */
+function normalizePayrollOverrides(input) {
+  if (input == null || typeof input !== 'object') return null;
+  const numOrNull = (v) => {
+    if (v === '' || v == null) return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const boolOrNull = (v) => {
+    if (v === true || v === false) return v;
+    if (v === 'true') return true;
+    if (v === 'false') return false;
+    return null;
+  };
+  return {
+    useBusinessRules: input.useBusinessRules !== false,
+    salary: numOrNull(input.salary),
+    lateDeductionEnabled: boolOrNull(input.lateDeductionEnabled),
+    overtimeEnabled: boolOrNull(input.overtimeEnabled),
+    commissionPercent: numOrNull(input.commissionPercent),
+  };
+}
+
+/** Apply staff payroll overrides only when the tenant has the payroll entitlement and RBAC allows it. */
+async function applyPayrollOverridesIfAllowed(req, target, payrollOverrides) {
+  const normalized = normalizePayrollOverrides(payrollOverrides);
+  if (!normalized) return;
+  const { businessHasPayrollFeature } = require('./lib/payroll-feature-access');
+  const { userHasPermission } = require('./middleware/permissions');
+  if (
+    (await businessHasPayrollFeature(req)) &&
+    userHasPermission(req.user, 'payroll_settings', 'edit')
+  ) {
+    target.payrollOverrides = normalized;
+  }
+}
+
+async function applyStaffShiftFromSettings(businessModels, payload) {
+  const { BusinessSettings } = businessModels;
+  const {
+    mergeAttendancePayrollSettings,
+    syncStaffScheduleWithShift,
+  } = require('./lib/attendance-payroll-settings');
+  const settingsDoc = BusinessSettings
+    ? await BusinessSettings.findOne().select('attendancePayroll').lean()
+    : null;
+  const merged = mergeAttendancePayrollSettings(settingsDoc?.attendancePayroll);
+  if (payload?.shiftId !== undefined || Array.isArray(payload?.workSchedule)) {
+    return syncStaffScheduleWithShift(payload, merged);
+  }
+  return null;
+}
 const {
   logTenantLoginSuccess,
   logTenantLogoutSuccess,
@@ -326,8 +385,23 @@ function getEmailSettingsWithDefaults(emailSettings) {
     },
     weeklySummary: {
       enabled: true,
-      day: 'sunday',
-      time: '20:00'
+      day: 'monday',
+      time: '09:00'
+    },
+    monthlySummary: {
+      enabled: true,
+      time: '09:00'
+    },
+    payrollNotifications: {
+      enabled: true,
+      time: '12:00',
+      attachSalarySlip: true,
+      recipientStaffIds: []
+    },
+    timesheetNotifications: {
+      enabled: true,
+      time: '12:00',
+      format: 'xlsx'
     },
     appointmentNotifications: {
       enabled: true,
@@ -384,6 +458,31 @@ function getEmailSettingsWithDefaults(emailSettings) {
         ? emailSettings.weeklySummary.enabled
         : defaults.weeklySummary.enabled
     } : defaults.weeklySummary,
+    monthlySummary: emailSettings.monthlySummary ? {
+      ...defaults.monthlySummary,
+      ...emailSettings.monthlySummary,
+      enabled: emailSettings.monthlySummary.hasOwnProperty('enabled')
+        ? emailSettings.monthlySummary.enabled
+        : defaults.monthlySummary.enabled
+    } : defaults.monthlySummary,
+    payrollNotifications: emailSettings.payrollNotifications ? {
+      ...defaults.payrollNotifications,
+      ...emailSettings.payrollNotifications,
+      enabled: emailSettings.payrollNotifications.hasOwnProperty('enabled')
+        ? emailSettings.payrollNotifications.enabled
+        : defaults.payrollNotifications.enabled,
+      attachSalarySlip: emailSettings.payrollNotifications.hasOwnProperty('attachSalarySlip')
+        ? emailSettings.payrollNotifications.attachSalarySlip
+        : defaults.payrollNotifications.attachSalarySlip
+    } : defaults.payrollNotifications,
+    timesheetNotifications: emailSettings.timesheetNotifications ? {
+      ...defaults.timesheetNotifications,
+      ...emailSettings.timesheetNotifications,
+      enabled: emailSettings.timesheetNotifications.hasOwnProperty('enabled')
+        ? emailSettings.timesheetNotifications.enabled
+        : defaults.timesheetNotifications.enabled,
+      format: emailSettings.timesheetNotifications.format === 'pdf' ? 'pdf' : 'xlsx'
+    } : defaults.timesheetNotifications,
     receiptNotifications: emailSettings.receiptNotifications ? {
       ...defaults.receiptNotifications,
       ...emailSettings.receiptNotifications,
@@ -597,6 +696,16 @@ const initializeBusinessSettings = async () => {
 // Import authentication middleware
 const { authenticateToken, requireAdmin, requireManager, requireStaff } = require('./middleware/auth');
 const { requirePermission } = require('./middleware/permissions');
+
+// Payroll routes (Pro plan) — mounted after auth middleware is available
+app.use('/api/payroll', authenticateToken, setupBusinessDatabase, PAYROLL, require('./routes/payroll'));
+app.use('/api/staff-advances', authenticateToken, setupBusinessDatabase, PAYROLL, require('./routes/staff-advances'));
+app.use('/api/staff-leaves', authenticateToken, setupBusinessDatabase, PAYROLL, require('./routes/staff-leaves'));
+app.use('/api/staff-leave-credits', authenticateToken, setupBusinessDatabase, PAYROLL, require('./routes/staff-leave-credits'));
+// Attendance & timesheet routes (Growth+ plan). Payroll-specific settings within
+// the shared settings endpoint are stripped for non-payroll tenants server-side.
+app.use('/api/settings', authenticateToken, setupBusinessDatabase, ATTENDANCE, require('./routes/settings-attendance-payroll'));
+app.use('/api/staff-attendance', authenticateToken, setupBusinessDatabase, ATTENDANCE, require('./routes/staff-attendance'));
 
 // Granular permission middleware
 const checkPermission = (module, feature) => {
@@ -8180,7 +8289,7 @@ app.post(
   async (req, res) => {
   try {
     const { Staff } = req.businessModels;
-    const { name, email, phone, role, specialties, salary, commissionProfileIds, notes, hasLoginAccess, allowAppointmentScheduling, password, isActive, workSchedule, avatar } = req.body;
+    const { name, email, phone, role, specialties, salary, commissionProfileIds, notes, hasLoginAccess, allowAppointmentScheduling, password, isActive, workSchedule, avatar, payrollOverrides, shiftId } = req.body;
 
     if (!name || !email || !phone || !role) {
       return res.status(400).json({
@@ -8194,14 +8303,6 @@ app.post(
       return res.status(400).json({
         success: false,
         error: 'Password is required when login access is enabled'
-      });
-    }
-
-    // Validate specialties requirement when appointment scheduling is enabled
-    if (allowAppointmentScheduling && (!specialties || specialties.length === 0)) {
-      return res.status(400).json({
-        success: false,
-        error: 'At least one specialty is required when appointment scheduling is enabled'
       });
     }
 
@@ -8228,7 +8329,18 @@ app.post(
     if (typeof avatar === 'string' && avatar.trim() !== '') {
       staffData.avatar = avatar.trim();
     }
-    if (Array.isArray(workSchedule) && workSchedule.length > 0) {
+    const shiftSync = await applyStaffShiftFromSettings(req.businessModels, { shiftId, workSchedule });
+    if (shiftSync) {
+      staffData.shiftId = shiftSync.shiftId;
+      if (Array.isArray(shiftSync.workSchedule) && shiftSync.workSchedule.length > 0) {
+        staffData.workSchedule = shiftSync.workSchedule.map(ws => ({
+          day: typeof ws.day === 'number' ? ws.day : parseInt(ws.day, 10),
+          enabled: ws.enabled !== false,
+          startTime: typeof ws.startTime === 'string' ? ws.startTime : '09:00',
+          endTime: typeof ws.endTime === 'string' ? ws.endTime : '21:00'
+        }));
+      }
+    } else if (Array.isArray(workSchedule) && workSchedule.length > 0) {
       staffData.workSchedule = workSchedule.map(ws => ({
         day: typeof ws.day === 'number' ? ws.day : parseInt(ws.day, 10),
         enabled: ws.enabled !== false,
@@ -8236,6 +8348,7 @@ app.post(
         endTime: typeof ws.endTime === 'string' ? ws.endTime : '21:00'
       }));
     }
+    await applyPayrollOverridesIfAllowed(req, staffData, payrollOverrides);
 
     // Add password if provided
     if (password && password.trim() !== '') {
@@ -8286,7 +8399,7 @@ app.put(
   async (req, res) => {
   try {
     const { Staff } = req.businessModels;
-    const { name, email, phone, role, specialties, salary, commissionProfileIds, notes, hasLoginAccess, allowAppointmentScheduling, password, isActive, avatar } = req.body;
+    const { name, email, phone, role, specialties, salary, commissionProfileIds, notes, hasLoginAccess, allowAppointmentScheduling, password, isActive, avatar, payrollOverrides } = req.body;
 
     // Get existing staff to check current state
     const existingStaff = await Staff.findById(req.params.id);
@@ -8444,14 +8557,6 @@ app.put(
       });
     }
 
-    // Validate specialties requirement when appointment scheduling is enabled
-    if (allowAppointmentScheduling && (!specialties || specialties.length === 0)) {
-      return res.status(400).json({
-        success: false,
-        error: 'At least one specialty is required when appointment scheduling is enabled'
-      });
-    }
-
     const updateData = {
       name,
       email,
@@ -8468,8 +8573,19 @@ app.put(
     if (typeof avatar === 'string') {
       updateData.avatar = avatar.trim();
     }
-    const { workSchedule, permissions } = req.body;
-    if (Array.isArray(workSchedule)) {
+    const { workSchedule, permissions, shiftId } = req.body;
+    const shiftSync = await applyStaffShiftFromSettings(req.businessModels, { shiftId, workSchedule });
+    if (shiftSync) {
+      updateData.shiftId = shiftSync.shiftId;
+      if (Array.isArray(shiftSync.workSchedule)) {
+        updateData.workSchedule = shiftSync.workSchedule.map(ws => ({
+          day: typeof ws.day === 'number' ? ws.day : parseInt(ws.day, 10),
+          enabled: ws.enabled !== false,
+          startTime: typeof ws.startTime === 'string' ? ws.startTime : '09:00',
+          endTime: typeof ws.endTime === 'string' ? ws.endTime : '21:00'
+        }));
+      }
+    } else if (Array.isArray(workSchedule)) {
       updateData.workSchedule = workSchedule.map(ws => ({
         day: typeof ws.day === 'number' ? ws.day : parseInt(ws.day, 10),
         enabled: ws.enabled !== false,
@@ -8479,6 +8595,9 @@ app.put(
     }
     if (Array.isArray(permissions)) {
       updateData.permissions = permissions;
+    }
+    if (payrollOverrides !== undefined) {
+      await applyPayrollOverridesIfAllowed(req, updateData, payrollOverrides);
     }
 
     // Add password if provided
@@ -10509,21 +10628,15 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, requireP
           
           if (recipientStaffIds.length > 0) {
             // Use configured recipient list
-            recipients = await Staff.find({
-              _id: { $in: recipientStaffIds },
-              'emailNotifications.enabled': true,
-              'emailNotifications.preferences.appointmentAlerts': true,
-              email: { $exists: true, $ne: '' }
-            }).lean();
+            recipients = await Staff.find(
+              staffEmailPreferenceFindQuery('appointmentAlerts', { recipientStaffIds })
+            ).lean();
           } else {
             // Fallback: Find all staff with appointment alerts enabled
             logger.debug('⚠️ No recipient list configured, finding all staff with appointment alerts enabled');
-            recipients = await Staff.find({
-              branchId: req.user.branchId,
-              'emailNotifications.enabled': true,
-              'emailNotifications.preferences.appointmentAlerts': true,
-              email: { $exists: true, $ne: '' }
-            }).lean();
+            recipients = await Staff.find(
+              staffEmailPreferenceFindQuery('appointmentAlerts', { branchId: req.user.branchId })
+            ).lean();
           }
           
           // Also check for admin users (business owners) who should receive notifications
@@ -10978,12 +11091,9 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
           const sendToStaff = emailSettings?.receiptNotifications?.sendToStaff === true;
           if (sendToStaff) {
             const recipientStaffIds = emailSettings.receiptNotifications.recipientStaffIds || [];
-            const recipients = await Staff.find({
-              _id: { $in: recipientStaffIds },
-              'emailNotifications.enabled': true,
-              'emailNotifications.preferences.receiptAlerts': true,
-              email: { $exists: true, $ne: '' }
-            }).lean();
+            const recipients = await Staff.find(
+              staffEmailPreferenceFindQuery('receiptAlerts', { recipientStaffIds })
+            ).lean();
             
             for (const staff of recipients) {
               try {
@@ -11899,19 +12009,13 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, requi
             
             let recipients = [];
             if (recipientStaffIds.length > 0) {
-              recipients = await Staff.find({
-                _id: { $in: recipientStaffIds },
-                'emailNotifications.enabled': true,
-                'emailNotifications.preferences.appointmentAlerts': true,
-                email: { $exists: true, $ne: '' }
-              }).lean();
+              recipients = await Staff.find(
+                staffEmailPreferenceFindQuery('appointmentAlerts', { recipientStaffIds })
+              ).lean();
             } else {
-              recipients = await Staff.find({
-                branchId: req.user.branchId,
-                'emailNotifications.enabled': true,
-                'emailNotifications.preferences.appointmentAlerts': true,
-                email: { $exists: true, $ne: '' }
-              }).lean();
+              recipients = await Staff.find(
+                staffEmailPreferenceFindQuery('appointmentAlerts', { branchId: req.user.branchId })
+              ).lean();
             }
             
             // Add admin users
@@ -17466,7 +17570,7 @@ app.delete('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, r
 // Commission Profiles API — Incentive Management (target, service, and item profiles).
 
 // Get all commission profiles
-app.get('/api/commission-profiles', authenticateToken, setupBusinessDatabase, requireManager, INCENTIVE_MANAGEMENT, async (req, res) => {
+app.get('/api/commission-profiles', authenticateToken, setupBusinessDatabase, requirePermission('incentive_settings', 'view'), INCENTIVE_MANAGEMENT, async (req, res) => {
   try {
     const { CommissionProfile } = req.businessModels;
     const commissionProfiles = await CommissionProfile.find().sort({ createdAt: -1 });
@@ -17485,7 +17589,7 @@ app.get('/api/commission-profiles', authenticateToken, setupBusinessDatabase, re
 });
 
 // Create commission profile
-app.post('/api/commission-profiles', authenticateToken, setupBusinessDatabase, requireAdmin, INCENTIVE_MANAGEMENT, async (req, res) => {
+app.post('/api/commission-profiles', authenticateToken, setupBusinessDatabase, requirePermission('incentive_settings', 'create'), INCENTIVE_MANAGEMENT, async (req, res) => {
   try {
     const { CommissionProfile } = req.businessModels;
     const profile = await CommissionProfile.create({
@@ -17507,7 +17611,7 @@ app.post('/api/commission-profiles', authenticateToken, setupBusinessDatabase, r
 });
 
 // Update commission profile
-app.put('/api/commission-profiles/:id', authenticateToken, setupBusinessDatabase, requireAdmin, INCENTIVE_MANAGEMENT, async (req, res) => {
+app.put('/api/commission-profiles/:id', authenticateToken, setupBusinessDatabase, requirePermission('incentive_settings', 'edit'), INCENTIVE_MANAGEMENT, async (req, res) => {
   try {
     const { CommissionProfile } = req.businessModels;
     const { id } = req.params;
@@ -17543,7 +17647,7 @@ app.put('/api/commission-profiles/:id', authenticateToken, setupBusinessDatabase
 });
 
 // Delete commission profile
-app.delete('/api/commission-profiles/:id', authenticateToken, setupBusinessDatabase, requireAdmin, INCENTIVE_MANAGEMENT, async (req, res) => {
+app.delete('/api/commission-profiles/:id', authenticateToken, setupBusinessDatabase, requirePermission('incentive_settings', 'delete'), INCENTIVE_MANAGEMENT, async (req, res) => {
   try {
     const { CommissionProfile } = req.businessModels;
     const { id } = req.params;
@@ -18276,41 +18380,7 @@ app.get('/api/gdpr/export/:userId', authenticateToken, setupBusinessDatabase, as
           });
         }
         
-        // Also check export notification settings for additional recipients
-        const exportNotificationsEnabled = emailSettings?.exportNotifications?.enabled === true;
-        if (exportNotificationsEnabled) {
-          const { Staff } = req.businessModels;
-          const recipientStaffIds = emailSettings.exportNotifications.recipientStaffIds || [];
-          let staffRecipients = [];
-          
-          if (recipientStaffIds.length > 0) {
-            staffRecipients = await Staff.find({
-              _id: { $in: recipientStaffIds },
-              'emailNotifications.enabled': true,
-              'emailNotifications.preferences.exportAlerts': true,
-              email: { $exists: true, $ne: '' }
-            }).lean();
-          } else {
-            staffRecipients = await Staff.find({
-              branchId: req.user.branchId,
-              'emailNotifications.enabled': true,
-              'emailNotifications.preferences.exportAlerts': true,
-              email: { $exists: true, $ne: '' }
-            }).lean();
-          }
-          
-          // Add staff recipients (avoid duplicates)
-          for (const staff of staffRecipients) {
-            if (!recipients.some(r => r.email === staff.email)) {
-              recipients.push({
-                email: staff.email,
-                name: staff.name || staff.email,
-                role: 'staff'
-              });
-            }
-          }
-        }
-        
+        // Send export file to admin recipients only
         if (recipients.length === 0) {
           logger.debug(`⚠️ No admin email found to send export to`);
           return res.status(400).json({

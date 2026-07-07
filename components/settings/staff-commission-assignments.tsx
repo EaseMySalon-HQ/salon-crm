@@ -54,8 +54,8 @@ function profileKey(p: CommissionProfile): string {
 
 export function StaffCommissionAssignments() {
   const { toast } = useToast()
-  const { user } = useAuth()
-  const canManage = user?.role === "admin" || user?.role === "manager"
+  const { user, hasPermission } = useAuth()
+  const canManage = hasPermission("incentive_settings", "edit")
   const isAdmin = user?.role === "admin"
 
   const [loading, setLoading] = useState(true)

@@ -73,6 +73,7 @@ const FEATURE_ENFORCEMENT: Record<string, "gated" | "core" | "partial" | "planne
   staff_management: "core",
   basic_reports: "core",
   incentive_management: "gated",
+  payroll: "gated",
   lead_management: "gated",
   membership: "gated",
   packages: "gated",

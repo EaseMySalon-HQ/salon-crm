@@ -5,6 +5,7 @@
 const {
   getAttributedRevenueForStaff,
   staffIsAttributedToLineItem,
+  getLinePreTaxTotal,
 } = require('./staff-line-revenue');
 
 function normalizeSaleLineServiceId(item) {
@@ -123,6 +124,20 @@ function calculateLegacyItemRatesCommission(revenue, itemRates, qualifyingItems)
   return totalCommission;
 }
 
+function getLineQuantity(item) {
+  const q = Number(item?.quantity);
+  return Number.isFinite(q) && q > 0 ? q : 1;
+}
+
+function getAttributedUnits(item, attributedRevenue, calculateOn) {
+  const units = getLineQuantity(item);
+  const linePreTax = getLinePreTaxTotal(item);
+  const fullLineRevenue = revenueForLine(item, linePreTax, calculateOn);
+  const attr = Math.max(0, Number(attributedRevenue) || 0);
+  if (fullLineRevenue <= 0) return units;
+  return units * (attr / fullLineRevenue);
+}
+
 function calculateProductBasedCommission(productStaffItems, productRules) {
   const ruleMap = new Map();
   for (const rule of productRules || []) {
@@ -147,14 +162,15 @@ function calculateProductBasedCommission(productStaffItems, productRules) {
     const attributed = Math.max(0, Number(item.total) || 0);
     if (attributed <= 0) continue;
     let lineCommission = 0;
+    const units = Math.max(0, Number(item.attributedUnits) || getLineQuantity(item));
     if (rule.calculateBy === 'percent') {
       lineCommission = (attributed * rule.value) / 100;
     } else {
-      lineCommission = rule.value;
+      lineCommission = rule.value * units;
     }
     commission += lineCommission;
     revenue += attributed;
-    itemCount += 1;
+    itemCount += units;
   }
 
   return { commission, revenue, itemCount };
@@ -183,27 +199,114 @@ function calculateServiceBasedCommission(serviceStaffItems, serviceRules) {
     const attributed = Math.max(0, Number(item.total) || 0);
     if (attributed <= 0) continue;
     let lineCommission = 0;
+    const units = Math.max(0, Number(item.attributedUnits) || getLineQuantity(item));
     if (rule.calculateBy === 'percent') {
       lineCommission = (attributed * rule.value) / 100;
     } else {
-      lineCommission = rule.value;
+      lineCommission = rule.value * units;
     }
     commission += lineCommission;
     revenue += attributed;
-    itemCount += 1;
+    itemCount += units;
   }
 
   return { commission, revenue, itemCount };
 }
 
-function calculateSaleCommission(sale, staffCommissionProfiles, staffId, staffName) {
+/**
+ * Business commission rules integration ────────────────────────────────────
+ *
+ * Optional `commissionSettings` (from BusinessSettings.attendancePayroll.payroll.commission)
+ * layers three business-wide rules on top of per-staff profile calculations:
+ *   1. on{Service,Product,Membership,Package}Sales — booleans that gate which
+ *      line-item types earn commission. When a flag is absent (undefined) we
+ *      default to allowing it (backwards-compatible).
+ *   2. calculateOn — 'before_discount' (default) uses the pre-discount gross
+ *      of a line, while 'after_discount' uses the attributed post-discount
+ *      revenue as-is.
+ *   3. payableWhen — 'on_sale' (default) counts every completed sale; when
+ *      'on_payment' only fully-paid sales contribute (`paymentStatus.remainingAmount === 0`
+ *      or `status === 'paid'`/`'completed'`); 'on_service_completion' also
+ *      requires `status === 'completed'`.
+ */
+const SALE_TYPE_FLAG = {
+  service: 'onServiceSales',
+  product: 'onProductSales',
+  package: 'onPackageSales',
+  membership: 'onMembershipSales',
+  prepaid: 'onPrepaidSales',
+  prepaid_wallet: 'onPrepaidSales',
+};
+
+function saleTypeEnabled(itemType, settings) {
+  if (!settings || typeof settings !== 'object') return true;
+  const key = SALE_TYPE_FLAG[String(itemType || '').toLowerCase()];
+  if (!key) return true;
+  const v = settings[key];
+  return v === undefined ? true : v !== false;
+}
+
+function revenueForLine(item, attributedTotal, calculateOn) {
+  if (calculateOn !== 'before_discount') return attributedTotal;
+  const lineTotal = Math.max(0, Number(item.total) || 0);
+  const price = Number(item.price);
+  const quantity = Number(item.quantity);
+  const gross = Number.isFinite(price) && Number.isFinite(quantity)
+    ? Math.max(0, price * quantity)
+    : 0;
+  if (gross <= 0 || lineTotal <= 0) {
+    const discount = Math.max(0, Number(item.discount) || 0);
+    return lineTotal + discount * (attributedTotal / (lineTotal || 1));
+  }
+  return gross * (attributedTotal / lineTotal);
+}
+
+function isSaleFullyPaid(sale) {
+  const ps = sale?.paymentStatus;
+  if (ps && typeof ps === 'object') {
+    const total = Number(ps.totalAmount);
+    const paid = Number(ps.paidAmount);
+    const remaining = Number(ps.remainingAmount);
+    if (Number.isFinite(total) && total <= 0) return true;
+    if (Number.isFinite(remaining)) {
+      if (remaining > 0) return false;
+      if (Number.isFinite(paid) && paid > 0) return true;
+      if (Number.isFinite(total) && paid >= total) return true;
+      // remainingAmount 0 but nothing collected — not cleared
+      return false;
+    }
+    if (Number.isFinite(paid) && Number.isFinite(total) && total > 0) {
+      return paid >= total;
+    }
+  }
+  if (typeof ps === 'string') return ps.toLowerCase() === 'paid';
+  const status = String(sale?.status || '').toLowerCase();
+  // Do not treat service-completed bills as paid; only explicit paid status
+  return status === 'paid';
+}
+
+function saleIsCommissionPayable(sale, payableWhen) {
+  if (payableWhen === 'on_payment') return isSaleFullyPaid(sale);
+  if (payableWhen === 'on_service_completion') {
+    return String(sale?.status || '').toLowerCase() === 'completed';
+  }
+  return true;
+}
+
+function calculateSaleCommission(sale, staffCommissionProfiles, staffId, staffName, commissionSettings) {
+  if (!saleIsCommissionPayable(sale, commissionSettings?.payableWhen)) return null;
+
+  const calculateOn = commissionSettings?.calculateOn === 'before_discount' ? 'before_discount' : 'after_discount';
   const saleFallback = { staffId: sale.staffId, staffName: sale.staffName };
   const staffItems = (sale.items || [])
+    .filter((item) => saleTypeEnabled(item?.type, commissionSettings))
     .filter((item) => staffIsAttributedToLineItem(item, staffId, staffName, saleFallback))
-    .map((item) => ({
-      ...item,
-      total: getAttributedRevenueForStaff(item, staffId, staffName, saleFallback),
-    }));
+    .map((item) => {
+      const attributedRaw = getAttributedRevenueForStaff(item, staffId, staffName, saleFallback);
+      const attributedTotal = revenueForLine(item, attributedRaw, calculateOn);
+      const attributedUnits = getAttributedUnits(item, attributedTotal, calculateOn);
+      return { ...item, total: attributedTotal, attributedUnits };
+    });
 
   if (staffItems.length === 0) return null;
 
@@ -348,9 +451,9 @@ function calculateSaleCommission(sale, staffCommissionProfiles, staffId, staffNa
   };
 }
 
-function calculateMultipleSalesCommission(sales, staffCommissionProfiles, staffId, staffName) {
+function calculateMultipleSalesCommission(sales, staffCommissionProfiles, staffId, staffName, commissionSettings) {
   const results = (sales || [])
-    .map((sale) => calculateSaleCommission(sale, staffCommissionProfiles, staffId, staffName))
+    .map((sale) => calculateSaleCommission(sale, staffCommissionProfiles, staffId, staffName, commissionSettings))
     .filter(Boolean);
 
   if (results.length === 0) return null;
@@ -397,7 +500,7 @@ function calculateMultipleSalesCommission(sales, staffCommissionProfiles, staffI
   };
 }
 
-function calculateAllStaffCommission(sales, staffMembers, commissionProfiles) {
+function calculateAllStaffCommission(sales, staffMembers, commissionProfiles, commissionSettings) {
   const results = [];
   for (const staff of staffMembers || []) {
     const staffId = String(staff._id ?? staff.id ?? '');
@@ -410,7 +513,7 @@ function calculateAllStaffCommission(sales, staffMembers, commissionProfiles) {
     });
     if (staffProfiles.length === 0) continue;
     const staffName = staff.name || `${staff.firstName || ''} ${staff.lastName || ''}`.trim();
-    const result = calculateMultipleSalesCommission(sales, staffProfiles, staffId, staffName);
+    const result = calculateMultipleSalesCommission(sales, staffProfiles, staffId, staffName, commissionSettings);
     if (result) results.push(result);
   }
   return results.sort((a, b) => b.totalCommission - a.totalCommission);

@@ -64,6 +64,7 @@ const PLANS = {
       'feedback_management',
       'online_booking',
       'gmb',
+      'attendance',
     ],
     limits: {
       locations: 1,
@@ -113,6 +114,8 @@ const PLANS = {
       'whatsapp_integration',
       'online_booking',
       'gmb',
+      'attendance',
+      'payroll',
     ],
     limits: {
       locations: 3,
@@ -215,6 +218,18 @@ const FEATURES = {
     name: 'Incentive Management',
     description: 'Commission profiles — by target, service, or item — and staff assignments',
     category: 'growth',
+  },
+  attendance: {
+    id: 'attendance',
+    name: 'Attendance & Timesheets',
+    description: 'Staff attendance tracking, shifts, holidays, and timesheet exports',
+    category: 'growth',
+  },
+  payroll: {
+    id: 'payroll',
+    name: 'Payroll',
+    description: 'Staff payroll, salary formulas, advances, and leave-based pay rules',
+    category: 'pro',
   },
   membership: {
     id: 'membership',

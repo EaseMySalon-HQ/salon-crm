@@ -37,6 +37,8 @@ const FEATURE = {
   ADVANCED_REPORTS: 'advanced_reports',
   ANALYTICS: 'analytics',
   INCENTIVE_MANAGEMENT: 'incentive_management',
+  ATTENDANCE: 'attendance',
+  PAYROLL: 'payroll',
   LEAD_MANAGEMENT: 'lead_management',
   MEMBERSHIP: 'membership',
   PACKAGES: 'packages',
@@ -102,6 +104,24 @@ const FEATURE_ROUTE_RULES = [
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     pathPattern: /^\/api\/commission-profiles(\/|$)/,
     description: 'Incentive Management — commission profile CRUD (target, service, item)',
+  },
+  {
+    feature: FEATURE.ATTENDANCE,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    pathPattern: /^\/api\/staff-attendance(\/|$)/,
+    description: 'Staff attendance tracking (check-in/out, corrections)',
+  },
+  {
+    feature: FEATURE.ATTENDANCE,
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    pathPattern: /^\/api\/settings\/(attendance-payroll|holidays)(\/|$)/,
+    description: 'Attendance & payroll settings and holiday calendar (payroll fields gated separately)',
+  },
+  {
+    feature: FEATURE.PAYROLL,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    pathPattern: /^\/api\/(payroll|staff-advances|staff-leaves|staff-leave-credits)(\/|$)/,
+    description: 'Staff payroll, advances, leave records, and leave credit ledger',
   },
   {
     feature: FEATURE.LEAD_MANAGEMENT,

@@ -85,6 +85,52 @@ function getTodayIST() {
 }
 
 /**
+ * Previous Mon–Sun week in IST (week ending on the most recent Sunday before/on reference day).
+ * @param {Date|string} [referenceDate]
+ * @returns {{ weekStartDate: string, weekEndDate: string }}
+ */
+function getPreviousMonSunWeekIST(referenceDate = new Date()) {
+  const refYmd = toDateStringIST(referenceDate);
+  const refStart = getStartOfDayIST(refYmd);
+  const dowMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const dowStr = refStart.toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata', weekday: 'short' });
+  const dow = dowMap[dowStr] ?? 0;
+  const weekEndMs = refStart.getTime() - dow * 86400000;
+  const weekStartMs = weekEndMs - 6 * 86400000;
+  return {
+    weekStartDate: toDateStringIST(new Date(weekStartMs)),
+    weekEndDate: toDateStringIST(new Date(weekEndMs)),
+  };
+}
+
+/**
+ * Format a Mon–Sun range for display, e.g. "30 Jun – 6 Jul 2026"
+ */
+function formatWeekRangeIST(weekStartDate, weekEndDate) {
+  const start = parseDateIST(weekStartDate);
+  const end = parseDateIST(weekEndDate);
+  const startStr = start.toLocaleDateString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: 'numeric',
+    month: 'short',
+  });
+  const endStr = end.toLocaleDateString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+  return `${startStr} – ${endStr}`;
+}
+
+/**
+ * Short weekday label (Mon, Tue, …) for a YYYY-MM-DD date in IST.
+ */
+function weekdayShortIST(ymd) {
+  return parseDateIST(ymd).toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata', weekday: 'short' });
+}
+
+/**
  * Parse time string (e.g. "9:00 AM", "9:30 AM") to minutes from midnight
  * @param {string} timeStr - Time in "9:00 AM" or "09:00" format
  * @returns {number} Minutes from midnight
@@ -214,7 +260,55 @@ function getPreviousMonthRangeIST(referenceDate = new Date()) {
     startYmd,
     endYmd,
     periodLabel: monthName,
+    monthKey: startYmd.slice(0, 7),
+    monthName: formatInIST(parseDateIST(startYmd), { month: 'long' }),
+    year: year,
   };
+}
+
+function getMonthRangeFromKey(monthKey) {
+  const [yearStr, monthStr] = monthKey.split('-');
+  const year = Number(yearStr);
+  const month = Number(monthStr);
+  const startYmd = `${monthKey}-01`;
+  const lastDay = new Date(year, month, 0).getDate();
+  const endYmd = `${monthKey}-${String(lastDay).padStart(2, '0')}`;
+  return {
+    start: getStartOfDayIST(startYmd),
+    end: getEndOfDayIST(endYmd),
+    startYmd,
+    endYmd,
+    monthKey,
+    monthName: formatInIST(parseDateIST(startYmd), { month: 'long' }),
+    year,
+  };
+}
+
+function getPreviousMonthKey(monthKey) {
+  const [y, m] = monthKey.split('-').map(Number);
+  let pm = m - 1;
+  let py = y;
+  if (pm < 1) {
+    pm = 12;
+    py -= 1;
+  }
+  return `${py}-${String(pm).padStart(2, '0')}`;
+}
+
+function getSameMonthLastYearKey(monthKey) {
+  const [y, m] = monthKey.split('-');
+  return `${Number(y) - 1}-${m}`;
+}
+
+/** Last N calendar months ending at monthKey (inclusive), oldest first. */
+function lastNMonthKeys(endingMonthKey, n) {
+  const keys = [];
+  let cur = endingMonthKey;
+  for (let i = 0; i < n; i += 1) {
+    keys.unshift(cur);
+    cur = getPreviousMonthKey(cur);
+  }
+  return keys;
 }
 
 module.exports = {
@@ -224,7 +318,14 @@ module.exports = {
   formatInIST,
   toDateStringIST,
   getTodayIST,
+  getPreviousMonSunWeekIST,
+  formatWeekRangeIST,
+  weekdayShortIST,
   getPreviousMonthRangeIST,
+  getMonthRangeFromKey,
+  getPreviousMonthKey,
+  getSameMonthLastYearKey,
+  lastNMonthKeys,
   parseTimeToMinutes,
   minutesToTimeString,
   toIsoStringIST,

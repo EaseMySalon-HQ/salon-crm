@@ -576,7 +576,7 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
                 {(isManager() || isAdmin()) && (
                   <>
                 <DropdownMenuItem 
-                  onClick={() => router.push("/staff/working-hours")}
+                  onClick={() => router.push("/staff?tab=attendance")}
                   className="flex items-center gap-3 p-3 hover:bg-gradient-to-r hover:from-blue-50 hover:to-indigo-50 transition-all duration-200 cursor-pointer rounded-lg m-1"
                 >
                   <div className="p-2 bg-blue-100 rounded-lg">

@@ -6,6 +6,14 @@ const { setupBusinessDatabase, setupMainDatabase } = require('../middleware/busi
 const emailService = require('../services/email-service');
 const { logger } = require('../utils/logger');
 const { billChangeCreditedToWalletCashAddition } = require('../utils/bill-change-wallet-cash');
+const { businessHasPayrollFeature, businessHasIncentiveManagement } = require('../lib/payroll-feature-access');
+const {
+  adminEmailNotificationsPayload,
+  staffWantsEmailPreference,
+  staffEmailNotificationsEnabled,
+  buildAdminEmailPreferences,
+  buildEmailRecipientLists,
+} = require('../lib/admin-email-preferences');
 
 /**
  * Middleware to check if user is admin or manager
@@ -66,12 +74,27 @@ router.get('/settings', authenticateToken, setupMainDatabase, async (req, res) =
       },
       weeklySummary: {
         enabled: true,
-        day: 'sunday',
-        time: '20:00'
+        day: 'monday',
+        time: '09:00'
+      },
+      monthlySummary: {
+        enabled: true,
+        time: '09:00'
       },
       staffIncentiveSummary: {
         enabled: true,
-        time: '08:00'
+        time: '12:00'
+      },
+      payrollNotifications: {
+        enabled: true,
+        time: '12:00',
+        attachSalarySlip: true,
+        recipientStaffIds: []
+      },
+      timesheetNotifications: {
+        enabled: true,
+        time: '12:00',
+        format: 'xlsx'
       },
       appointmentNotifications: {
         enabled: true,
@@ -107,7 +130,10 @@ router.get('/settings', authenticateToken, setupMainDatabase, async (req, res) =
       ...settings,
       dailySummary: { ...defaultSettings.dailySummary, ...(settings.dailySummary || {}) },
       weeklySummary: { ...defaultSettings.weeklySummary, ...(settings.weeklySummary || {}) },
+      monthlySummary: { ...defaultSettings.monthlySummary, ...(settings.monthlySummary || {}) },
       staffIncentiveSummary: { ...defaultSettings.staffIncentiveSummary, ...(settings.staffIncentiveSummary || {}) },
+      payrollNotifications: { ...defaultSettings.payrollNotifications, ...(settings.payrollNotifications || {}) },
+      timesheetNotifications: { ...defaultSettings.timesheetNotifications, ...(settings.timesheetNotifications || {}) },
       appointmentNotifications: { ...defaultSettings.appointmentNotifications, ...(settings.appointmentNotifications || {}) },
       receiptNotifications: { ...defaultSettings.receiptNotifications, ...(settings.receiptNotifications || {}) },
       exportNotifications: { ...defaultSettings.exportNotifications, ...(settings.exportNotifications || {}) },
@@ -500,6 +526,9 @@ router.put('/settings', authenticateToken, setupMainDatabase, requireAdminOrMana
     const business = businessId ? await Business.findById(businessId) : null;
     logger.debug('[PUT Settings] Business found:', !!business);
 
+    const hasPayroll = await businessHasPayrollFeature(req);
+    const hasIncentive = await businessHasIncentiveManagement(req);
+
     // Fallback: if no business found, use AdminSettings.notifications.whatsapp as the storage
     const useAdminSettings = !business;
     let adminSettings = null;
@@ -567,12 +596,44 @@ router.put('/settings', authenticateToken, setupMainDatabase, requireAdminOrMana
                 ? incomingEmailSettings.weeklySummary.enabled
                 : existingEmailSettings.weeklySummary?.enabled ?? false
             },
-            staffIncentiveSummary: {
-              ...(existingEmailSettings.staffIncentiveSummary || {}),
-              ...(incomingEmailSettings.staffIncentiveSummary || {}),
-              enabled: incomingEmailSettings.staffIncentiveSummary?.hasOwnProperty('enabled')
-                ? incomingEmailSettings.staffIncentiveSummary.enabled
-                : existingEmailSettings.staffIncentiveSummary?.enabled ?? false
+            monthlySummary: {
+              ...(existingEmailSettings.monthlySummary || {}),
+              ...(incomingEmailSettings.monthlySummary || {}),
+              enabled: incomingEmailSettings.monthlySummary?.hasOwnProperty('enabled')
+                ? incomingEmailSettings.monthlySummary.enabled
+                : existingEmailSettings.monthlySummary?.enabled ?? false
+            },
+            staffIncentiveSummary: hasIncentive
+              ? {
+                  ...(existingEmailSettings.staffIncentiveSummary || {}),
+                  ...(incomingEmailSettings.staffIncentiveSummary || {}),
+                  enabled: incomingEmailSettings.staffIncentiveSummary?.hasOwnProperty('enabled')
+                    ? incomingEmailSettings.staffIncentiveSummary.enabled
+                    : existingEmailSettings.staffIncentiveSummary?.enabled ?? false,
+                }
+              : {
+                  ...(existingEmailSettings.staffIncentiveSummary || {}),
+                },
+            payrollNotifications: hasPayroll
+              ? {
+                  ...(existingEmailSettings.payrollNotifications || {}),
+                  ...(incomingEmailSettings.payrollNotifications || {}),
+                  enabled: incomingEmailSettings.payrollNotifications?.hasOwnProperty('enabled')
+                    ? incomingEmailSettings.payrollNotifications.enabled
+                    : existingEmailSettings.payrollNotifications?.enabled ?? true,
+                  attachSalarySlip: incomingEmailSettings.payrollNotifications?.hasOwnProperty('attachSalarySlip')
+                    ? incomingEmailSettings.payrollNotifications.attachSalarySlip
+                    : existingEmailSettings.payrollNotifications?.attachSalarySlip ?? true,
+                }
+              : {
+                  ...(existingEmailSettings.payrollNotifications || {}),
+                },
+            timesheetNotifications: {
+              ...(existingEmailSettings.timesheetNotifications || {}),
+              time:
+                incomingEmailSettings.timesheetNotifications?.time ||
+                existingEmailSettings.timesheetNotifications?.time ||
+                '12:00',
             },
             appointmentNotifications: {
               ...(existingEmailSettings.appointmentNotifications || {}),
@@ -1111,38 +1172,36 @@ router.get('/staff', authenticateToken, setupBusinessDatabase, async (req, res) 
     
     logger.debug('Business owner found:', businessOwner ? businessOwner.email : 'NOT FOUND');
 
+    const planOptions = {
+      hasPayroll: await businessHasPayrollFeature(req),
+      hasIncentive: await businessHasIncentiveManagement(req),
+    };
+
     // Ensure all staff have emailNotifications structure
-    // Admin users always have email notifications enabled
-    const staffWithDefaults = staff.map(s => ({
+    // Admin users always have email notifications enabled with all types on by default
+    const staffWithDefaults = staff.map((s) => ({
       ...s,
-      emailNotifications: s.role === 'admin' ? {
-        enabled: true, // Always enabled for admin
-        preferences: s.emailNotifications?.preferences || {
-          dailySummary: true,
-          weeklySummary: true,
-          staffIncentiveSummary: true,
-          appointmentAlerts: true,
-          receiptAlerts: true,
-          exportAlerts: true,
-          systemAlerts: true,
-          lowInventory: true
-        },
-        managedBy: 'admin'
-      } : (s.emailNotifications || {
-        enabled: false,
-        preferences: {
-          dailySummary: false,
-          weeklySummary: false,
-          staffIncentiveSummary: false,
-          appointmentAlerts: false,
-          receiptAlerts: false,
-          exportAlerts: false,
-          systemAlerts: false,
-          lowInventory: false,
-          allowReportsDelivery: false
-        },
-        managedBy: 'admin'
-      })
+      emailNotifications:
+        s.role === 'admin'
+          ? adminEmailNotificationsPayload(s.emailNotifications, planOptions)
+          : s.emailNotifications || {
+              enabled: false,
+              preferences: {
+                dailySummary: false,
+                weeklySummary: false,
+                monthlySummary: false,
+                staffIncentiveSummary: false,
+                payrollSlip: false,
+                timesheetReport: false,
+                appointmentAlerts: false,
+                receiptAlerts: false,
+                exportAlerts: false,
+                systemAlerts: false,
+                lowInventory: false,
+                allowReportsDelivery: false,
+              },
+              managedBy: 'admin',
+            },
     }));
 
     // Always add current logged-in admin user if they are admin
@@ -1160,20 +1219,7 @@ router.get('/staff', authenticateToken, setupBusinessDatabase, async (req, res) 
         email: req.user.email,
         role: 'admin',
         hasLoginAccess: true,
-        emailNotifications: {
-          enabled: true, // Always enabled for admin
-          preferences: {
-            dailySummary: true,
-            weeklySummary: true,
-            staffIncentiveSummary: true,
-            appointmentAlerts: true,
-            receiptAlerts: true,
-            exportAlerts: true,
-            systemAlerts: true,
-            lowInventory: true
-          },
-          managedBy: 'admin'
-        },
+        emailNotifications: adminEmailNotificationsPayload(undefined, planOptions),
         isOwner: true
       });
     }
@@ -1193,20 +1239,7 @@ router.get('/staff', authenticateToken, setupBusinessDatabase, async (req, res) 
           email: businessOwner.email,
           role: 'admin',
           hasLoginAccess: true,
-          emailNotifications: {
-            enabled: true, // Always enabled for admin
-            preferences: {
-              dailySummary: true,
-              weeklySummary: true,
-              staffIncentiveSummary: true,
-              appointmentAlerts: true,
-              receiptAlerts: true,
-              exportAlerts: true,
-              systemAlerts: true,
-              lowInventory: true
-            },
-            managedBy: 'admin'
-          },
+          emailNotifications: adminEmailNotificationsPayload(undefined, planOptions),
           isOwner: true
         });
       } else {
@@ -1249,6 +1282,8 @@ router.put('/staff/:id', authenticateToken, setupBusinessDatabase, requireAdminO
       body: req.body
     });
 
+    const hasPayroll = await businessHasPayrollFeature(req);
+    const hasIncentive = await businessHasIncentiveManagement(req);
     const { Staff } = req.businessModels;
     
     // First try to find in business database (Staff collection)
@@ -1278,99 +1313,58 @@ router.put('/staff/:id', authenticateToken, setupBusinessDatabase, requireAdminO
         
         // Admin user preferences (always enabled, but preferences can be set)
         // Define outside if block so it's available for the return statement
-        const adminPreferences = {
-          dailySummary: req.body.preferences?.dailySummary !== false,
-          weeklySummary: req.body.preferences?.weeklySummary !== false,
-          staffIncentiveSummary: req.body.preferences?.staffIncentiveSummary !== false,
-          appointmentAlerts: req.body.preferences?.appointmentAlerts !== false,
-          receiptAlerts: req.body.preferences?.receiptAlerts !== false,
-          exportAlerts: req.body.preferences?.exportAlerts !== false,
-          systemAlerts: req.body.preferences?.systemAlerts !== false,
-          lowInventory: req.body.preferences?.lowInventory !== false
-        };
+        const adminPreferences = buildAdminEmailPreferences(req.body.preferences, {
+          hasPayroll,
+          hasIncentive,
+        });
         
         if (business) {
-          // Get all staff to build recipient lists
           const allStaff = await Staff.find({ branchId: req.user.branchId }).lean();
-          
-          // Build recipient lists including admin user if preferences are enabled
-          const dailySummaryRecipients = allStaff
-            .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.dailySummary && s.email)
-            .map(s => s._id);
-          if (adminPreferences.dailySummary && businessOwner.email) {
-            dailySummaryRecipients.push(businessOwner._id);
-          }
-          
-          const weeklySummaryRecipients = allStaff
-            .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.weeklySummary && s.email)
-            .map(s => s._id);
-          if (adminPreferences.weeklySummary && businessOwner.email) {
-            weeklySummaryRecipients.push(businessOwner._id);
-          }
+          const lists = buildEmailRecipientLists(allStaff, { hasPayroll, hasIncentive });
 
-          const staffIncentiveRecipients = allStaff
-            .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.staffIncentiveSummary && s.email)
-            .map(s => s._id);
-          if (adminPreferences.staffIncentiveSummary && businessOwner.email) {
-            staffIncentiveRecipients.push(businessOwner._id);
-          }
-          
-          const appointmentRecipients = allStaff
-            .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.appointmentAlerts && s.email)
-            .map(s => s._id);
-          if (adminPreferences.appointmentAlerts && businessOwner.email) {
-            appointmentRecipients.push(businessOwner._id);
-          }
-          
-          const receiptRecipients = allStaff
-            .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.receiptAlerts && s.email)
-            .map(s => s._id);
-          if (adminPreferences.receiptAlerts && businessOwner.email) {
-            receiptRecipients.push(businessOwner._id);
-          }
-          
-          const exportRecipients = allStaff
-            .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.exportAlerts && s.email)
-            .map(s => s._id);
-          if (adminPreferences.exportAlerts && businessOwner.email) {
-            exportRecipients.push(businessOwner._id);
-          }
-          
-          const systemAlertsRecipients = allStaff
-            .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.systemAlerts && s.email)
-            .map(s => s._id);
-          if (adminPreferences.systemAlerts && businessOwner.email) {
-            systemAlertsRecipients.push(businessOwner._id);
-          }
-          
-          const generalRecipients = allStaff
-            .filter(s => s.emailNotifications?.enabled && s.email)
-            .map(s => s._id);
+          const pushOwnerIf = (list, prefKey) => {
+            if (adminPreferences[prefKey] && businessOwner.email) {
+              list.push(businessOwner._id);
+            }
+          };
+
+          pushOwnerIf(lists.dailySummaryRecipients, 'dailySummary');
+          pushOwnerIf(lists.weeklySummaryRecipients, 'weeklySummary');
+          pushOwnerIf(lists.monthlySummaryRecipients, 'monthlySummary');
+          pushOwnerIf(lists.staffIncentiveRecipients, 'staffIncentiveSummary');
+          pushOwnerIf(lists.payrollRecipients, 'payrollSlip');
+          pushOwnerIf(lists.appointmentRecipients, 'appointmentAlerts');
+          pushOwnerIf(lists.receiptRecipients, 'receiptAlerts');
+          pushOwnerIf(lists.systemAlertsRecipients, 'systemAlerts');
+
           if (businessOwner.email) {
-            generalRecipients.push(businessOwner._id);
+            lists.generalRecipients.push(businessOwner._id);
           }
           
           // Targeted update: only email paths (admin always has email enabled)
           await Business.findByIdAndUpdate(req.user.branchId, {
             $set: {
               'settings.emailNotificationSettings.enabled': true,
-              'settings.emailNotificationSettings.recipientStaffIds': generalRecipients,
-              'settings.emailNotificationSettings.dailySummary.enabled': dailySummaryRecipients.length > 0,
-              'settings.emailNotificationSettings.dailySummary.recipientStaffIds': dailySummaryRecipients,
-              'settings.emailNotificationSettings.weeklySummary.enabled': weeklySummaryRecipients.length > 0,
-              'settings.emailNotificationSettings.weeklySummary.recipientStaffIds': weeklySummaryRecipients,
-              'settings.emailNotificationSettings.staffIncentiveSummary.enabled': staffIncentiveRecipients.length > 0,
-              'settings.emailNotificationSettings.staffIncentiveSummary.recipientStaffIds': staffIncentiveRecipients,
-              'settings.emailNotificationSettings.appointmentNotifications.enabled': appointmentRecipients.length > 0,
-              'settings.emailNotificationSettings.appointmentNotifications.newAppointments': appointmentRecipients.length > 0,
-              'settings.emailNotificationSettings.appointmentNotifications.recipientStaffIds': appointmentRecipients,
-              'settings.emailNotificationSettings.receiptNotifications.enabled': receiptRecipients.length > 0,
-              'settings.emailNotificationSettings.receiptNotifications.sendToStaff': receiptRecipients.length > 0,
-              'settings.emailNotificationSettings.receiptNotifications.recipientStaffIds': receiptRecipients,
-              'settings.emailNotificationSettings.exportNotifications.enabled': exportRecipients.length > 0,
-              'settings.emailNotificationSettings.exportNotifications.recipientStaffIds': exportRecipients,
-              'settings.emailNotificationSettings.systemAlerts.enabled': systemAlertsRecipients.length > 0,
-              'settings.emailNotificationSettings.systemAlerts.recipientStaffIds': systemAlertsRecipients
+              'settings.emailNotificationSettings.recipientStaffIds': lists.generalRecipients,
+              'settings.emailNotificationSettings.dailySummary.enabled': lists.dailySummaryRecipients.length > 0,
+              'settings.emailNotificationSettings.dailySummary.recipientStaffIds': lists.dailySummaryRecipients,
+              'settings.emailNotificationSettings.weeklySummary.enabled': lists.weeklySummaryRecipients.length > 0,
+              'settings.emailNotificationSettings.weeklySummary.recipientStaffIds': lists.weeklySummaryRecipients,
+              'settings.emailNotificationSettings.monthlySummary.enabled': lists.monthlySummaryRecipients.length > 0,
+              'settings.emailNotificationSettings.monthlySummary.recipientStaffIds': lists.monthlySummaryRecipients,
+              'settings.emailNotificationSettings.staffIncentiveSummary.enabled': lists.staffIncentiveRecipients.length > 0,
+              'settings.emailNotificationSettings.staffIncentiveSummary.recipientStaffIds': lists.staffIncentiveRecipients,
+              'settings.emailNotificationSettings.payrollNotifications.enabled': lists.payrollRecipients.length > 0,
+              'settings.emailNotificationSettings.payrollNotifications.recipientStaffIds': lists.payrollRecipients,
+              'settings.emailNotificationSettings.timesheetNotifications.enabled': lists.timesheetStaffCount > 0,
+              'settings.emailNotificationSettings.appointmentNotifications.enabled': lists.appointmentRecipients.length > 0,
+              'settings.emailNotificationSettings.appointmentNotifications.newAppointments': lists.appointmentRecipients.length > 0,
+              'settings.emailNotificationSettings.appointmentNotifications.recipientStaffIds': lists.appointmentRecipients,
+              'settings.emailNotificationSettings.receiptNotifications.enabled': lists.receiptRecipients.length > 0,
+              'settings.emailNotificationSettings.receiptNotifications.sendToStaff': lists.receiptRecipients.length > 0,
+              'settings.emailNotificationSettings.receiptNotifications.recipientStaffIds': lists.receiptRecipients,
+              'settings.emailNotificationSettings.systemAlerts.enabled': lists.systemAlertsRecipients.length > 0,
+              'settings.emailNotificationSettings.systemAlerts.recipientStaffIds': lists.systemAlertsRecipients
             }
           });
           logger.info('Business email notification settings updated for admin user');
@@ -1426,11 +1420,21 @@ router.put('/staff/:id', authenticateToken, setupBusinessDatabase, requireAdminO
     }
 
     // Update email notification preferences
+    const incomingPrefs = { ...(req.body.preferences || {}) };
+    if (!hasIncentive) {
+      delete incomingPrefs.staffIncentiveSummary;
+    }
+    if (!hasPayroll) {
+      delete incomingPrefs.payrollSlip;
+    }
+    delete incomingPrefs.exportAlerts;
+
     staff.emailNotifications = {
       enabled: req.body.enabled !== undefined ? req.body.enabled : staff.emailNotifications?.enabled || false,
       preferences: {
         ...(staff.emailNotifications?.preferences || {}),
-        ...(req.body.preferences || {})
+        ...incomingPrefs,
+        exportAlerts: false,
       },
       managedBy: 'admin',
       lastUpdatedBy: req.user._id,
@@ -1444,54 +1448,33 @@ router.put('/staff/:id', authenticateToken, setupBusinessDatabase, requireAdminO
     const mainConnection = await databaseManager.getMainConnection();
     const Business = mainConnection.model('Business', require('../models/Business').schema);
     const allStaff = await Staff.find({ branchId: req.user.branchId }).lean();
-    
-    const dailySummaryRecipients = allStaff
-      .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.dailySummary && s.email)
-      .map(s => s._id);
-    const weeklySummaryRecipients = allStaff
-      .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.weeklySummary && s.email)
-      .map(s => s._id);
-    const staffIncentiveRecipients = allStaff
-      .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.staffIncentiveSummary && s.email)
-      .map(s => s._id);
-    const appointmentRecipients = allStaff
-      .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.appointmentAlerts && s.email)
-      .map(s => s._id);
-    const receiptRecipients = allStaff
-      .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.receiptAlerts && s.email)
-      .map(s => s._id);
-    const exportRecipients = allStaff
-      .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.exportAlerts && s.email)
-      .map(s => s._id);
-    const systemAlertsRecipients = allStaff
-      .filter(s => s.emailNotifications?.enabled && s.emailNotifications?.preferences?.systemAlerts && s.email)
-      .map(s => s._id);
-    const generalRecipients = allStaff
-      .filter(s => s.emailNotifications?.enabled && s.email)
-      .map(s => s._id);
-    const hasAnyEnabled = allStaff.some(s => s.emailNotifications?.enabled);
+    const lists = buildEmailRecipientLists(allStaff, { hasPayroll, hasIncentive });
+    const hasAnyEnabled = allStaff.some((s) => staffEmailNotificationsEnabled(s));
     
     // Targeted update: only touch email paths, never whatsappNotificationSettings
     await Business.findByIdAndUpdate(req.user.branchId, {
       $set: {
         'settings.emailNotificationSettings.enabled': hasAnyEnabled,
-        'settings.emailNotificationSettings.recipientStaffIds': generalRecipients,
-        'settings.emailNotificationSettings.dailySummary.enabled': dailySummaryRecipients.length > 0,
-        'settings.emailNotificationSettings.dailySummary.recipientStaffIds': dailySummaryRecipients,
-        'settings.emailNotificationSettings.weeklySummary.enabled': weeklySummaryRecipients.length > 0,
-        'settings.emailNotificationSettings.weeklySummary.recipientStaffIds': weeklySummaryRecipients,
-        'settings.emailNotificationSettings.staffIncentiveSummary.enabled': staffIncentiveRecipients.length > 0,
-        'settings.emailNotificationSettings.staffIncentiveSummary.recipientStaffIds': staffIncentiveRecipients,
-        'settings.emailNotificationSettings.appointmentNotifications.enabled': appointmentRecipients.length > 0,
-        'settings.emailNotificationSettings.appointmentNotifications.newAppointments': appointmentRecipients.length > 0,
-        'settings.emailNotificationSettings.appointmentNotifications.recipientStaffIds': appointmentRecipients,
-        'settings.emailNotificationSettings.receiptNotifications.enabled': receiptRecipients.length > 0,
-        'settings.emailNotificationSettings.receiptNotifications.sendToStaff': receiptRecipients.length > 0,
-        'settings.emailNotificationSettings.receiptNotifications.recipientStaffIds': receiptRecipients,
-        'settings.emailNotificationSettings.exportNotifications.enabled': exportRecipients.length > 0,
-        'settings.emailNotificationSettings.exportNotifications.recipientStaffIds': exportRecipients,
-        'settings.emailNotificationSettings.systemAlerts.enabled': systemAlertsRecipients.length > 0,
-        'settings.emailNotificationSettings.systemAlerts.recipientStaffIds': systemAlertsRecipients
+        'settings.emailNotificationSettings.recipientStaffIds': lists.generalRecipients,
+        'settings.emailNotificationSettings.dailySummary.enabled': lists.dailySummaryRecipients.length > 0,
+        'settings.emailNotificationSettings.dailySummary.recipientStaffIds': lists.dailySummaryRecipients,
+        'settings.emailNotificationSettings.weeklySummary.enabled': lists.weeklySummaryRecipients.length > 0,
+        'settings.emailNotificationSettings.weeklySummary.recipientStaffIds': lists.weeklySummaryRecipients,
+        'settings.emailNotificationSettings.monthlySummary.enabled': lists.monthlySummaryRecipients.length > 0,
+        'settings.emailNotificationSettings.monthlySummary.recipientStaffIds': lists.monthlySummaryRecipients,
+        'settings.emailNotificationSettings.staffIncentiveSummary.enabled': lists.staffIncentiveRecipients.length > 0,
+        'settings.emailNotificationSettings.staffIncentiveSummary.recipientStaffIds': lists.staffIncentiveRecipients,
+        'settings.emailNotificationSettings.payrollNotifications.enabled': lists.payrollRecipients.length > 0,
+        'settings.emailNotificationSettings.payrollNotifications.recipientStaffIds': lists.payrollRecipients,
+        'settings.emailNotificationSettings.timesheetNotifications.enabled': lists.timesheetStaffCount > 0,
+        'settings.emailNotificationSettings.appointmentNotifications.enabled': lists.appointmentRecipients.length > 0,
+        'settings.emailNotificationSettings.appointmentNotifications.newAppointments': lists.appointmentRecipients.length > 0,
+        'settings.emailNotificationSettings.appointmentNotifications.recipientStaffIds': lists.appointmentRecipients,
+        'settings.emailNotificationSettings.receiptNotifications.enabled': lists.receiptRecipients.length > 0,
+        'settings.emailNotificationSettings.receiptNotifications.sendToStaff': lists.receiptRecipients.length > 0,
+        'settings.emailNotificationSettings.receiptNotifications.recipientStaffIds': lists.receiptRecipients,
+        'settings.emailNotificationSettings.systemAlerts.enabled': lists.systemAlertsRecipients.length > 0,
+        'settings.emailNotificationSettings.systemAlerts.recipientStaffIds': lists.systemAlertsRecipients
       }
     });
     logger.info('Business email notification recipient lists updated');
@@ -1561,7 +1544,6 @@ router.post('/test', authenticateToken, setupBusinessDatabase, requireAdminOrMan
 router.post('/send-daily-summary', authenticateToken, setupMainDatabase, setupBusinessDatabase, requireAdminOrManager, async (req, res) => {
   try {
     const { Business } = req.mainModels;
-    const { Staff, Receipt, Sale, CashRegistry, Expense } = req.businessModels;
     const business = await Business.findById(req.user.branchId);
 
     if (!business) {
@@ -1579,114 +1561,40 @@ router.post('/send-daily-summary', authenticateToken, setupMainDatabase, setupBu
       });
     }
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const todayDateString = today.toISOString().split('T')[0];
-    const dateFormatted = today.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+    const { sendDailySummaryForBusiness } = require('../lib/daily-summary-dispatch');
+    const { getTodayIST } = require('../utils/date-utils');
+    const mainConnection = req.mainConnection || (await require('../config/database-manager').getMainConnection());
 
-    const sales = await Sale.find({
-      branchId: req.user.branchId,
-      date: { $gte: today, $lt: tomorrow },
-      status: { $nin: ['cancelled', 'Cancelled'] }
-    }).lean();
-
-    const receipts = await Receipt.find({
-      branchId: req.user.branchId,
-      date: { $gte: todayDateString, $lt: tomorrow.toISOString().split('T')[0] }
-    }).lean();
-
-    const closingRegistry = await CashRegistry.findOne({
-      branchId: req.user.branchId,
-      date: { $gte: today, $lt: tomorrow },
-      shiftType: 'closing'
-    }).lean();
-
-    const cashExpenses = await Expense.find({
-      branchId: req.user.branchId,
-      date: { $gte: today, $lt: tomorrow },
-      paymentMode: 'Cash',
-      status: { $in: ['approved', 'pending'] }
-    }).lean();
-
-    const totalBillCount = sales.length;
-    const uniqueCustomers = new Set(sales.map(s => (s.customerName || '').trim()).filter(Boolean));
-    const totalCustomerCount = uniqueCustomers.size || totalBillCount;
-    const totalSales = sales.reduce((sum, s) => sum + (s.grossTotal || s.totalAmount || s.netTotal || 0), 0);
-    let totalSalesCash = 0, totalSalesOnline = 0, totalSalesCard = 0;
-    sales.forEach(s => {
-      let cashAmt = 0;
-      let isAllCash = false;
-      if (s.payments && s.payments.length) {
-        s.payments.forEach(p => {
-          const amt = p.amount || 0;
-          if (p.mode === 'Cash') { totalSalesCash += amt; cashAmt += amt; }
-          else if (p.mode === 'Online') totalSalesOnline += amt;
-          else if (p.mode === 'Card') totalSalesCard += amt;
-        });
-        const hasNonCash = (s.payments || []).some(p => p.mode === 'Card' || p.mode === 'Online');
-        isAllCash = cashAmt > 0 && !hasNonCash;
-      } else {
-        const amt = s.grossTotal || s.netTotal || 0;
-        if (s.paymentMode === 'Cash') { totalSalesCash += amt; cashAmt = amt; isAllCash = true; }
-        else if (s.paymentMode === 'Online') totalSalesOnline += amt;
-        else if (s.paymentMode === 'Card') totalSalesCard += amt;
-      }
-      const walletCashAdd = billChangeCreditedToWalletCashAddition(s);
-      totalSalesCash += walletCashAdd;
-      cashAmt += walletCashAdd;
-      if (isAllCash && (s.tip || 0) > 0) totalSalesCash -= (s.tip || 0);
+    const result = await sendDailySummaryForBusiness(business, mainConnection, {
+      targetDate: req.body?.date || getTodayIST(),
+      forceSend: true,
     });
-    let duesCollected = 0;
-    sales.forEach(s => {
-      (s.paymentHistory || []).forEach(ph => {
-        const d = ph.date ? new Date(ph.date) : null;
-        if (d && d >= today && d < tomorrow) duesCollected += ph.amount || 0;
-      });
-    });
-    const cashExpense = closingRegistry?.expenseValue ?? cashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
-    const tipCollected = receipts.reduce((sum, r) => sum + (r.tip || 0), 0);
-    const cashBalance = closingRegistry?.cashBalance ?? 0;
 
-    const recipientStaffIds = settings.dailySummary.recipientStaffIds || [];
-    const recipients = await Staff.find({
-      _id: { $in: recipientStaffIds },
-      'emailNotifications.enabled': true,
-      'emailNotifications.preferences.dailySummary': true,
-      email: { $exists: true, $ne: '' }
-    }).lean();
-
-    const results = [];
-    const delayMs = 600; // Resend limit: 2 req/sec
-    for (let i = 0; i < recipients.length; i++) {
-      if (i > 0) await new Promise(r => setTimeout(r, delayMs));
-      const staff = recipients[i];
-      const result = await emailService.sendDailySummary({
-        to: staff.email,
-        businessName: business.name,
-        date: todayDateString,
-        summaryData: {
-          dateFormatted,
-          totalBillCount,
-          totalCustomerCount,
-          totalSales,
-          totalSalesCash,
-          totalSalesOnline,
-          totalSalesCard,
-          duesCollected,
-          cashExpense,
-          tipCollected,
-          cashBalance
-        }
+    if (result.skipped) {
+      const messages = {
+        no_recipients: 'No recipients with Daily Summary enabled — check Configure preferences',
+        platform_email_disabled: 'Email is disabled for this business',
+        disabled: 'Daily summary notifications are not enabled',
+      };
+      return res.status(400).json({
+        success: false,
+        error: messages[result.reason] || 'Daily summary was not sent',
+        data: result,
       });
-      results.push({ email: staff.email, success: result.success });
+    }
+
+    if ((result.sent || 0) === 0) {
+      return res.status(500).json({
+        success: false,
+        error: 'Daily summary could not be delivered — check email configuration',
+        data: result,
+      });
     }
 
     res.json({
       success: true,
-      message: `Daily summary sent to ${results.filter(r => r.success).length} recipients`,
-      results
+      message: `Daily summary sent to ${result.sent} recipient(s)`,
+      data: result,
     });
   } catch (error) {
     logger.error('Error sending daily summary:', error);
@@ -1694,6 +1602,139 @@ router.post('/send-daily-summary', authenticateToken, setupMainDatabase, setupBu
       success: false,
       error: 'Failed to send daily summary'
     });
+  }
+});
+
+/**
+ * POST /api/email-notifications/send-weekly-summary
+ * Manually trigger weekly summary email for the previous Mon–Sun week
+ */
+router.post('/send-weekly-summary', authenticateToken, setupMainDatabase, setupBusinessDatabase, requireAdminOrManager, async (req, res) => {
+  try {
+    const { Business } = req.mainModels;
+    const business = await Business.findById(req.user.branchId);
+
+    if (!business) {
+      return res.status(404).json({
+        success: false,
+        error: 'Business not found',
+      });
+    }
+
+    const settings = business.settings?.emailNotificationSettings;
+    if (!settings?.weeklySummary?.enabled) {
+      return res.status(400).json({
+        success: false,
+        error: 'Weekly summary notifications are not enabled',
+      });
+    }
+
+    const { sendWeeklySummaryForBusiness } = require('../lib/weekly-summary-dispatch');
+    const mainConnection = req.mainConnection || (await require('../config/database-manager').getMainConnection());
+
+    const result = await sendWeeklySummaryForBusiness(business, mainConnection, {
+      forceSend: true,
+      forceRefresh: req.body?.forceRefresh !== false,
+      referenceDate: req.body?.referenceDate,
+      weekStartDate: req.body?.weekStartDate,
+      weekEndDate: req.body?.weekEndDate,
+    });
+
+    if (result.skipped) {
+      const messages = {
+        no_recipients: 'No recipients with Weekly Summary enabled — check Configure preferences',
+        platform_email_disabled: 'Email is disabled for this business',
+        disabled: 'Weekly summary notifications are not enabled',
+      };
+      return res.status(400).json({
+        success: false,
+        error: messages[result.reason] || 'Weekly summary was not sent',
+        data: result,
+      });
+    }
+
+    if ((result.sent || 0) === 0) {
+      return res.status(500).json({
+        success: false,
+        error: 'Weekly summary could not be delivered — check email configuration',
+        data: result,
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Weekly summary sent to ${result.sent} recipient(s)`,
+      data: result,
+    });
+  } catch (error) {
+    logger.error('Error sending weekly summary:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to send weekly summary',
+    });
+  }
+});
+
+/**
+ * POST /api/email-notifications/send-monthly-summary
+ * Manually trigger monthly summary for the previous calendar month
+ */
+router.post('/send-monthly-summary', authenticateToken, setupMainDatabase, setupBusinessDatabase, requireAdminOrManager, async (req, res) => {
+  try {
+    const { Business } = req.mainModels;
+    const business = await Business.findById(req.user.branchId);
+
+    if (!business) {
+      return res.status(404).json({ success: false, error: 'Business not found' });
+    }
+
+    const settings = business.settings?.emailNotificationSettings;
+    if (!settings?.monthlySummary?.enabled) {
+      return res.status(400).json({
+        success: false,
+        error: 'Monthly summary notifications are not enabled',
+      });
+    }
+
+    const { sendMonthlySummaryForBusiness } = require('../lib/monthly-summary-dispatch');
+    const mainConnection = req.mainConnection || (await require('../config/database-manager').getMainConnection());
+
+    const result = await sendMonthlySummaryForBusiness(business, mainConnection, {
+      forceSend: true,
+      forceRefresh: req.body?.forceRefresh !== false,
+      monthKey: req.body?.monthKey,
+      referenceDate: req.body?.referenceDate,
+    });
+
+    if (result.skipped) {
+      const messages = {
+        no_recipients: 'No recipients with Monthly Summary enabled — check Configure preferences',
+        platform_email_disabled: 'Email is disabled for this business',
+        disabled: 'Monthly summary notifications are not enabled',
+      };
+      return res.status(400).json({
+        success: false,
+        error: messages[result.reason] || 'Monthly summary was not sent',
+        data: result,
+      });
+    }
+
+    if ((result.sent || 0) === 0) {
+      return res.status(500).json({
+        success: false,
+        error: 'Monthly summary could not be delivered — check email configuration',
+        data: result,
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Monthly summary sent to ${result.sent} recipient(s)`,
+      data: result,
+    });
+  } catch (error) {
+    logger.error('Error sending monthly summary:', error);
+    res.status(500).json({ success: false, error: 'Failed to send monthly summary' });
   }
 });
 

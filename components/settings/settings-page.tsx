@@ -33,6 +33,7 @@ import {
   Bell,
   Boxes,
   Globe,
+  Banknote,
 } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 import { buildLoginRedirectHref } from "@/lib/auth-utils"
@@ -54,6 +55,7 @@ import { GoogleBusinessSettings } from "./google-business-settings"
 import RechargeSettings from "./recharge-settings"
 import { PrepaidWalletSettings } from "./prepaid-wallet-settings"
 import { RewardPointsProgramSettings } from "./reward-points-settings"
+import { AttendancePayrollSettings } from "./attendance-payroll-settings"
 import { ServicesTable } from "@/components/services/services-table"
 import { ServiceStatsCards } from "@/components/dashboard/stats-cards"
 import { PackagesSettingsPanel } from "@/components/packages/packages-settings-panel"
@@ -85,6 +87,7 @@ const SETTINGS_SECTION_IDS = [
   "prepaid-wallet",
   "reward-points",
   "packages",
+  "attendance-payroll",
 ] as const
 
 function isSettingsSectionId(id: string | null): id is (typeof SETTINGS_SECTION_IDS)[number] {
@@ -214,6 +217,27 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
           "bg-fuchsia-50 text-fuchsia-600 border-fuchsia-100 group-hover:bg-fuchsia-100/80 group-hover:border-fuchsia-200",
         searchTerms: ["loyalty", "points", "rewards", "earn", "redeem"],
       },
+      {
+        id: "attendance-payroll",
+        title: "Attendance & Payroll",
+        description:
+          "Working days, late/overtime rules, salary formula, holidays, and per-staff overrides.",
+        icon: Banknote,
+        iconColors:
+          "bg-lime-50 text-lime-700 border-lime-100 group-hover:bg-lime-100/80 group-hover:border-lime-200",
+        searchTerms: [
+          "attendance",
+          "payroll",
+          "salary",
+          "overtime",
+          "leave",
+          "holiday",
+          "commission",
+          "formula",
+          "salary formula",
+          "advance",
+        ],
+      },
     ],
   },
   {
@@ -338,6 +362,7 @@ const SETTINGS_PLAN_FEATURES: Partial<Record<SettingsSectionId, string>> = {
   "reward-points": "reward_points",
   "whatsapp-integration": "whatsapp_integration",
   "google-business": "gmb",
+  "attendance-payroll": "attendance",
 }
 
 function itemMatchesQuery(item: SettingsItem, q: string): boolean {
@@ -504,6 +529,8 @@ export function SettingsPage() {
         return <PrepaidWalletSettings />
       case "reward-points":
         return <RewardPointsProgramSettings />
+      case "attendance-payroll":
+        return <AttendancePayrollSettings />
       default:
         return null
     }
