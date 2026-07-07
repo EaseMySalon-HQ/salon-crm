@@ -446,43 +446,92 @@ class EmailService {
   }
 
   /**
-   * Send daily summary email
+   * Send daily summary email (rich template with charts).
    */
-  async sendDailySummary({ to, businessName, date, summaryData }) {
-    const baseUrl = process.env.APP_URL || process.env.FRONTEND_URL || '';
-    const logoUrl = baseUrl ? `${baseUrl.replace(/\/$/, '')}/images/logo-no-background.png` : '';
-    const dateFormatted = summaryData?.dateFormatted || (date ? new Date(date).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : date);
+  async sendDailySummary({ to, businessName, date, summaryData, ownerName }) {
+    const { buildDailySummaryChartUrls } = require('../lib/daily-summary-charts');
+    const { renderDailySummaryEmail } = require('../lib/daily-summary-email');
 
-    const { html, text } = emailTemplates.dailySummary({
-      businessName,
+    const baseUrl = (process.env.APP_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
+    const logoUrl = baseUrl ? `${baseUrl}/images/logo-no-background.png` : '';
+    const dashboardUrl = baseUrl ? `${baseUrl}/dashboard` : '#';
+    const settingsUrl = baseUrl ? `${baseUrl}/settings?section=notifications` : '#';
+    const dateFormatted =
+      summaryData?.dateFormatted ||
+      (date ? new Date(date).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : date);
+
+    const data = {
+      branchName: businessName,
       date,
       dateFormatted,
+      todayBills: summaryData?.todayBills ?? summaryData?.totalBillCount ?? 0,
+      todayAppointments: summaryData?.todayAppointments ?? 0,
+      todayCancelledBills: summaryData?.todayCancelledBills ?? 0,
+      todayNetRevenue: summaryData?.todayNetRevenue ?? summaryData?.totalSales ?? 0,
+      todayGrossRevenue: summaryData?.todayGrossRevenue ?? summaryData?.totalSales ?? 0,
+      revenueByCategory: summaryData?.revenueByCategory ?? {
+        services: 0,
+        products: 0,
+        packages: 0,
+        membership: 0,
+        prepaid: 0,
+      },
+      paymentMode: summaryData?.paymentMode ?? {
+        cash: summaryData?.totalSalesCash ?? 0,
+        online: summaryData?.totalSalesOnline ?? 0,
+        card: summaryData?.totalSalesCard ?? 0,
+      },
+      averageBillValue: summaryData?.averageBillValue ?? 0,
+      duesCollected: summaryData?.duesCollected ?? 0,
+      cashExpense: summaryData?.cashExpense ?? 0,
+      tipCollected: summaryData?.tipCollected ?? 0,
+      cashBalance: summaryData?.cashBalance ?? 0,
+      feedbackReceived: summaryData?.feedbackReceived ?? 0,
+      consentFormReceived: summaryData?.consentFormReceived ?? 0,
+      yesterdayNetRevenue: summaryData?.yesterdayNetRevenue ?? 0,
+      last7DayAvgRevenue: summaryData?.last7DayAvgRevenue ?? 0,
+      monthToDateRevenue: summaryData?.monthToDateRevenue ?? 0,
+      monthToDateBills: summaryData?.monthToDateBills ?? 0,
+    };
+
+    const charts = buildDailySummaryChartUrls(data);
+    const { html, text } = renderDailySummaryEmail(data, charts, {
+      ownerName: ownerName || summaryData?.ownerName,
       logoUrl,
-      ...summaryData,
+      dashboardUrl,
+      settingsUrl,
     });
 
     return this.sendEmail({
       to,
-      subject: `Daily Summary Report - ${dateFormatted}`,
+      subject: `Daily Summary — ${dateFormatted}`,
       html,
       text,
     });
   }
 
   /**
-   * Send weekly summary email
+   * Send weekly summary email (rich HTML + QuickChart charts).
    */
-  async sendWeeklySummary({ to, businessName, weekStart, weekEnd, summaryData }) {
-    const { html, text } = emailTemplates.weeklySummary({
-      businessName,
-      weekStart,
-      weekEnd,
+  async sendWeeklySummary({ to, businessName, summaryData, ownerName }) {
+    const { buildWeeklySummaryChartUrls } = require('../lib/weekly-summary-charts');
+    const { renderWeeklySummaryEmail } = require('../lib/weekly-summary-email');
+
+    const data = {
       ...summaryData,
+      branchName: summaryData?.branchName || businessName,
+    };
+    const baseUrl = (process.env.APP_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
+    const charts = buildWeeklySummaryChartUrls(data);
+    const { html, text } = renderWeeklySummaryEmail(data, charts, {
+      ownerName: ownerName || 'there',
+      logoUrl: baseUrl ? `${baseUrl}/images/logo-no-background.png` : '',
+      dashboardUrl: baseUrl ? `${baseUrl}/dashboard` : '#',
     });
 
     return this.sendEmail({
       to,
-      subject: `Weekly Business Summary - ${weekStart} to ${weekEnd}`,
+      subject: `Weekly Summary — ${data.weekRangeFormatted || `${data.weekStartDate} – ${data.weekEndDate}`}`,
       html,
       text,
     });
@@ -509,6 +558,114 @@ class EmailService {
       subject: `Staff Incentive Summary — ${periodLabel || periodStart || 'Monthly Report'}`,
       html,
       text,
+    });
+  }
+
+  /**
+   * Send personal timesheet report to a staff member.
+   */
+  async sendStaffTimesheetReport({
+    to,
+    businessName,
+    staffName,
+    periodLabel,
+    daysWithCheckIn,
+    totalHours,
+    rowCount,
+    attachments = [],
+  }) {
+    const baseUrl = process.env.APP_URL || process.env.FRONTEND_URL || '';
+    const logoUrl = baseUrl ? `${baseUrl.replace(/\/$/, '')}/images/logo-no-background.png` : '';
+    const { html, text } = emailTemplates.staffTimesheetReport({
+      businessName,
+      staffName,
+      periodLabel,
+      daysWithCheckIn,
+      totalHours,
+      rowCount,
+      logoUrl,
+    });
+
+    return this.sendEmail({
+      to,
+      subject: `Timesheet Report — ${periodLabel || ''}`.trim(),
+      html,
+      text,
+      attachments,
+    });
+  }
+
+  /**
+   * Send consolidated monthly payroll summary to admin (all staff + all payslip PDFs).
+   */
+  async sendStaffPayrollSummary({
+    to,
+    businessName,
+    periodLabel,
+    rows = [],
+    totals = {},
+    attachments = [],
+  }) {
+    const baseUrl = process.env.APP_URL || process.env.FRONTEND_URL || '';
+    const logoUrl = baseUrl ? `${baseUrl.replace(/\/$/, '')}/images/logo-no-background.png` : '';
+    const { html, text } = emailTemplates.staffPayrollSummary({
+      businessName,
+      periodLabel,
+      logoUrl,
+      rows,
+      totals,
+      attachmentCount: attachments.length,
+    });
+
+    return this.sendEmail({
+      to,
+      subject: `Payroll Summary — ${periodLabel || ''}`.trim(),
+      html,
+      text,
+      attachments,
+    });
+  }
+
+  /**
+   * Send staff payroll / salary slip to admin recipients (single staff — legacy).
+   */
+  async sendStaffPayrollSlip({
+    to,
+    businessName,
+    periodLabel,
+    staffName,
+    role,
+    baseSalary,
+    commission,
+    deductions,
+    netPay,
+    paymentMethod,
+    paidAt,
+    attachments = [],
+  }) {
+    const baseUrl = process.env.APP_URL || process.env.FRONTEND_URL || '';
+    const logoUrl = baseUrl ? `${baseUrl.replace(/\/$/, '')}/images/logo-no-background.png` : '';
+    const { html, text } = emailTemplates.staffPayrollSlip({
+      businessName,
+      periodLabel,
+      staffName,
+      role,
+      baseSalary,
+      commission,
+      deductions,
+      netPay,
+      paymentMethod,
+      paidAt,
+      logoUrl,
+      hasAttachment: attachments.length > 0,
+    });
+
+    return this.sendEmail({
+      to,
+      subject: `Salary Slip — ${staffName} — ${periodLabel || ''}`.trim(),
+      html,
+      text,
+      attachments,
     });
   }
 

@@ -5,6 +5,7 @@ const { isAdminAppointmentNotificationsEnabled } = require('./whatsapp-admin-gat
 const { getWhatsAppSettingsWithDefaults } = require('./whatsapp-settings-defaults');
 const { logSmsMessage, logEmailMessage } = require('./channel-logs');
 const { canDeductSms, deductSms, canDeductWhatsApp, deductWhatsApp } = require('./wallet-deduction');
+const { staffEmailPreferenceFindQuery } = require('./admin-email-preferences');
 
 async function sendAppointmentConfirmationNotifications(req, createdAppointments, getEmailSettingsWithDefaults) {
   // Send email notifications if enabled
@@ -255,20 +256,14 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
         
         if (recipientStaffIds.length > 0) {
           // Use configured recipient list
-          recipients = await Staff.find({
-            _id: { $in: recipientStaffIds },
-            'emailNotifications.enabled': true,
-            'emailNotifications.preferences.appointmentAlerts': true,
-            email: { $exists: true, $ne: '' }
-          }).lean();
+          recipients = await Staff.find(
+            staffEmailPreferenceFindQuery('appointmentAlerts', { recipientStaffIds })
+          ).lean();
         } else {
           logger.debug('No recipient list configured, finding all staff with appointment alerts enabled');
-          recipients = await Staff.find({
-            branchId: req.user.branchId,
-            'emailNotifications.enabled': true,
-            'emailNotifications.preferences.appointmentAlerts': true,
-            email: { $exists: true, $ne: '' }
-          }).lean();
+          recipients = await Staff.find(
+            staffEmailPreferenceFindQuery('appointmentAlerts', { branchId: req.user.branchId })
+          ).lean();
         }
         
         // Also check for admin users (business owners) who should receive notifications

@@ -2145,6 +2145,394 @@ export class StaffDirectoryAPI {
   }
 }
 
+// ── Staff payroll, attendance & leave ───────────────────────────────────────
+
+export type PayrollPaymentMethod = 'cash' | 'upi' | 'bank' | 'wallet' | ''
+
+export interface PayrollRow {
+  recordId: string | null
+  staffId: string
+  staffName: string
+  role?: string
+  phone?: string
+  month: string
+  baseSalary: number
+  incentive: number
+  bonus: number
+  overtimePay?: number
+  latePenalty?: number
+  deductions: number
+  leaveDeduction?: number
+  unpaidLeaveDays?: number
+  advanceRecovery?: number
+  manualDeductions?: number
+  deductionNote: string
+  netPay: number
+  status: 'draft' | 'paid'
+  paidAt: string | null
+  paymentMethod: PayrollPaymentMethod
+  notes: string
+  computedIncentive?: number
+  profileBreakdown?: Array<{
+    profileId?: string
+    profileName?: string
+    profileType?: string
+    commission: number
+    revenue: number
+    itemCount: number
+  }>
+  saved: boolean
+}
+
+export interface PayrollTotals {
+  staffCount: number
+  baseSalary: number
+  incentive: number
+  bonus: number
+  overtimePay?: number
+  deductions: number
+  leaveDeduction?: number
+  advanceRecovery?: number
+  netPay: number
+  paidCount: number
+  paidNet: number
+  pendingNet: number
+}
+
+export interface PayrollPeriod {
+  month: string
+  periodLabel: string
+  payoutLabel?: string
+  rows: PayrollRow[]
+  totals: PayrollTotals
+}
+
+export interface PayrollAuditEntry {
+  id: string
+  action: string
+  performedByName: string
+  performedAt: string
+  changes: Array<{ field: string; oldValue: unknown; newValue: unknown }>
+}
+
+export class PayrollAPI {
+  static async getMonth(month: string): Promise<ApiResponse<PayrollPeriod>> {
+    const response = await apiClient.get('/payroll', { params: { month } })
+    return response.data
+  }
+
+  static async upsert(body: {
+    staffId: string
+    month: string
+    baseSalary?: number
+    incentive?: number
+    bonus?: number
+    overtimePay?: number
+    latePenalty?: number
+    manualDeductions?: number
+    deductionNote?: string
+    notes?: string
+  }): Promise<ApiResponse<PayrollRow>> {
+    const response = await apiClient.post('/payroll', body)
+    return response.data
+  }
+
+  static async setStatus(
+    recordId: string,
+    status: 'draft' | 'paid',
+    options?: { paymentMethod?: PayrollPaymentMethod; paidAt?: string }
+  ): Promise<ApiResponse<PayrollRow>> {
+    const response = await apiClient.patch(`/payroll/${recordId}/status`, {
+      status,
+      paymentMethod: options?.paymentMethod,
+      paidAt: options?.paidAt,
+    })
+    return response.data
+  }
+
+  static async delete(recordId: string): Promise<ApiResponse<null>> {
+    const response = await apiClient.delete(`/payroll/${recordId}`)
+    return response.data
+  }
+
+  static async getAudit(recordId: string): Promise<ApiResponse<PayrollAuditEntry[]>> {
+    const response = await apiClient.get(`/payroll/records/${recordId}/audit`)
+    return response.data
+  }
+
+  static async getCommissionBreakdown(
+    staffId: string,
+    month: string
+  ): Promise<ApiResponse<any>> {
+    const response = await apiClient.get(`/payroll/staff/${staffId}/commission-breakdown`, {
+      params: { month },
+    })
+    return response.data
+  }
+}
+
+export type StaffAdvanceRecoveryFrom = 'current_cycle' | 'next_cycle'
+
+export interface StaffAdvanceRow {
+  id: string
+  staffId: string
+  staffName: string
+  amount: number
+  recoveredAmount: number
+  outstanding: number
+  installmentAmount: number
+  givenAt: string
+  recoveryFrom: StaffAdvanceRecoveryFrom
+  notes: string
+  status: 'active' | 'closed'
+}
+
+export type StaffAdvanceLogType = 'given' | 'recovery' | 'closed' | 'reversal' | 'adjustment'
+
+export interface StaffAdvanceLogEntry {
+  id: string
+  advanceId: string
+  staffId: string
+  staffName: string
+  type: StaffAdvanceLogType
+  amount: number
+  outstandingAfter: number
+  notes: string
+  payrollRecordId: string | null
+  payrollMonth: string
+  performedByName: string
+  createdAt: string
+}
+
+export class StaffAdvanceAPI {
+  static async list(params?: {
+    staffId?: string
+    status?: 'active' | 'closed'
+  }): Promise<ApiResponse<StaffAdvanceRow[]>> {
+    const response = await apiClient.get('/staff-advances', { params })
+    return response.data
+  }
+
+  static async create(body: {
+    staffId: string
+    amount: number
+    installmentAmount?: number
+    recoveryFrom?: StaffAdvanceRecoveryFrom
+    notes?: string
+    givenAt?: string
+  }): Promise<ApiResponse<StaffAdvanceRow>> {
+    const response = await apiClient.post('/staff-advances', body)
+    return response.data
+  }
+
+  static async update(
+    id: string,
+    body: {
+      amount?: number
+      installmentAmount?: number
+      recoveryFrom?: StaffAdvanceRecoveryFrom
+      notes?: string
+      givenAt?: string
+    }
+  ): Promise<ApiResponse<StaffAdvanceRow>> {
+    const response = await apiClient.patch(`/staff-advances/${id}`, body)
+    return response.data
+  }
+
+  static async close(id: string): Promise<ApiResponse<{ id: string; status: string }>> {
+    const response = await apiClient.patch(`/staff-advances/${id}/close`)
+    return response.data
+  }
+
+  static async logs(advanceId: string): Promise<ApiResponse<StaffAdvanceLogEntry[]>> {
+    const response = await apiClient.get(`/staff-advances/${advanceId}/logs`)
+    return response.data
+  }
+}
+
+export interface StaffAttendanceRow {
+  id: string
+  staffId: string
+  staffName: string
+  date: string
+  checkInAt: string
+  checkOutAt: string | null
+  checkInByName?: string
+  checkOutByName?: string
+  status: 'checked_in' | 'completed'
+  dayStatus?: 'present' | 'late' | 'half_day' | 'absent'
+  lateMinutes?: number
+  workedHours?: number
+  overtimeMinutes?: number
+}
+
+export class StaffAttendanceAPI {
+  static async list(params?: {
+    staffId?: string
+    date?: string
+    startDate?: string
+    endDate?: string
+  }): Promise<ApiResponse<StaffAttendanceRow[]>> {
+    const response = await apiClient.get('/staff-attendance', { params })
+    return response.data
+  }
+
+  static async checkIn(body: {
+    staffId?: string
+    date?: string
+  }): Promise<ApiResponse<StaffAttendanceRow>> {
+    const response = await apiClient.post('/staff-attendance/check-in', body)
+    return response.data
+  }
+
+  static async checkOut(body: {
+    staffId?: string
+    date?: string
+  }): Promise<ApiResponse<StaffAttendanceRow>> {
+    const response = await apiClient.post('/staff-attendance/check-out', body)
+    return response.data
+  }
+
+  static async remove(id: string): Promise<ApiResponse<{ id: string }>> {
+    const response = await apiClient.delete(`/staff-attendance/${id}`)
+    return response.data
+  }
+
+  static async undoCheckOut(id: string): Promise<ApiResponse<StaffAttendanceRow>> {
+    const response = await apiClient.post(`/staff-attendance/${id}/undo-checkout`)
+    return response.data
+  }
+}
+
+export interface StaffLeaveRow {
+  id: string
+  staffId: string
+  staffName: string
+  date: string
+  type: 'unpaid' | 'paid' | 'half_day'
+  reason: string
+  fromBalance?: boolean
+  balanceDaysUsed?: number
+}
+
+export interface StaffLeaveSummaryRow {
+  staffId: string
+  staffName: string
+  unpaidDays: number
+  halfDays: number
+  paidDays: number
+  lwpDays: number
+  totalDays: number
+  entries: number
+  savedLeaveBalance: number
+  earnedInPeriod: number
+  usedInPeriod: number
+}
+
+export class StaffLeaveAPI {
+  static async list(params?: {
+    staffId?: string
+    month?: string
+    from?: string
+    to?: string
+  }): Promise<ApiResponse<StaffLeaveRow[]>> {
+    const response = await apiClient.get('/staff-leaves', { params })
+    return response.data
+  }
+
+  static async summary(params?: {
+    staffId?: string
+    month?: string
+    from?: string
+    to?: string
+  }): Promise<ApiResponse<StaffLeaveSummaryRow[]>> {
+    const response = await apiClient.get('/staff-leaves/summary', { params })
+    return response.data
+  }
+
+  static async upsert(body: {
+    staffId: string
+    date: string
+    type: StaffLeaveRow['type']
+    reason?: string
+    useBalance?: boolean
+  }): Promise<ApiResponse<StaffLeaveRow>> {
+    const response = await apiClient.post('/staff-leaves', body)
+    return response.data
+  }
+
+  static async remove(id: string): Promise<ApiResponse<{ deleted: boolean }>> {
+    const response = await apiClient.delete(`/staff-leaves/${id}`)
+    return response.data
+  }
+}
+
+export interface StaffLeaveCreditBalanceRow {
+  staffId: string
+  staffName: string
+  balance: number
+  earnedInPeriod: number
+  usedInPeriod: number
+}
+
+export interface StaffLeaveCreditLedgerRow {
+  id: string
+  staffId: string
+  staffName: string
+  date: string
+  direction: 'earn' | 'use'
+  days: number
+  kind: string
+  reason: string
+  leaveRecordId: string | null
+  createdAt: string
+}
+
+export class StaffLeaveCreditAPI {
+  static async balances(params?: {
+    staffId?: string
+    month?: string
+    from?: string
+    to?: string
+  }): Promise<ApiResponse<StaffLeaveCreditBalanceRow[]>> {
+    const response = await apiClient.get('/staff-leave-credits/balances', { params })
+    return response.data
+  }
+
+  static async ledger(params?: {
+    staffId?: string
+    month?: string
+    from?: string
+    to?: string
+  }): Promise<ApiResponse<StaffLeaveCreditLedgerRow[]>> {
+    const response = await apiClient.get('/staff-leave-credits/ledger', { params })
+    return response.data
+  }
+
+  static async sync(body: {
+    month?: string
+    from?: string
+    to?: string
+    staffId?: string
+    reason?: string
+  }): Promise<ApiResponse<{ created: number; skipped?: number }>> {
+    const response = await apiClient.post('/staff-leave-credits/sync', body)
+    return response.data
+  }
+
+  static async adjust(body: {
+    staffId: string
+    date: string
+    days: number
+    direction: 'earn' | 'use'
+    kind?: string
+    reason?: string
+  }): Promise<ApiResponse<{ balance: number }>> {
+    const response = await apiClient.post('/staff-leave-credits/adjust', body)
+    return response.data
+  }
+}
+
 export class BlockTimeAPI {
   static async getAll(params?: { staffId?: string; startDate?: string; endDate?: string }): Promise<ApiResponse<any[]>> {
     const response = await apiClient.get('/block-time', { params })
@@ -2891,6 +3279,19 @@ export class AnalyticsAPI {
   }
 }
 
+export class BusinessAPI {
+  static async getInfo(): Promise<
+    ApiResponse<{
+      name?: string
+      address?: { street?: string; city?: string; state?: string; zipCode?: string }
+      contact?: { phone?: string; email?: string }
+    }>
+  > {
+    const response = await apiClient.get('/business/info')
+    return response.data
+  }
+}
+
 export class SettingsAPI {
   static async getBusinessSettings(): Promise<ApiResponse<any>> {
     const response = await apiClient.get('/settings/business')
@@ -2953,6 +3354,45 @@ export class SettingsAPI {
     data: PaymentSettingsUpdatePayload
   ): Promise<ApiResponse<PaymentSettingsData>> {
     const response = await apiClient.put('/settings/payment', data)
+    return response.data
+  }
+}
+
+export interface HolidayRow {
+  id: string
+  date: string
+  name: string
+}
+
+/**
+ * Attendance & Payroll business settings + branch holidays.
+ * Server-side settings shape is treated as `any` on the client so we can
+ * ship UI updates ahead of a strict type without breaking callers.
+ */
+export class AttendancePayrollSettingsAPI {
+  static async get(): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/settings/attendance-payroll')
+    return response.data
+  }
+
+  static async update(data: any): Promise<ApiResponse<any>> {
+    const response = await apiClient.put('/settings/attendance-payroll', data)
+    return response.data
+  }
+
+  static async listHolidays(year?: number | string): Promise<ApiResponse<HolidayRow[]>> {
+    const params = year ? { params: { year: String(year) } } : undefined
+    const response = await apiClient.get('/settings/holidays', params)
+    return response.data
+  }
+
+  static async saveHoliday(payload: { date: string; name?: string }): Promise<ApiResponse<HolidayRow>> {
+    const response = await apiClient.post('/settings/holidays', payload)
+    return response.data
+  }
+
+  static async deleteHoliday(id: string): Promise<ApiResponse<null>> {
+    const response = await apiClient.delete(`/settings/holidays/${id}`)
     return response.data
   }
 }
@@ -3408,6 +3848,10 @@ export class EmailNotificationsAPI {
     preferences?: {
       dailySummary?: boolean;
       weeklySummary?: boolean;
+      monthlySummary?: boolean;
+      staffIncentiveSummary?: boolean;
+      payrollSlip?: boolean;
+      timesheetReport?: boolean;
       appointmentAlerts?: boolean;
       receiptAlerts?: boolean;
       exportAlerts?: boolean;
@@ -3426,9 +3870,30 @@ export class EmailNotificationsAPI {
     return response.data
   }
 
-  // Manually trigger daily summary
-  static async sendDailySummary(): Promise<ApiResponse<any>> {
-    const response = await apiClient.post('/email-notifications/send-daily-summary')
+  // Manually trigger daily summary (optional date: YYYY-MM-DD IST)
+  static async sendDailySummary(date?: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/email-notifications/send-daily-summary', date ? { date } : {})
+    return response.data
+  }
+
+  /** Manually trigger weekly summary (previous Mon–Sun week; optional weekStartDate/weekEndDate) */
+  static async sendWeeklySummary(body?: {
+    referenceDate?: string
+    weekStartDate?: string
+    weekEndDate?: string
+    forceRefresh?: boolean
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/email-notifications/send-weekly-summary', body || {})
+    return response.data
+  }
+
+  /** Manually trigger monthly summary (previous calendar month; optional monthKey YYYY-MM) */
+  static async sendMonthlySummary(body?: {
+    referenceDate?: string
+    monthKey?: string
+    forceRefresh?: boolean
+  }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/email-notifications/send-monthly-summary', body || {})
     return response.data
   }
 }

@@ -2,6 +2,7 @@ const emailService = require('../services/email-service');
 const databaseManager = require('../config/database-manager');
 const { logger } = require('./logger');
 const modelFactory = require('../models/model-factory');
+const { staffEmailPreferenceFindQuery } = require('../lib/admin-email-preferences');
 
 /**
  * Check for low inventory products and send alerts for a specific business
@@ -67,20 +68,13 @@ async function checkAndSendLowInventoryAlerts(businessId, productId = null) {
     let recipients = [];
     
     if (recipientStaffIds.length > 0) {
-      recipients = await Staff.find({
-        _id: { $in: recipientStaffIds },
-        'emailNotifications.enabled': true,
-        'emailNotifications.preferences.lowInventory': true,
-        email: { $exists: true, $ne: '' }
-      }).lean();
+      recipients = await Staff.find(
+        staffEmailPreferenceFindQuery('lowInventory', { recipientStaffIds })
+      ).lean();
     } else {
-      // If no recipient list configured, find all staff with low inventory alerts enabled
-      recipients = await Staff.find({
-        branchId: business._id,
-        'emailNotifications.enabled': true,
-        'emailNotifications.preferences.lowInventory': true,
-        email: { $exists: true, $ne: '' }
-      }).lean();
+      recipients = await Staff.find(
+        staffEmailPreferenceFindQuery('lowInventory', { branchId: business._id })
+      ).lean();
     }
     
     // Add admin users from User model

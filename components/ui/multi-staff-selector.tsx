@@ -280,16 +280,17 @@ export function MultiStaffSelector({
             aria-expanded={open}
             aria-haspopup="listbox"
             className={cn(
-              "h-8 w-full justify-between gap-2 px-2 py-1.5 text-left font-normal",
+              "h-8 w-full justify-between gap-2 border-input bg-background px-2 py-1.5 text-left font-normal shadow-sm",
+              compact && "rounded-lg text-xs",
               !compact && "min-h-8"
             )}
             style={triggerStyle}
           >
-            <span className="min-w-0 flex-1 truncate text-xs">
+            <span className="min-w-0 flex-1 truncate">
               {triggerLabel ? (
                 triggerLabel
               ) : (
-                <span className="text-muted-foreground">{placeholder}</span>
+                placeholder
               )}
             </span>
             <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-50" />

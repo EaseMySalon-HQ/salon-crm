@@ -54,6 +54,15 @@ function getEffectiveFeatures(business) {
     effectiveFeatures.push('incentive_management');
   }
 
+  // Payroll depends on attendance/timesheets. Older plan templates predate the
+  // dedicated `attendance` feature id, so derive it whenever payroll is granted.
+  if (
+    effectiveFeatures.includes('payroll') &&
+    !effectiveFeatures.includes('attendance')
+  ) {
+    effectiveFeatures.push('attendance');
+  }
+
   return effectiveFeatures;
 }
 

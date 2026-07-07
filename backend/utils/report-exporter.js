@@ -6,6 +6,7 @@ const databaseManager = require('../config/database-manager');
 const modelFactory = require('../models/model-factory');
 const { toDateStringIST } = require('./date-utils');
 const { throwIfPlatformEmailDisabled } = require('../lib/business-email-policy');
+const { staffEmailPreferenceFindQuery } = require('../lib/admin-email-preferences');
 
 /**
  * Report export delivery: all tenant Users with role admin (login admins) plus Staff with
@@ -14,7 +15,7 @@ const { throwIfPlatformEmailDisabled } = require('../lib/business-email-policy')
 async function getReportExportRecipientList(branchId, mainConnection, businessModels) {
   const User = mainConnection.model('User', require('../models/User').schema);
   const { Staff } = businessModels;
-  const [adminUsers, reportStaff] = await Promise.all([
+  const [adminUsers, reportStaff, adminStaff] = await Promise.all([
     User.find({
       branchId,
       role: 'admin',
@@ -30,6 +31,13 @@ async function getReportExportRecipientList(branchId, mainConnection, businessMo
     })
       .select('email')
       .lean(),
+    Staff.find({
+      ...staffEmailPreferenceFindQuery('allowReportsDelivery', { branchId }),
+      isActive: { $ne: false },
+      role: 'admin',
+    })
+      .select('email')
+      .lean(),
   ]);
   const seen = new Set();
   const recipients = [];
@@ -41,6 +49,13 @@ async function getReportExportRecipientList(branchId, mainConnection, businessMo
     }
   }
   for (const s of reportStaff) {
+    const e = (s.email || '').trim().toLowerCase();
+    if (e && !seen.has(e)) {
+      seen.add(e);
+      recipients.push({ email: s.email.trim() });
+    }
+  }
+  for (const s of adminStaff) {
     const e = (s.email || '').trim().toLowerCase();
     if (e && !seen.has(e)) {
       seen.add(e);

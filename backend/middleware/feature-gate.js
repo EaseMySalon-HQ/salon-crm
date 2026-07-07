@@ -66,6 +66,13 @@ async function ensureEntitlements(req) {
  * @param {Object} options - Additional options
  * @returns {Function} Express middleware
  */
+const FEATURE_UPGRADE_MESSAGES = {
+  attendance:
+    'Attendance and timesheets are available on the Growth plan and above. Please upgrade to use them.',
+  payroll:
+    'Payroll and salary formulas are available on the Pro plan. Please upgrade to run payroll.',
+};
+
 function requireFeature(featureId, options = {}) {
   return async (req, res, next) => {
     try {
@@ -92,7 +99,10 @@ function requireFeature(featureId, options = {}) {
         const planName = entitlements.planId || 'none';
         return res.status(403).json({
           success: false,
-          error: `Feature "${featureId}" is not available in your current plan (${planName})`,
+          error:
+            FEATURE_UPGRADE_MESSAGES[featureId] ||
+            options.message ||
+            `Feature "${featureId}" is not available in your current plan (${planName})`,
           code: 'FEATURE_NOT_AVAILABLE',
           planId: planName,
           featureId,

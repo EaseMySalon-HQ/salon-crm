@@ -4,7 +4,7 @@ import { useEffect, useState, useMemo, useRef } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { format, addDays, subDays, startOfWeek } from "date-fns"
 
-import { ChevronLeft, ChevronRight, Plus, Trash2, AlertTriangle, Clock, CalendarOff, RotateCcw } from "lucide-react"
+import { ChevronLeft, ChevronRight, Plus, Trash2, AlertTriangle, Clock, CalendarOff, RotateCcw, Download, FileSpreadsheet, FileText, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -17,6 +17,13 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
+import { Input } from "@/components/ui/input"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   Select,
   SelectContent,
@@ -25,8 +32,41 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { StaffDirectoryAPI, StaffAPI, BlockTimeAPI, AppointmentsAPI } from "@/lib/api"
+import { StaffDirectoryAPI, StaffAPI, BlockTimeAPI, AppointmentsAPI, StaffAttendanceAPI, AttendancePayrollSettingsAPI } from "@/lib/api"
+import { formatInIST } from "@/lib/date-utils"
+import { mergeAttendancePayrollSettings, type AttendancePayrollSettings } from "@/lib/attendance-payroll-settings"
+import {
+  computeTimesheetPeriodRange,
+  datesInRange,
+  type TimesheetPeriod,
+} from "@/lib/staff-timesheet-period"
+import {
+  exportStaffTimesheetPdf,
+  exportStaffTimesheetXlsx,
+  type TimesheetExportAttendance,
+  type TimesheetExportBlock,
+} from "@/lib/staff-timesheet-export"
 import { useToast } from "@/hooks/use-toast"
+
+type TimesheetExportPeriod = TimesheetPeriod | "visible_week"
+
+const EXPORT_PERIOD_LABELS: Record<TimesheetExportPeriod, string> = {
+  visible_week: "Selected week",
+  today: "Today",
+  this_week: "This week (calendar)",
+  current_month: "Current month",
+  last_month: "Last month",
+  last_3_months: "Last 3 months",
+  custom: "Custom range",
+}
+
+const EXPORT_PERIOD_ORDER: TimesheetExportPeriod[] = [
+  "visible_week",
+  "current_month",
+  "last_month",
+  "last_3_months",
+  "custom",
+]
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 
@@ -56,6 +96,32 @@ interface BlockTimeEntry {
   recurringFrequency?: string
   endDate?: string | null
   description?: string
+}
+
+interface AttendanceEntry {
+  id: string
+  staffId: string
+  date: string
+  checkInAt: string
+  checkOutAt: string | null
+  status: "checked_in" | "completed"
+  dayStatus?: "present" | "late" | "half_day" | "absent"
+  lateMinutes?: number
+}
+
+function formatAttendanceTime(iso: string | null): string {
+  if (!iso) return ""
+  return formatInIST(iso, { hour: "numeric", minute: "2-digit", hour12: true }).toLowerCase()
+}
+
+function formatAttendanceDuration(checkIn: string | null | undefined, checkOut: string | null | undefined): string {
+  if (!checkIn || !checkOut) return "—"
+  const ms = new Date(checkOut).getTime() - new Date(checkIn).getTime()
+  if (ms <= 0) return "—"
+  const h = Math.floor(ms / 3600000)
+  const m = Math.floor((ms % 3600000) / 60000)
+  if (h > 0) return `${h}h ${m}m`
+  return `${m}m`
 }
 
 function formatTimeRange(startTime: string, endTime: string): string {
@@ -109,15 +175,10 @@ function getDefaultWorkSchedule(existing?: StaffWorkDay[]): StaffWorkDay[] {
   return DAY_NAMES.map((_, day) => byDay.get(day) ?? defaultRow(day))
 }
 
-function formatRange(dayRow?: StaffWorkDay): string {
-  if (!dayRow || dayRow.enabled === false) return "Off"
-  const start = dayRow.startTime || "09:00"
-  const end = dayRow.endTime || "21:00"
-  const [sh, sm] = start.split(":").map((v) => parseInt(v || "0", 10))
-  const [eh, em] = end.split(":").map((v) => parseInt(v || "0", 10))
-  const startLabel = format(new Date(2000, 0, 1, sh || 0, sm || 0), "h:mma")
-  const endLabel = format(new Date(2000, 0, 1, eh || 0, em || 0), "h:mma")
-  return `${startLabel.toLowerCase()} – ${endLabel.toLowerCase()}`
+function isStaffWeekOff(staff: StaffRow, dayOfWeek: number): boolean {
+  const schedule = getDefaultWorkSchedule(staff.workSchedule)
+  const dayRow = schedule.find((r) => r.day === dayOfWeek)
+  return dayRow?.enabled === false
 }
 
 type EditModalState = { staff: StaffRow; dayIndex: number; dayDate: Date } | null
@@ -194,9 +255,18 @@ export function StaffWorkingHoursContent() {
   const [blockDescription, setBlockDescription] = useState("")
   const [creatingBlock, setCreatingBlock] = useState(false)
   const [blockTimes, setBlockTimes] = useState<BlockTimeEntry[]>([])
+  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceEntry[]>([])
+  const [businessSettings, setBusinessSettings] = useState<AttendancePayrollSettings>(() =>
+    mergeAttendancePayrollSettings(undefined)
+  )
   const [selectedBlock, setSelectedBlock] = useState<BlockTimeEntry | null>(null)
   const [updatingBlock, setUpdatingBlock] = useState(false)
   const [returnToOnClose, setReturnToOnClose] = useState<string | null>(null)
+  const [exportPeriod, setExportPeriod] = useState<TimesheetExportPeriod>("visible_week")
+  const [exportCustomFrom, setExportCustomFrom] = useState("")
+  const [exportCustomTo, setExportCustomTo] = useState("")
+  const [exporting, setExporting] = useState(false)
+  const [staffFilter, setStaffFilter] = useState<string>("all")
 
   const selectedDateObj = useMemo(
     () => (selectedDate ? new Date(`${selectedDate}T00:00:00`) : new Date()),
@@ -228,10 +298,24 @@ export function StaffWorkingHoursContent() {
     load()
   }, [])
 
+  useEffect(() => {
+    AttendancePayrollSettingsAPI.get()
+      .then((res) => {
+        if (res?.success) setBusinessSettings(mergeAttendancePayrollSettings(res.data))
+      })
+      .catch(() => {
+        /* keep defaults */
+      })
+  }, [])
+
   const rows = useMemo(
     () =>
-      staff.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })),
+      [...staff].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })),
     [staff]
+  )
+  const filteredRows = useMemo(
+    () => (staffFilter === "all" ? rows : rows.filter((s) => s._id === staffFilter)),
+    [rows, staffFilter]
   )
   const staffOptionsForBlock = useMemo(() => rows.filter((s) => !s.isOwner), [rows])
 
@@ -282,6 +366,30 @@ export function StaffWorkingHoursContent() {
     }
   }, [weekStart, weekDates])
 
+  useEffect(() => {
+    let cancelled = false
+    const start = weekStart
+    const end = weekDates[6]
+    if (!start || !end) return
+    const startStr = format(start, "yyyy-MM-dd")
+    const endStr = format(end, "yyyy-MM-dd")
+    StaffAttendanceAPI.list({ startDate: startStr, endDate: endStr })
+      .then((res) => {
+        if (cancelled) return
+        if (res?.success && Array.isArray(res?.data)) {
+          setAttendanceRecords(res.data as AttendanceEntry[])
+        } else {
+          setAttendanceRecords([])
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setAttendanceRecords([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [weekStart, weekDates])
+
   const blocksByStaffAndDate = useMemo(() => {
     const map = new Map<string, BlockTimeEntry[]>()
     blockTimes.forEach((b) => {
@@ -296,6 +404,14 @@ export function StaffWorkingHoursContent() {
     })
     return map
   }, [blockTimes, weekDates])
+
+  const attendanceByStaffAndDate = useMemo(() => {
+    const map = new Map<string, AttendanceEntry>()
+    attendanceRecords.forEach((a) => {
+      map.set(`${a.staffId}_${a.date}`, a)
+    })
+    return map
+  }, [attendanceRecords])
 
   const defaultHours = useMemo(() => {
     if (!editModal) return { start: "09:00", end: "21:00" }
@@ -677,6 +793,118 @@ export function StaffWorkingHoursContent() {
     }
   }
 
+  const resolveExportRange = () => {
+    if (exportPeriod === "visible_week") {
+      const startYmd = format(weekDates[0], "yyyy-MM-dd")
+      const endYmd = format(weekDates[6], "yyyy-MM-dd")
+      return {
+        startYmd,
+        endYmd,
+        label: `Week ${format(weekDates[0], "dd MMM")} – ${format(weekDates[6], "dd MMM yyyy")}`,
+      }
+    }
+    return computeTimesheetPeriodRange(
+      exportPeriod,
+      exportCustomFrom,
+      exportCustomTo
+    )
+  }
+
+  const mapBlocksForExport = (entries: BlockTimeEntry[]): TimesheetExportBlock[] =>
+    entries.map((b) => ({
+      staffId:
+        typeof b.staffId === "object" && b.staffId?._id
+          ? String(b.staffId._id)
+          : String(b.staffId),
+      title: b.title,
+      startDate: b.startDate,
+      startTime: b.startTime,
+      endTime: b.endTime,
+      recurringFrequency: b.recurringFrequency,
+      endDate: b.endDate,
+    }))
+
+  const handleExportTimesheet = async (kind: "xlsx" | "pdf") => {
+    if (filteredRows.length === 0) {
+      toast({ title: "No staff to export", variant: "destructive" })
+      return
+    }
+    if (exportPeriod === "custom" && (!exportCustomFrom || !exportCustomTo)) {
+      toast({ title: "Pick a custom date range", variant: "destructive" })
+      return
+    }
+
+    setExporting(true)
+    try {
+      const range = resolveExportRange()
+      const periodDates = datesInRange(range.startYmd, range.endYmd)
+      if (periodDates.length === 0) {
+        toast({ title: "Invalid date range", variant: "destructive" })
+        return
+      }
+
+      const visibleStart = format(weekDates[0], "yyyy-MM-dd")
+      const visibleEnd = format(weekDates[6], "yyyy-MM-dd")
+      const useLoadedData =
+        exportPeriod === "visible_week" &&
+        range.startYmd === visibleStart &&
+        range.endYmd === visibleEnd
+
+      let attendance: TimesheetExportAttendance[] = []
+      let blocks: TimesheetExportBlock[] = []
+
+      if (useLoadedData) {
+        attendance = attendanceRecords.map((a) => ({
+          staffId: a.staffId,
+          date: a.date,
+          checkInAt: a.checkInAt,
+          checkOutAt: a.checkOutAt,
+          dayStatus: a.dayStatus,
+        }))
+        blocks = mapBlocksForExport(blockTimes)
+      } else {
+        const [attRes, blockRes] = await Promise.all([
+          StaffAttendanceAPI.list({ startDate: range.startYmd, endDate: range.endYmd }),
+          BlockTimeAPI.getAll({ startDate: range.startYmd, endDate: range.endYmd }),
+        ])
+        attendance =
+          attRes?.success && Array.isArray(attRes.data)
+            ? (attRes.data as AttendanceEntry[]).map((a) => ({
+                staffId: a.staffId,
+                date: a.date,
+                checkInAt: a.checkInAt,
+                checkOutAt: a.checkOutAt,
+                dayStatus: a.dayStatus,
+              }))
+            : []
+        blocks =
+          blockRes?.success && Array.isArray(blockRes.data)
+            ? mapBlocksForExport(blockRes.data as BlockTimeEntry[])
+            : []
+      }
+
+      const staffList = filteredRows.map((s) => ({
+        _id: s._id,
+        name: s.name,
+        role: s.role,
+        workSchedule: s.workSchedule,
+      }))
+
+      if (kind === "xlsx") {
+        exportStaffTimesheetXlsx(staffList, periodDates, attendance, blocks, range.label)
+      } else {
+        exportStaffTimesheetPdf(staffList, periodDates, attendance, blocks, range.label)
+      }
+
+      toast({ title: "Timesheet exported" })
+    } catch (error) {
+      console.error("Timesheet export failed:", error)
+      toast({ title: "Export failed", variant: "destructive" })
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const handleCreateBlockTime = async () => {
     if (!blockTitle.trim()) {
       alert("Please enter a title.")
@@ -742,70 +970,148 @@ export function StaffWorkingHoursContent() {
     <>
       <div className="space-y-6">
           {/* Toolbar: outside the table card */}
-          <div className="flex items-center justify-end gap-2 flex-wrap w-full">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-10 rounded-xl border border-slate-200 bg-white shadow-sm text-slate-700 gap-1.5 hover:bg-slate-50 shrink-0 px-3 text-sm font-medium"
-              onClick={() => setBlockTimeModalOpen(true)}
-            >
-              <Plus className="h-4 w-4" />
-              Add block time
-            </Button>
-            <div className="flex items-center gap-0.5 h-10 border border-slate-200 rounded-xl bg-white shadow-sm px-1.5 w-full max-w-[220px]">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 rounded-lg shrink-0 text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-                onClick={() => setSelectedDate(format(subDays(selectedDateObj, 7), "yyyy-MM-dd"))}
-                aria-label="Previous week"
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-              <div
-                className="relative flex-1 min-w-0 h-8 flex items-center justify-center cursor-pointer rounded-md hover:bg-slate-50 transition-colors text-sm font-medium text-slate-800"
-                onClick={() => {
-                  const el = dateInputRef.current
-                  if (el) {
-                    if (typeof el.showPicker === "function") el.showPicker()
-                    else el.click()
-                  }
-                }}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault()
-                    dateInputRef.current?.showPicker?.()
-                  }
-                }}
-                aria-label="Select date"
-              >
-                <span className="px-2 truncate">
-                  {format(selectedDateObj, "dd MMM, yyyy")}
-                </span>
-                <input
-                  ref={dateInputRef}
-                  type="date"
-                  value={selectedDate}
-                  onChange={(e) => setSelectedDate(e.target.value)}
-                  className="absolute inset-0 w-full h-full cursor-pointer opacity-0"
-                  aria-hidden
-                  tabIndex={-1}
-                />
+          <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-10 rounded-xl border border-slate-200 bg-white shadow-sm text-slate-700 gap-1.5 hover:bg-slate-50 shrink-0 px-3 text-sm font-medium"
+                  onClick={() => setBlockTimeModalOpen(true)}
+                >
+                  <Plus className="h-4 w-4" />
+                  Add block time
+                </Button>
+                <div className="flex items-center gap-0.5 h-10 border border-slate-200 rounded-xl bg-white shadow-sm px-1.5 w-full max-w-[220px] sm:w-[220px]">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 rounded-lg shrink-0 text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                    onClick={() => setSelectedDate(format(subDays(selectedDateObj, 7), "yyyy-MM-dd"))}
+                    aria-label="Previous week"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  <div
+                    className="relative flex-1 min-w-0 h-8 flex items-center justify-center cursor-pointer rounded-md hover:bg-slate-50 transition-colors text-sm font-medium text-slate-800"
+                    onClick={() => {
+                      const el = dateInputRef.current
+                      if (el) {
+                        if (typeof el.showPicker === "function") el.showPicker()
+                        else el.click()
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault()
+                        dateInputRef.current?.showPicker?.()
+                      }
+                    }}
+                    aria-label="Select date"
+                  >
+                    <span className="px-2 truncate">
+                      {format(selectedDateObj, "dd MMM, yyyy")}
+                    </span>
+                    <input
+                      ref={dateInputRef}
+                      type="date"
+                      value={selectedDate}
+                      onChange={(e) => setSelectedDate(e.target.value)}
+                      className="absolute inset-0 w-full h-full cursor-pointer opacity-0"
+                      aria-hidden
+                      tabIndex={-1}
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 rounded-lg shrink-0 text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                    onClick={() => setSelectedDate(format(addDays(selectedDateObj, 7), "yyyy-MM-dd"))}
+                    aria-label="Next week"
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
               </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 rounded-lg shrink-0 text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-                onClick={() => setSelectedDate(format(addDays(selectedDateObj, 7), "yyyy-MM-dd"))}
-                aria-label="Next week"
-              >
-                <ChevronRight className="h-4 w-4" />
-              </Button>
+              <div className="flex flex-wrap items-end gap-2 sm:justify-end">
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Staff</Label>
+                  <Select value={staffFilter} onValueChange={setStaffFilter}>
+                    <SelectTrigger className="w-[148px] bg-white">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All staff</SelectItem>
+                      {rows.map((s) => (
+                        <SelectItem key={s._id} value={s._id}>
+                          {s.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Export period</Label>
+                  <Select
+                    value={exportPeriod}
+                    onValueChange={(v) => setExportPeriod(v as TimesheetExportPeriod)}
+                  >
+                    <SelectTrigger className="w-[168px] bg-white">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {EXPORT_PERIOD_ORDER.map((p) => (
+                        <SelectItem key={p} value={p}>
+                          {EXPORT_PERIOD_LABELS[p]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {exportPeriod === "custom" ? (
+                  <>
+                    <Input
+                      type="date"
+                      value={exportCustomFrom}
+                      onChange={(e) => setExportCustomFrom(e.target.value)}
+                      className="w-[140px] bg-white"
+                    />
+                    <Input
+                      type="date"
+                      value={exportCustomTo}
+                      onChange={(e) => setExportCustomTo(e.target.value)}
+                      className="w-[140px] bg-white"
+                    />
+                  </>
+                ) : null}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" disabled={exporting || filteredRows.length === 0}>
+                      {exporting ? (
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      ) : (
+                        <Download className="h-4 w-4 mr-2" />
+                      )}
+                      Export
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => void handleExportTimesheet("xlsx")}>
+                      <FileSpreadsheet className="h-4 w-4 mr-2" />
+                      Excel (.xlsx)
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => void handleExportTimesheet("pdf")}>
+                      <FileText className="h-4 w-4 mr-2" />
+                      PDF
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
             </div>
           </div>
 
@@ -816,7 +1122,7 @@ export function StaffWorkingHoursContent() {
                   <div className="flex items-center justify-center py-10">
                     <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
                   </div>
-                ) : rows.length === 0 ? (
+                ) : filteredRows.length === 0 ? (
                   <div className="py-10 text-center text-slate-500 text-sm">No staff found.</div>
                 ) : (
                   <div className="overflow-x-auto">
@@ -835,7 +1141,7 @@ export function StaffWorkingHoursContent() {
                                     : "text-slate-700"
                                 }`}
                               >
-                                <div className="flex flex-col items-center leading-tight">
+                                <div className="flex flex-col items-center leading-tight gap-0.5">
                                   <span className={isToday ? "text-indigo-600 font-medium" : "text-slate-500 font-normal"}>
                                     {format(d, "dd MMM")}
                                   </span>
@@ -847,10 +1153,7 @@ export function StaffWorkingHoursContent() {
                         </tr>
                       </thead>
                       <tbody>
-                        {rows.map((s) => {
-                          const schedule = (s.workSchedule || []) as StaffWorkDay[]
-                          const enabled = s.allowAppointmentScheduling !== false
-                          return (
+                        {filteredRows.map((s) => (
                             <tr
                               key={s._id}
                               className="border-b border-slate-100 last:border-b-0 hover:bg-slate-50/60"
@@ -858,60 +1161,97 @@ export function StaffWorkingHoursContent() {
                               <td className="px-4 py-3 align-top">
                                 <div className="flex flex-col gap-1">
                                   <div className="font-medium text-slate-800 text-sm">{s.name}</div>
-                                  <div className="flex items-center gap-2 text-xs text-slate-500">
-                                    {s.role && (
+                                  {s.role ? (
+                                    <div className="flex items-center gap-2 text-xs text-slate-500">
                                       <Badge
                                         variant={s.role === "admin" ? "default" : s.role === "manager" ? "secondary" : "outline"}
                                         className="text-[11px] px-2 py-0.5"
                                       >
                                         {s.role.charAt(0).toUpperCase() + s.role.slice(1)}
                                       </Badge>
-                                    )}
-                                    <span
-                                      className={
-                                        enabled ? "text-emerald-600 font-medium" : "text-slate-400 font-medium"
-                                      }
-                                    >
-                                      {enabled ? "Appointments ON" : "Appointments OFF"}
-                                    </span>
-                                  </div>
+                                    </div>
+                                  ) : null}
                                 </div>
                               </td>
                               {weekDates.map((d, dayIndex) => {
-                                const dayRow = schedule.find((r) => r.day === dayIndex)
-                                const isOff =
-                                  !enabled || !dayRow || dayRow.enabled === false
                                 const isToday = dayIndex === todayColumnIndex
-                                const canEdit = !s.isOwner
+                                const businessOpen = businessSettings.attendance.workingDays[dayIndex]
                                 const dateStr = format(d, "yyyy-MM-dd")
                                 const cellBlocks = blocksByStaffAndDate.get(`${s._id}_${dateStr}`) || []
+                                const cellAttendance = attendanceByStaffAndDate.get(`${s._id}_${dateStr}`)
+                                const isLate = cellAttendance?.dayStatus === "late"
+                                const hasBlocks = cellBlocks.length > 0
+                                const dayOfWeek = d.getDay()
+                                const showWeekOff =
+                                  isStaffWeekOff(s, dayOfWeek) && !cellAttendance
+                                const showClosed =
+                                  !businessOpen && !cellAttendance && !hasBlocks && !showWeekOff
                                 return (
                                   <td
                                     key={`${s._id}-${d.toISOString()}`}
                                     className={`px-3 py-3 text-center align-top ${
                                       isToday ? "bg-indigo-50/80 border-x border-indigo-200" : ""
-                                    } ${canEdit ? "cursor-pointer hover:bg-slate-50/80" : ""}`}
-                                    onClick={() => canEdit && openEditModal(s, dayIndex, d)}
-                                    role={canEdit ? "button" : undefined}
-                                    tabIndex={canEdit ? 0 : undefined}
-                                    onKeyDown={(e) => {
-                                      if (canEdit && (e.key === "Enter" || e.key === " ")) {
-                                        e.preventDefault()
-                                        openEditModal(s, dayIndex, d)
-                                      }
-                                    }}
+                                    }`}
                                   >
-                                    <div className="flex flex-col items-center gap-1">
-                                      <span
-                                        className={`inline-flex items-center justify-center rounded-md px-2.5 py-1 text-[11px] font-medium ${
-                                          isOff
-                                            ? "bg-slate-100 text-slate-400"
-                                            : "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                                        } ${canEdit ? "pointer-events-none" : ""}`}
-                                      >
-                                        {isOff ? "Off" : formatRange(dayRow)}
-                                      </span>
-                                      {cellBlocks.length > 0 && (
+                                    <div className="flex flex-col items-stretch gap-1 min-h-[2.5rem] justify-center w-full min-w-[7.5rem]">
+                                      {showClosed ? (
+                                        <span className="text-[10px] text-slate-400 text-center">Closed</span>
+                                      ) : showWeekOff ? (
+                                        <span className="text-[10px] font-medium text-slate-500 text-center">Weekoff</span>
+                                      ) : (
+                                        <div className="flex flex-col gap-1 text-[10px] leading-snug">
+                                          <div className="flex items-stretch gap-1">
+                                            <div className="flex min-w-0 flex-1 items-center justify-between gap-1 rounded-md border border-slate-100 bg-slate-50/80 px-2 py-1">
+                                              <span className="text-slate-400 shrink-0">In</span>
+                                              <span
+                                                className={`font-medium tabular-nums truncate ${
+                                                  isLate
+                                                    ? "text-red-600"
+                                                    : cellAttendance?.checkInAt
+                                                      ? "text-slate-800"
+                                                      : "text-slate-300"
+                                                }`}
+                                              >
+                                                {cellAttendance?.checkInAt
+                                                  ? formatAttendanceTime(cellAttendance.checkInAt)
+                                                  : "—"}
+                                              </span>
+                                            </div>
+                                            <div className="flex min-w-0 flex-1 items-center justify-between gap-1 rounded-md border border-slate-100 bg-slate-50/80 px-2 py-1">
+                                              <span className="text-slate-400 shrink-0">Out</span>
+                                              <span
+                                                className={`font-medium tabular-nums truncate ${
+                                                  cellAttendance?.checkOutAt
+                                                    ? "text-slate-800"
+                                                    : cellAttendance?.checkInAt
+                                                      ? "text-indigo-600"
+                                                      : "text-slate-300"
+                                                }`}
+                                              >
+                                                {cellAttendance?.checkOutAt
+                                                  ? formatAttendanceTime(cellAttendance.checkOutAt)
+                                                  : cellAttendance?.checkInAt
+                                                    ? "On duty"
+                                                    : "—"}
+                                              </span>
+                                            </div>
+                                          </div>
+                                          <div className="flex items-center justify-between gap-2 rounded-md border border-slate-100 bg-slate-50/80 px-2 py-1">
+                                            <span className="text-slate-400 shrink-0">Duration</span>
+                                            <span
+                                              className={`font-medium tabular-nums ${
+                                                cellAttendance?.checkOutAt ? "text-slate-800" : "text-slate-300"
+                                              }`}
+                                            >
+                                              {formatAttendanceDuration(
+                                                cellAttendance?.checkInAt,
+                                                cellAttendance?.checkOutAt
+                                              )}
+                                            </span>
+                                          </div>
+                                        </div>
+                                      )}
+                                      {hasBlocks && (
                                         <div className="flex flex-col gap-0.5 w-full mt-0.5">
                                           {cellBlocks.map((block) => (
                                             <button
@@ -934,8 +1274,7 @@ export function StaffWorkingHoursContent() {
                                 )
                               })}
                             </tr>
-                          )
-                        })}
+                        ))}
                       </tbody>
                     </table>
                   </div>

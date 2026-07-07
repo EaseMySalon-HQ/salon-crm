@@ -22,7 +22,6 @@ import {
   Megaphone,
   ChevronDown,
   Building2,
-  UserCog,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
@@ -119,7 +118,6 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
           },
         ]
       : []),
-    { kind: "link", title: "Staff Directory", href: "/staff", icon: UserCog, permissionModule: "staff" },
     { kind: "link", title: "Settings", href: "/settings", icon: Settings, permissionModule: "settings" },
   ]
 

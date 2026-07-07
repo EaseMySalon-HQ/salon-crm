@@ -112,15 +112,35 @@ const businessSchema = new mongoose.Schema({
       // Weekly Summary Configuration
       weeklySummary: {
         enabled: { type: Boolean, default: true },
-        day: { type: String, enum: ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'], default: 'sunday' },
-        time: { type: String, default: '20:00' }, // HH:mm format
+        day: { type: String, enum: ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'], default: 'monday' },
+        time: { type: String, default: '09:00' }, // HH:mm IST — previous Mon–Sun week
+        revenueGoal: { type: Number, default: null },
+        recipientStaffIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Staff' }]
+      },
+      monthlySummary: {
+        enabled: { type: Boolean, default: true },
+        time: { type: String, default: '09:00' },
+        revenueGoal: { type: Number, default: null },
         recipientStaffIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Staff' }]
       },
       // Staff incentive summary — sent on the 1st for the previous calendar month
       staffIncentiveSummary: {
         enabled: { type: Boolean, default: true },
-        time: { type: String, default: '08:00' },
+        time: { type: String, default: '12:00' },
         recipientStaffIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Staff' }]
+      },
+      // Payroll / salary slip — sent on the 1st for the previous calendar month
+      payrollNotifications: {
+        enabled: { type: Boolean, default: true },
+        time: { type: String, default: '12:00' },
+        attachSalarySlip: { type: Boolean, default: true },
+        recipientStaffIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Staff' }]
+      },
+      // Timesheet reports — sent to each staff member on the 1st for the previous month
+      timesheetNotifications: {
+        enabled: { type: Boolean, default: true },
+        time: { type: String, default: '12:00' },
+        format: { type: String, enum: ['xlsx', 'pdf'], default: 'xlsx' }
       },
       // Appointment Notifications
       appointmentNotifications: {

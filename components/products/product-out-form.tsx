@@ -25,6 +25,9 @@ interface ProductItem {
   stock: number
 }
 
+/** Radix Select portals to body at z-50 by default — must exceed the modal overlay (z-9999). */
+const modalSelectContentClass = "!z-[10000]"
+
 export function ProductOutForm({ onClose = () => {}, onTransactionCreated }: ProductOutFormProps) {
   const { toast } = useToast()
   const { formatAmount } = useCurrency()
@@ -474,11 +477,12 @@ export function ProductOutForm({ onClose = () => {}, onTransactionCreated }: Pro
                       <Select
                         value={formData.transactionType}
                         onValueChange={(value) => handleChange("transactionType", value)}
+                        modal={false}
                       >
                         <SelectTrigger className="h-12 text-base border-gray-300 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-red-500 shadow-sm">
                           <SelectValue placeholder="Select transaction type" />
                         </SelectTrigger>
-                        <SelectContent>
+                        <SelectContent className={modalSelectContentClass}>
                           <SelectItem value="service_usage">Service Usage - Used in services</SelectItem>
                           <SelectItem value="damage">Damage - Product damaged</SelectItem>
                           <SelectItem value="expiry">Expiry - Product expired</SelectItem>

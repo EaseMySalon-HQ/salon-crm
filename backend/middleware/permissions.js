@@ -39,6 +39,8 @@ const SETTINGS_SUB_MODULES = [
   'currency_settings',
   'tax_settings',
   'payment_settings',
+  'payroll_settings',
+  'incentive_settings',
   'pos_settings',
   'notification_settings',
   'plan_billing',

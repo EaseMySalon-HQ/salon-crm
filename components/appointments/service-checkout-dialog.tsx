@@ -262,11 +262,11 @@ type CartLineEditDraft = {
   price: number
   quantity: number
   staffId: string
+  discountValue: number
+  discountIsPercent: boolean
 }
 
 type ServiceLineEditDraft = CartLineEditDraft & {
-  discountValue: number
-  discountIsPercent: boolean
   staffContributions: StaffContribution[]
 }
 
@@ -303,11 +303,15 @@ function cartLineEditDraftFrom(line: {
   price: number
   quantity: number
   staffId: string
+  discountValue?: number
+  discountIsPercent?: boolean
 }): CartLineEditDraft {
   return {
     price: Math.max(0, Number(line.price) || 0),
     quantity: Math.max(1, Math.floor(Number(line.quantity) || 1)),
     staffId: line.staffId || "",
+    discountValue: Math.max(0, Number(line.discountValue) || 0),
+    discountIsPercent: line.discountIsPercent !== false,
   }
 }
 
@@ -797,7 +801,9 @@ function CheckoutCartServiceStaffControls({
             })
           }
         />
-        {staffControl ? <div className="min-w-0 w-full sm:flex-1">{staffControl}</div> : null}
+        {staffControl ? (
+          <div className="min-w-0 w-full sm:w-[9.5rem] sm:max-w-[9.5rem] sm:flex-1">{staffControl}</div>
+        ) : null}
       </div>
     </div>
   )
@@ -2531,14 +2537,13 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       .filter((l) => String(l.productId) === pid)
       .reduce((sum, l) => sum + Math.max(1, Math.floor(Number(l.quantity) || 1)), 0)
     if (unitsInCart >= stockQty) return
-    const defaultStaffId = defaultStaffAcrossCart()
     const unit = Number(p.price) || 0
     setProductLines((prev) => [
       ...prev,
       {
         id: `p-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         productId: pid,
-        staffId: defaultStaffId,
+        staffId: "",
         name: p.name || "Product",
         price: unit,
         quantity: 1,
@@ -2603,6 +2608,8 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
           price: Math.max(0, Number(productEditDraft.price) || 0),
           quantity: q,
           staffId: productEditDraft.staffId,
+          discountValue: Math.max(0, Number(productEditDraft.discountValue) || 0),
+          discountIsPercent: productEditDraft.discountIsPercent !== false,
         }
       })
     )
@@ -2644,6 +2651,8 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       price: Math.max(0, Number(catalogLineEditDraft.price) || 0),
       quantity: Math.max(1, Math.floor(catalogLineEditDraft.quantity) || 1),
       staffId: catalogLineEditDraft.staffId,
+      discountValue: Math.max(0, Number(catalogLineEditDraft.discountValue) || 0),
+      discountIsPercent: catalogLineEditDraft.discountIsPercent !== false,
     }
     if (editingCatalogLineKind === "membership") {
       setMembershipLines((prev) =>
@@ -2684,13 +2693,12 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
   function addCatalogMembershipPlan(plan: any) {
     const planId = String(plan._id || plan.id || "")
     if (!planId) return
-    const defaultStaffId = defaultStaffAcrossCart()
     setMembershipLines((prev) => [
       ...prev,
       {
         id: `m-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         planId,
-        staffId: defaultStaffId,
+        staffId: "",
         planName: plan.planName || "Membership",
         price: Number(plan.price) || 0,
         durationInDays: Number(plan.durationInDays) || 0,
@@ -2721,14 +2729,13 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
   function addCatalogPrepaidPlan(plan: any) {
     const planId = String(plan._id || plan.id || "")
     if (!planId) return
-    const defaultStaffId = defaultStaffAcrossCart()
     const pay = Number(plan.payAmount) || 0
     setPrepaidLines((prev) => [
       ...prev,
       {
         id: `pp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         planId,
-        staffId: defaultStaffId,
+        staffId: "",
         planName: plan.name || "Prepaid plan",
         creditAmount: Number(plan.creditAmount) || 0,
         validityDays: Number(plan.validityDays) || 0,
@@ -2760,13 +2767,12 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
   function addCatalogPackage(pkg: any) {
     const packageId = String(pkg._id || pkg.id || "")
     if (!packageId) return
-    const defaultStaffId = defaultStaffAcrossCart()
     setPackageLines((prev) => [
       ...prev,
       {
         id: `pkg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         packageId,
-        staffId: defaultStaffId,
+        staffId: "",
         packageName: pkg.name || "Package",
         price: Number(pkg.total_price) || 0,
         totalSittings: Number(pkg.total_sittings) || 0,
@@ -3865,6 +3871,26 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     productEditMaxQty < Number.MAX_SAFE_INTEGER &&
     Math.max(1, Math.floor(productEditDraft?.quantity || 1)) >= Math.max(1, productEditMaxQty)
 
+  const productEditItemTotal =
+    productEditDraft != null
+      ? lineNetAfterLineDiscount(
+          productEditDraft.price,
+          Math.max(1, Math.floor(productEditDraft.quantity) || 1),
+          productEditDraft.discountValue,
+          productEditDraft.discountIsPercent
+        )
+      : 0
+
+  const catalogLineEditItemTotal =
+    catalogLineEditDraft != null
+      ? lineNetAfterLineDiscount(
+          catalogLineEditDraft.price,
+          Math.max(1, Math.floor(catalogLineEditDraft.quantity) || 1),
+          catalogLineEditDraft.discountValue,
+          catalogLineEditDraft.discountIsPercent
+        )
+      : 0
+
   const editingCatalogMembershipLine =
     editingCatalogLineKind === "membership" && editingCatalogLineId
       ? membershipLines.find((l) => l.id === editingCatalogLineId)
@@ -4225,7 +4251,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                   }
                 >
                   <SelectTrigger className="h-10 rounded-lg text-sm">
-                    <SelectValue placeholder="Select staff" />
+                    <SelectValue placeholder={CHECKOUT_NO_STAFF_LABEL} />
                   </SelectTrigger>
                   <SelectContent
                     position="popper"
@@ -4244,6 +4270,28 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                 </p>
               )}
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="prod-checkout-discount">Discount</Label>
+              <CheckoutLineDiscountRow
+                variant="form"
+                inputId="prod-checkout-discount"
+                discountValue={productEditDraft.discountValue}
+                discountIsPercent={productEditDraft.discountIsPercent}
+                onDiscountValueChange={(v) =>
+                  setProductEditDraft((d) => (d ? { ...d, discountValue: v } : d))
+                }
+                onSetPercentMode={() =>
+                  setProductEditDraft((d) =>
+                    d ? { ...d, discountIsPercent: true, discountValue: 0 } : d
+                  )
+                }
+                onSetFixedMode={() =>
+                  setProductEditDraft((d) =>
+                    d ? { ...d, discountIsPercent: false, discountValue: 0 } : d
+                  )
+                }
+              />
+            </div>
             <div className="flex flex-row flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -4251,10 +4299,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                 </p>
                 <p className="text-lg font-semibold tabular-nums text-foreground">
                   ₹
-                  {(
-                    productEditDraft.price *
-                    Math.max(1, Math.floor(productEditDraft.quantity) || 1)
-                  ).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                  {productEditItemTotal.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -4396,7 +4441,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                   }
                 >
                   <SelectTrigger className="h-10 rounded-lg text-sm">
-                    <SelectValue placeholder="Select staff" />
+                    <SelectValue placeholder={CHECKOUT_NO_STAFF_LABEL} />
                   </SelectTrigger>
                   <SelectContent
                     position="popper"
@@ -4415,6 +4460,28 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                 </p>
               )}
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="catalog-checkout-discount">Discount</Label>
+              <CheckoutLineDiscountRow
+                variant="form"
+                inputId="catalog-checkout-discount"
+                discountValue={catalogLineEditDraft.discountValue}
+                discountIsPercent={catalogLineEditDraft.discountIsPercent}
+                onDiscountValueChange={(v) =>
+                  setCatalogLineEditDraft((d) => (d ? { ...d, discountValue: v } : d))
+                }
+                onSetPercentMode={() =>
+                  setCatalogLineEditDraft((d) =>
+                    d ? { ...d, discountIsPercent: true, discountValue: 0 } : d
+                  )
+                }
+                onSetFixedMode={() =>
+                  setCatalogLineEditDraft((d) =>
+                    d ? { ...d, discountIsPercent: false, discountValue: 0 } : d
+                  )
+                }
+              />
+            </div>
             <div className="flex flex-row flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -4422,10 +4489,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                 </p>
                 <p className="text-lg font-semibold tabular-nums text-foreground">
                   ₹
-                  {(
-                    catalogLineEditDraft.price *
-                    Math.max(1, Math.floor(catalogLineEditDraft.quantity) || 1)
-                  ).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                  {catalogLineEditItemTotal.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -5722,7 +5786,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                 })}
                 {productLines.map((line) => {
                   const staffName =
-                    staffOptions.find((s) => s.id === line.staffId)?.name || "Staff"
+                    staffOptions.find((s) => s.id === line.staffId)?.name || CHECKOUT_NO_STAFF_LABEL
                   const qty = Math.max(1, Math.floor(Number(line.quantity) || 1))
                   const stockCap = maxProductLineQtyFromStock(line, productLines, catalogProducts)
                   const hasStockCap = stockCap < Number.MAX_SAFE_INTEGER
@@ -5858,7 +5922,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                                     id={staffTriggerId}
                                     className="h-8 w-full max-w-none rounded-lg px-2 text-xs"
                                   >
-                                    <SelectValue placeholder="Staff" />
+                                    <SelectValue placeholder={CHECKOUT_NO_STAFF_LABEL} />
                                   </SelectTrigger>
                                   <SelectContent position="popper" className={cartSelectContentClass}>
                                     {staffOptions.map((s) => (
@@ -5878,7 +5942,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                 })}
                 {membershipLines.map((line) => {
                   const staffName =
-                    staffOptions.find((s) => s.id === line.staffId)?.name || "Staff"
+                    staffOptions.find((s) => s.id === line.staffId)?.name || CHECKOUT_NO_STAFF_LABEL
                   const qty = Math.max(1, Math.floor(Number(line.quantity) || 1))
                   const unit = Number(line.price) || 0
                   const discVal = Number(line.discountValue) || 0
@@ -6012,7 +6076,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                                     id={staffTriggerId}
                                     className="h-8 w-full max-w-none rounded-lg px-2 text-xs"
                                   >
-                                    <SelectValue placeholder="Staff" />
+                                    <SelectValue placeholder={CHECKOUT_NO_STAFF_LABEL} />
                                   </SelectTrigger>
                                   <SelectContent position="popper" className={cartSelectContentClass}>
                                     {staffOptions.map((s) => (
@@ -6032,7 +6096,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                 })}
                 {prepaidLines.map((line) => {
                   const staffName =
-                    staffOptions.find((s) => s.id === line.staffId)?.name || "Staff"
+                    staffOptions.find((s) => s.id === line.staffId)?.name || CHECKOUT_NO_STAFF_LABEL
                   const qty = Math.max(1, Math.floor(Number(line.quantity) || 1))
                   const unit = Number(line.price) || 0
                   const discVal = Number(line.discountValue) || 0
@@ -6168,7 +6232,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                                     id={staffTriggerId}
                                     className="h-8 w-full max-w-none rounded-lg px-2 text-xs"
                                   >
-                                    <SelectValue placeholder="Staff" />
+                                    <SelectValue placeholder={CHECKOUT_NO_STAFF_LABEL} />
                                   </SelectTrigger>
                                   <SelectContent position="popper" className={cartSelectContentClass}>
                                     {staffOptions.map((s) => (
@@ -6188,7 +6252,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                 })}
                 {packageLines.map((line) => {
                   const staffName =
-                    staffOptions.find((s) => s.id === line.staffId)?.name || "Staff"
+                    staffOptions.find((s) => s.id === line.staffId)?.name || CHECKOUT_NO_STAFF_LABEL
                   const qty = Math.max(1, Math.floor(Number(line.quantity) || 1))
                   const unit = Number(line.price) || 0
                   const discVal = Number(line.discountValue) || 0
@@ -6324,7 +6388,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                                     id={staffTriggerId}
                                     className="h-8 w-full max-w-none rounded-lg px-2 text-xs"
                                   >
-                                    <SelectValue placeholder="Staff" />
+                                    <SelectValue placeholder={CHECKOUT_NO_STAFF_LABEL} />
                                   </SelectTrigger>
                                   <SelectContent position="popper" className={cartSelectContentClass}>
                                     {staffOptions.map((s) => (
@@ -7203,7 +7267,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                     disabled={staffOptions.length === 0}
                   >
                     <SelectTrigger className="h-9 rounded-lg">
-                      <SelectValue placeholder="Select staff" />
+                      <SelectValue placeholder={CHECKOUT_NO_STAFF_LABEL} />
                     </SelectTrigger>
                     <SelectContent
                       position="popper"

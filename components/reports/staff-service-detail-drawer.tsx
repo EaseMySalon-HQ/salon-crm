@@ -5,13 +5,11 @@ import { format } from "date-fns"
 import type { DateRange } from "react-day-picker"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Calendar as CalendarComponent } from "@/components/ui/calendar"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Calendar } from "lucide-react"
 import {
   type DatePeriod,
   getPerformanceFilterBounds,
@@ -57,6 +55,18 @@ function formatAttributedQtyForDisplay(n: number): string {
   if (Number.isInteger(x)) return String(x)
   const y = Number(x.toFixed(4))
   return y % 1 === 0 ? String(y) : y.toFixed(2).replace(/\.?0+$/, "") || "0"
+}
+
+function dateToInputValue(d?: Date): string {
+  if (!d) return ""
+  return format(d, "yyyy-MM-dd")
+}
+
+function inputValueToDate(ymd: string): Date | undefined {
+  if (!ymd) return undefined
+  const [y, m, day] = ymd.split("-").map(Number)
+  if (!y || !m || !day) return undefined
+  return new Date(y, m - 1, day, 12, 0, 0, 0)
 }
 
 function toSale(sale: any): Sale {
@@ -123,6 +133,7 @@ export function StaffServiceDetailDrawer({
   const [selectedServiceFilter, setSelectedServiceFilter] = useState<string>("all")
   const [selectedProductFilter, setSelectedProductFilter] = useState<string>("all")
   const [selectedPackageFilter, setSelectedPackageFilter] = useState<string>("all")
+  const todayYmd = useMemo(() => format(new Date(), "yyyy-MM-dd"), [])
   useEffect(() => {
     if (open) {
       setLocalPeriod(parentDatePeriod)
@@ -375,57 +386,40 @@ export function StaffServiceDetailDrawer({
                 </SelectContent>
               </Select>
               {localPeriod === "customRange" && (
-                <div className="flex flex-wrap gap-2 items-center">
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="h-10 w-36 justify-start text-left font-normal border-slate-200"
-                      >
-                        <Calendar className="mr-2 h-4 w-4 shrink-0" />
-                        {localCustomRange?.from ? format(localCustomRange.from, "MMM dd, yyyy") : "From"}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="start">
-                      <CalendarComponent
-                        initialFocus
-                        mode="single"
-                        selected={localCustomRange?.from}
-                        onSelect={(date) =>
-                          setLocalCustomRange((prev) => ({ from: date, to: prev?.to }))
-                        }
-                        disabled={(date) =>
-                          date > new Date() || (localCustomRange?.to ? date > localCustomRange.to : false)
-                        }
-                      />
-                    </PopoverContent>
-                  </Popover>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="h-10 w-36 justify-start text-left font-normal border-slate-200"
-                      >
-                        <Calendar className="mr-2 h-4 w-4 shrink-0" />
-                        {localCustomRange?.to ? format(localCustomRange.to, "MMM dd, yyyy") : "To"}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="start">
-                      <CalendarComponent
-                        initialFocus
-                        mode="single"
-                        selected={localCustomRange?.to}
-                        onSelect={(date) =>
-                          setLocalCustomRange((prev) => ({ from: prev?.from, to: date }))
-                        }
-                        disabled={(date) =>
-                          date > new Date() || (localCustomRange?.from ? date < localCustomRange.from : false)
-                        }
-                      />
-                    </PopoverContent>
-                  </Popover>
+                <div className="flex flex-wrap items-end gap-2">
+                  <div className="space-y-1">
+                    <Label htmlFor="staff-detail-from" className="text-xs text-muted-foreground">
+                      From
+                    </Label>
+                    <Input
+                      id="staff-detail-from"
+                      type="date"
+                      className="h-10 w-36 bg-white"
+                      value={dateToInputValue(localCustomRange?.from)}
+                      max={dateToInputValue(localCustomRange?.to) || todayYmd}
+                      onChange={(e) => {
+                        const from = inputValueToDate(e.target.value)
+                        setLocalCustomRange((prev) => ({ from, to: prev?.to }))
+                      }}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="staff-detail-to" className="text-xs text-muted-foreground">
+                      To
+                    </Label>
+                    <Input
+                      id="staff-detail-to"
+                      type="date"
+                      className="h-10 w-36 bg-white"
+                      value={dateToInputValue(localCustomRange?.to)}
+                      min={dateToInputValue(localCustomRange?.from)}
+                      max={todayYmd}
+                      onChange={(e) => {
+                        const to = inputValueToDate(e.target.value)
+                        setLocalCustomRange((prev) => ({ from: prev?.from, to }))
+                      }}
+                    />
+                  </div>
                 </div>
               )}
             </div>

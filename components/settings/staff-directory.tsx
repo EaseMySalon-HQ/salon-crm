@@ -5,13 +5,16 @@ import { useSearchParams, useRouter } from "next/navigation"
 
 import { StaffTable } from "@/components/staff/staff-table"
 import { StaffWorkingHoursContent } from "@/components/staff/staff-working-hours-content"
+import { StaffAttendanceContent } from "@/components/staff/staff-attendance-content"
+import { StaffPayrollContent } from "@/components/staff/staff-payroll-content"
 import { CommissionProfileList } from "@/components/settings/commission-profile-list"
 import { StaffCommissionAssignments } from "@/components/settings/staff-commission-assignments"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Users, Clock, Award } from "lucide-react"
+import { Users, Clock, Award, Wallet, UserCheck } from "lucide-react"
 import { useFeature } from "@/hooks/use-entitlements"
+import { useAuth } from "@/lib/auth-context"
 
-const MAIN_TABS = ["staff-list", "working-hours", "commission"] as const
+const MAIN_TABS = ["staff-list", "working-hours", "attendance", "payroll", "commission"] as const
 type MainTab = (typeof MAIN_TABS)[number]
 
 const COMMISSION_PANELS = ["profiles", "assignments"] as const
@@ -25,33 +28,83 @@ function isCommissionPanel(v: string | null): v is CommissionPanel {
   return v != null && (COMMISSION_PANELS as readonly string[]).includes(v)
 }
 
-export function StaffDirectory() {
+function buildStaffDirectoryUrl(params: URLSearchParams, inSettings: boolean): string {
+  if (inSettings) {
+    params.set("section", "staff-directory")
+    return `/settings?${params.toString()}`
+  }
+  const q = params.toString()
+  return q ? `/staff?${q}` : "/staff"
+}
+
+type StaffDirectoryProps = {
+  /** When true, tab URLs use /settings?section=staff-directory */
+  inSettings?: boolean
+}
+
+export function StaffDirectory({ inSettings = false }: StaffDirectoryProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
+  const { hasPermission } = useAuth()
   const { hasAccess: canIncentive, isLoading: entitlementsLoading } = useFeature("incentive_management")
+  const { hasAccess: canPayroll, isLoading: payrollEntitlementsLoading } = useFeature("payroll")
+  const { hasAccess: canAttendance, isLoading: attendanceEntitlementsLoading } = useFeature("attendance")
+  const canViewPayrollSettings = hasPermission("payroll_settings", "view")
+  const canViewIncentiveSettings = hasPermission("incentive_settings", "view")
+  const showPayrollTab = canPayroll && canViewPayrollSettings
+  const showIncentiveTab = canIncentive && canViewIncentiveSettings
+  const showTimesheetTab = canAttendance && canViewPayrollSettings
+  const showAttendanceTab = canAttendance && canViewPayrollSettings
   const tabParam = searchParams.get("tab")
   const panelParam = searchParams.get("panel")
 
-  const activeMainTab: MainTab =
-    isMainTab(tabParam) && (tabParam !== "commission" || canIncentive) ? tabParam : "staff-list"
+  const activeMainTab: MainTab = (() => {
+    if (!isMainTab(tabParam)) return "staff-list"
+    if (tabParam === "commission" && !showIncentiveTab) return "staff-list"
+    if (tabParam === "payroll" && !showPayrollTab) return "staff-list"
+    if ((tabParam === "working-hours" || tabParam === "attendance") && !showTimesheetTab) {
+      return "staff-list"
+    }
+    return tabParam
+  })()
   const commissionPanel: CommissionPanel =
     activeMainTab === "commission" && isCommissionPanel(panelParam) ? panelParam : "profiles"
 
   const pushStaffUrl = (params: URLSearchParams) => {
-    const q = params.toString()
-    router.push(q ? `/staff?${q}` : "/staff")
+    router.push(buildStaffDirectoryUrl(params, inSettings))
   }
 
   useEffect(() => {
-    if (entitlementsLoading || canIncentive) return
+    if (entitlementsLoading || showIncentiveTab) return
     if (tabParam === "commission") {
       const params = new URLSearchParams(searchParams.toString())
       params.delete("tab")
       params.delete("panel")
-      const q = params.toString()
-      router.replace(q ? `/staff?${q}` : "/staff")
+      router.replace(buildStaffDirectoryUrl(params, inSettings))
     }
-  }, [canIncentive, entitlementsLoading, tabParam, searchParams, router])
+  }, [showIncentiveTab, entitlementsLoading, tabParam, searchParams, router, inSettings])
+
+  useEffect(() => {
+    if (payrollEntitlementsLoading || attendanceEntitlementsLoading) return
+    if (
+      (tabParam === "payroll" && !showPayrollTab) ||
+      ((tabParam === "working-hours" || tabParam === "attendance") && !showTimesheetTab)
+    ) {
+      const params = new URLSearchParams(searchParams.toString())
+      params.delete("tab")
+      params.delete("panel")
+      router.replace(buildStaffDirectoryUrl(params, inSettings))
+    }
+  }, [
+    showPayrollTab,
+    showTimesheetTab,
+    payrollEntitlementsLoading,
+    attendanceEntitlementsLoading,
+    tabParam,
+    searchParams,
+    router,
+    inSettings,
+  ])
 
   const onMainTabChange = (value: string) => {
     if (!isMainTab(value)) return
@@ -59,7 +112,7 @@ export function StaffDirectory() {
     if (value === "staff-list") {
       params.delete("tab")
       params.delete("panel")
-    } else if (value === "working-hours") {
+    } else if (value === "working-hours" || value === "attendance" || value === "payroll") {
       params.set("tab", value)
       params.delete("panel")
     } else {
@@ -106,11 +159,25 @@ export function StaffDirectory() {
           <Users className="h-4 w-4" />
           Staff List
         </TabsTrigger>
-        <TabsTrigger value="working-hours" className="rounded-lg gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm flex-1 sm:flex-initial">
-          <Clock className="h-4 w-4" />
-          Working Hours
-        </TabsTrigger>
-        {canIncentive && (
+        {showTimesheetTab && (
+          <TabsTrigger value="working-hours" className="rounded-lg gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm flex-1 sm:flex-initial">
+            <Clock className="h-4 w-4" />
+            Time Sheet
+          </TabsTrigger>
+        )}
+        {showAttendanceTab && (
+          <TabsTrigger value="attendance" className="rounded-lg gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm flex-1 sm:flex-initial">
+            <UserCheck className="h-4 w-4" />
+            Attendance
+          </TabsTrigger>
+        )}
+        {showPayrollTab && (
+          <TabsTrigger value="payroll" className="rounded-lg gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm flex-1 sm:flex-initial">
+            <Wallet className="h-4 w-4" />
+            Payroll
+          </TabsTrigger>
+        )}
+        {showIncentiveTab && (
           <TabsTrigger value="commission" className="rounded-lg gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm flex-1 sm:flex-initial">
             <Award className="h-4 w-4" />
             Incentive Management
@@ -124,10 +191,22 @@ export function StaffDirectory() {
           <TabsContent value="staff-list" className="mt-0">
             <StaffTable />
           </TabsContent>
-          <TabsContent value="working-hours" className="mt-0">
-            <StaffWorkingHoursContent />
-          </TabsContent>
-          {canIncentive && (
+          {showTimesheetTab && (
+            <TabsContent value="working-hours" className="mt-0">
+              <StaffWorkingHoursContent />
+            </TabsContent>
+          )}
+          {showAttendanceTab && (
+            <TabsContent value="attendance" className="mt-0">
+              <StaffAttendanceContent />
+            </TabsContent>
+          )}
+          {showPayrollTab && (
+            <TabsContent value="payroll" className="mt-0">
+              <StaffPayrollContent />
+            </TabsContent>
+          )}
+          {showIncentiveTab && (
             <TabsContent value="commission" className="mt-0">
               <Tabs
                 value={commissionPanel}

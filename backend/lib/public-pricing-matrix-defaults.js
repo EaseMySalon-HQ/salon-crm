@@ -34,8 +34,9 @@ const DEFAULT_PUBLIC_PRICING_MATRIX_CATEGORIES = [
     title: 'Staff & operations',
     rows: [
       { feature: 'Staff management', starter: 'yes', growth: 'yes', pro: 'yes' },
-      { feature: 'Attendance & leaves', starter: 'yes', growth: 'yes', pro: 'yes' },
+      { feature: 'Attendance & timesheets', starter: 'no', growth: 'yes', pro: 'yes' },
       { feature: 'Incentive management', starter: 'no', growth: 'yes', pro: 'yes' },
+      { feature: 'Payroll & salary slips', starter: 'no', growth: 'no', pro: 'yes' },
       { feature: 'Inventory management', starter: 'yes', growth: 'yes', pro: 'yes' },
     ],
   },

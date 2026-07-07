@@ -217,7 +217,6 @@ export function StaffTable() {
           weeklySummary: false,
           appointmentAlerts: false,
           receiptAlerts: false,
-          exportAlerts: false,
           systemAlerts: false,
           lowInventory: false
         }

@@ -132,7 +132,21 @@ const roleDefinitions = {
       { module: 'feedback', feature: 'create', enabled: true },
       { module: 'feedback', feature: 'edit', enabled: true },
       { module: 'feedback', feature: 'delete', enabled: true },
-      { module: 'feedback', feature: 'manage', enabled: true }
+      { module: 'feedback', feature: 'manage', enabled: true },
+
+      // Attendance & Payroll
+      { module: 'payroll_settings', feature: 'view', enabled: true },
+      { module: 'payroll_settings', feature: 'create', enabled: true },
+      { module: 'payroll_settings', feature: 'edit', enabled: true },
+      { module: 'payroll_settings', feature: 'delete', enabled: true },
+      { module: 'payroll_settings', feature: 'manage', enabled: true },
+
+      // Incentive Management
+      { module: 'incentive_settings', feature: 'view', enabled: true },
+      { module: 'incentive_settings', feature: 'create', enabled: true },
+      { module: 'incentive_settings', feature: 'edit', enabled: true },
+      { module: 'incentive_settings', feature: 'delete', enabled: true },
+      { module: 'incentive_settings', feature: 'manage', enabled: true }
     ]
   },
   manager: {

@@ -439,3 +439,66 @@ export class AdminLeadsAPI {
     return adminJson(`/admin/leads/${encodeURIComponent(id)}`, { method: "DELETE" })
   }
 }
+
+// ── Plan promo codes ─────────────────────────────────────────────────────
+
+export type PlanPromoDiscountType = "percent" | "fixed"
+
+export interface AdminPlanPromoCode {
+  id: string
+  code: string
+  description: string
+  discountType: PlanPromoDiscountType
+  discountValue: number
+  planIds: ("starter" | "growth" | "pro")[]
+  billingPeriods: ("monthly" | "yearly")[]
+  validFrom: string | null
+  validUntil: string | null
+  maxRedemptions: number | null
+  redemptionCount: number
+  onePerBusiness: boolean
+  active: boolean
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface AdminPlanPromoInput {
+  code: string
+  description?: string
+  discountType: PlanPromoDiscountType
+  discountValue: number
+  planIds?: ("starter" | "growth" | "pro")[]
+  billingPeriods?: ("monthly" | "yearly")[]
+  validFrom?: string | null
+  validUntil?: string | null
+  maxRedemptions?: number | null
+  onePerBusiness?: boolean
+  active?: boolean
+}
+
+export class AdminPlanPromosAPI {
+  static list(params?: { search?: string; active?: boolean }): Promise<AdminPlanPromoCode[]> {
+    return adminJson<AdminPlanPromoCode[]>(`/admin/plan-promos${buildQuery(params)}`)
+  }
+
+  static create(data: AdminPlanPromoInput): Promise<AdminPlanPromoCode> {
+    return adminJson<AdminPlanPromoCode>(`/admin/plan-promos`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
+
+  static update(id: string, data: AdminPlanPromoInput): Promise<AdminPlanPromoCode> {
+    return adminJson<AdminPlanPromoCode>(`/admin/plan-promos/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    })
+  }
+
+  static setActive(id: string, active: boolean): Promise<AdminPlanPromoCode> {
+    return adminJson<AdminPlanPromoCode>(`/admin/plan-promos/${encodeURIComponent(id)}/active`, {
+      method: "PATCH",
+      body: JSON.stringify({ active }),
+    })
+  }
+}
