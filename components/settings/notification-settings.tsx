@@ -8,10 +8,11 @@ import { Badge } from "@/components/ui/badge"
 import { useToast } from "@/components/ui/use-toast"
 import { useAuth } from "@/lib/auth-context"
 import { EmailNotificationsAPI } from "@/lib/api"
-import { Mail, Users, TestTube, CheckCircle2, XCircle, MessageCircle, Lock } from "lucide-react"
+import { Mail, Users, TestTube, CheckCircle2, XCircle, MessageCircle, Lock, Banknote, BarChart3, Loader2, TrendingUp, CalendarDays } from "lucide-react"
 import { StaffEmailPreferencesModal } from "./staff-email-preferences-modal"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { WhatsAppNotificationSettings } from "./whatsapp-business-settings"
+import { useFeature } from "@/hooks/use-entitlements"
 
 interface StaffMember {
   _id: string
@@ -26,7 +27,10 @@ interface StaffMember {
     preferences?: {
       dailySummary?: boolean
       weeklySummary?: boolean
+      monthlySummary?: boolean
       staffIncentiveSummary?: boolean
+      payrollSlip?: boolean
+      timesheetReport?: boolean
       appointmentAlerts?: boolean
       receiptAlerts?: boolean
       exportAlerts?: boolean
@@ -41,20 +45,51 @@ function idInRecipientList(staffId: string, recipientStaffIds: string[]) {
   return recipientStaffIds.some((id) => String(id) === String(staffId))
 }
 
+function isAdminStaffMember(staff: StaffMember): boolean {
+  return staff.role === "admin"
+}
+
+function staffEmailNotificationsOn(staff: StaffMember): boolean {
+  if (isAdminStaffMember(staff)) return !!staff.email
+  return staff.emailNotifications?.enabled === true
+}
+
+type EmailPrefKey = keyof NonNullable<NonNullable<StaffMember["emailNotifications"]>["preferences"]>
+
+function staffWantsEmailPref(
+  staff: StaffMember,
+  pref: EmailPrefKey,
+  plan: { canPayroll: boolean; canIncentive: boolean }
+): boolean {
+  if (staff.isOwner) return false
+  if (!staff.email) return false
+  if (isAdminStaffMember(staff)) {
+    if (pref === "payrollSlip" && !plan.canPayroll) return false
+    if (pref === "staffIncentiveSummary" && !plan.canIncentive) return false
+    return staff.emailNotifications?.preferences?.[pref] !== false
+  }
+  return (
+    staff.emailNotifications?.enabled === true &&
+    staff.emailNotifications?.preferences?.[pref] === true
+  )
+}
+
 export function NotificationSettings() {
   const { user, hasPermission } = useAuth()
+  const { hasAccess: canPayroll } = useFeature("payroll")
+  const { hasAccess: canIncentive } = useFeature("incentive_management")
   const canEdit = hasPermission("notification_settings", "edit")
   const { toast } = useToast()
   const [isLoading, setIsLoading] = useState(false)
+  const [isSendingDailySummary, setIsSendingDailySummary] = useState(false)
+  const [isSendingWeeklySummary, setIsSendingWeeklySummary] = useState(false)
+  const [isSendingMonthlySummary, setIsSendingMonthlySummary] = useState(false)
   const [isLoadingStaff, setIsLoadingStaff] = useState(false)
   const [staffMembers, setStaffMembers] = useState<StaffMember[]>([])
   const [selectedStaffId, setSelectedStaffId] = useState<string | null>(null)
   const [isPreferencesModalOpen, setIsPreferencesModalOpen] = useState(false)
   
-  // Filter to only show staff members with email notifications enabled
-  const staffWithEmailNotifications = staffMembers.filter(staff => 
-    staff.emailNotifications?.enabled === true
-  )
+  const staffWithEmailNotifications = staffMembers.filter((staff) => staffEmailNotificationsOn(staff))
   
   const [settings, setSettings] = useState({
     enabled: false,
@@ -67,13 +102,24 @@ export function NotificationSettings() {
     },
     weeklySummary: {
       enabled: false,
-      day: "sunday",
-      time: "20:00",
+      day: "monday",
+      time: "09:00",
+      recipientStaffIds: [] as string[]
+    },
+    monthlySummary: {
+      enabled: false,
+      time: "09:00",
       recipientStaffIds: [] as string[]
     },
     staffIncentiveSummary: {
       enabled: false,
-      time: "08:00",
+      time: "12:00",
+      recipientStaffIds: [] as string[]
+    },
+    payrollNotifications: {
+      enabled: true,
+      time: "12:00",
+      attachSalarySlip: true,
       recipientStaffIds: [] as string[]
     },
     appointmentNotifications: {
@@ -121,51 +167,43 @@ export function NotificationSettings() {
     if (staffMembers.length > 0) {
       setSettings((prev) => {
         const newSettings = { ...prev }
+        const plan = { canPayroll, canIncentive }
 
-        const isRealStaffForRecipients = (staff: StaffMember) => {
-          if (staff.emailNotifications?.enabled !== true) return false
-          if (staff.role === "admin" && staff.isOwner) return false
-          return true
-        }
+        const generalRecipients = staffMembers
+          .filter((staff) => !staff.isOwner && staffEmailNotificationsOn(staff))
+          .map((staff) => staff._id)
 
         const dailySummaryRecipients = staffMembers
-          .filter(
-            (staff) =>
-              staff.emailNotifications?.enabled === true &&
-              staff.emailNotifications?.preferences?.dailySummary === true &&
-              !(staff.role === "admin" && staff.isOwner)
-          )
+          .filter((staff) => staffWantsEmailPref(staff, "dailySummary", plan))
           .map((staff) => staff._id)
 
         const weeklySummaryRecipients = staffMembers
-          .filter(
-            (staff) =>
-              staff.emailNotifications?.enabled === true &&
-              staff.emailNotifications?.preferences?.weeklySummary === true &&
-              !(staff.role === "admin" && staff.isOwner)
-          )
+          .filter((staff) => staffWantsEmailPref(staff, "weeklySummary", plan))
+          .map((staff) => staff._id)
+
+        const monthlySummaryRecipients = staffMembers
+          .filter((staff) => staffWantsEmailPref(staff, "monthlySummary", plan))
           .map((staff) => staff._id)
 
         const staffIncentiveRecipients = staffMembers
-          .filter(
-            (staff) =>
-              staff.emailNotifications?.enabled === true &&
-              staff.emailNotifications?.preferences?.staffIncentiveSummary === true &&
-              !(staff.role === "admin" && staff.isOwner)
-          )
+          .filter((staff) => staffWantsEmailPref(staff, "staffIncentiveSummary", plan))
           .map((staff) => staff._id)
 
-        const generalRecipients = staffMembers.filter(isRealStaffForRecipients).map((staff) => staff._id)
+        const payrollRecipients = staffMembers
+          .filter((staff) => staffWantsEmailPref(staff, "payrollSlip", plan))
+          .map((staff) => staff._id)
 
         newSettings.recipientStaffIds = generalRecipients
         newSettings.dailySummary.recipientStaffIds = dailySummaryRecipients
         newSettings.weeklySummary.recipientStaffIds = weeklySummaryRecipients
+        newSettings.monthlySummary.recipientStaffIds = monthlySummaryRecipients
         newSettings.staffIncentiveSummary.recipientStaffIds = staffIncentiveRecipients
+        newSettings.payrollNotifications.recipientStaffIds = payrollRecipients
 
         return newSettings
       })
     }
-  }, [staffMembers])
+  }, [staffMembers, canPayroll, canIncentive])
 
   const loadSettings = async () => {
     try {
@@ -182,14 +220,25 @@ export function NotificationSettings() {
           },
           weeklySummary: {
             enabled: response.data.weeklySummary?.enabled || false,
-            day: response.data.weeklySummary?.day || "sunday",
-            time: response.data.weeklySummary?.time || "20:00",
+            day: response.data.weeklySummary?.day || "monday",
+            time: response.data.weeklySummary?.time || "09:00",
             recipientStaffIds: response.data.weeklySummary?.recipientStaffIds || []
+          },
+          monthlySummary: {
+            enabled: response.data.monthlySummary?.enabled || false,
+            time: response.data.monthlySummary?.time || "09:00",
+            recipientStaffIds: response.data.monthlySummary?.recipientStaffIds || []
           },
           staffIncentiveSummary: {
             enabled: response.data.staffIncentiveSummary?.enabled || false,
-            time: response.data.staffIncentiveSummary?.time || "08:00",
+            time: response.data.staffIncentiveSummary?.time || "12:00",
             recipientStaffIds: response.data.staffIncentiveSummary?.recipientStaffIds || []
+          },
+          payrollNotifications: {
+            enabled: response.data.payrollNotifications?.enabled !== false,
+            time: response.data.payrollNotifications?.time || "12:00",
+            attachSalarySlip: response.data.payrollNotifications?.attachSalarySlip !== false,
+            recipientStaffIds: response.data.payrollNotifications?.recipientStaffIds || []
           },
           appointmentNotifications: {
             enabled: response.data.appointmentNotifications?.enabled || false,
@@ -275,6 +324,126 @@ export function NotificationSettings() {
       })
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  const handleSendDailySummaryNow = async () => {
+    if (!isAdmin) {
+      toast({
+        title: "Unauthorized",
+        description: "Only admin or manager can send the daily summary",
+        variant: "destructive",
+      })
+      return
+    }
+    if (!settings.dailySummary.enabled) {
+      toast({
+        title: "Daily summary disabled",
+        description: "Enable daily summary below, then try again",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsSendingDailySummary(true)
+    try {
+      const response = await EmailNotificationsAPI.sendDailySummary()
+      if (response.success) {
+        toast({
+          title: "Daily summary sent",
+          description: response.message || "Check inboxes for recipients with Daily Summary enabled",
+        })
+      } else {
+        throw new Error(response.error || "Failed to send daily summary")
+      }
+    } catch (error: any) {
+      toast({
+        title: "Could not send daily summary",
+        description: error?.response?.data?.error || error.message || "Failed to send daily summary",
+        variant: "destructive",
+      })
+    } finally {
+      setIsSendingDailySummary(false)
+    }
+  }
+
+  const handleSendWeeklySummaryNow = async () => {
+    if (!isAdmin) {
+      toast({
+        title: "Unauthorized",
+        description: "Only admin or manager can send the weekly summary",
+        variant: "destructive",
+      })
+      return
+    }
+    if (!settings.weeklySummary.enabled) {
+      toast({
+        title: "Weekly summary disabled",
+        description: "Enable weekly summary below, then try again",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsSendingWeeklySummary(true)
+    try {
+      const response = await EmailNotificationsAPI.sendWeeklySummary()
+      if (response.success) {
+        toast({
+          title: "Weekly summary sent",
+          description: response.message || "Check inboxes for recipients with Weekly Summary enabled",
+        })
+      } else {
+        throw new Error(response.error || "Failed to send weekly summary")
+      }
+    } catch (error: any) {
+      toast({
+        title: "Could not send weekly summary",
+        description: error?.response?.data?.error || error.message || "Failed to send weekly summary",
+        variant: "destructive",
+      })
+    } finally {
+      setIsSendingWeeklySummary(false)
+    }
+  }
+
+  const handleSendMonthlySummaryNow = async () => {
+    if (!isAdmin) {
+      toast({
+        title: "Unauthorized",
+        description: "Only admin or manager can send the monthly summary",
+        variant: "destructive",
+      })
+      return
+    }
+    if (!settings.monthlySummary.enabled) {
+      toast({
+        title: "Monthly summary disabled",
+        description: "Enable monthly summary below, then try again",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsSendingMonthlySummary(true)
+    try {
+      const response = await EmailNotificationsAPI.sendMonthlySummary()
+      if (response.success) {
+        toast({
+          title: "Monthly summary sent",
+          description: response.message || "Check inboxes for recipients with Monthly Summary enabled",
+        })
+      } else {
+        throw new Error(response.error || "Failed to send monthly summary")
+      }
+    } catch (error: any) {
+      toast({
+        title: "Could not send monthly summary",
+        description: error?.response?.data?.error || error.message || "Failed to send monthly summary",
+        variant: "destructive",
+      })
+    } finally {
+      setIsSendingMonthlySummary(false)
     }
   }
 
@@ -437,7 +606,7 @@ export function NotificationSettings() {
                           No Login
                         </Badge>
                       )}
-                      {staff.emailNotifications?.enabled ? (
+                      {staffEmailNotificationsOn(staff) ? (
                         <Badge variant="outline" className="text-xs bg-green-50 text-green-700">
                           <CheckCircle2 className="h-3 w-3 mr-1" />
                           Notifications ON
@@ -463,7 +632,7 @@ export function NotificationSettings() {
                       size="sm"
                       variant="outline"
                       onClick={() => openPreferencesModal(staff._id)}
-                      disabled={isTenantAdmin || !recipientSwitchOn}
+                      disabled={!isTenantAdmin && !recipientSwitchOn}
                     >
                       Configure
                     </Button>
@@ -476,6 +645,283 @@ export function NotificationSettings() {
         </CardContent>
       </Card>
 
+      {/* Daily Summary */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <BarChart3 className="h-5 w-5 text-indigo-600" />
+            Daily Summary Report
+          </CardTitle>
+          <CardDescription>
+            End-of-day business snapshot with revenue, charts, and key stats — emailed to owners and
+            staff who opt in under Configure above.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between p-4 border rounded-lg">
+            <div>
+              <p className="font-medium text-slate-900">Enable daily summary emails</p>
+              <p className="text-sm text-slate-600">Send the summary report automatically or on demand</p>
+            </div>
+            <Switch
+              checked={settings.dailySummary.enabled}
+              disabled={!canEdit}
+              onCheckedChange={(checked) =>
+                setSettings((prev) => ({
+                  ...prev,
+                  dailySummary: { ...prev.dailySummary, enabled: checked },
+                }))
+              }
+            />
+          </div>
+          <div className="flex items-center justify-between p-4 border rounded-lg bg-slate-50">
+            <div>
+              <p className="font-medium text-slate-900">Schedule</p>
+              <p className="text-sm text-slate-600">
+                {settings.dailySummary.mode === "afterClosing"
+                  ? "Sent after you verify & lock the cash registry day"
+                  : `Sent every day at ${settings.dailySummary.time} IST`}
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between p-4 border rounded-lg">
+            <div>
+              <p className="font-medium text-slate-900">Send now</p>
+              <p className="text-sm text-slate-600">
+                Email today&apos;s summary immediately to all recipients with Daily Summary enabled
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              className="shrink-0 border-indigo-200 text-indigo-700 hover:bg-indigo-50"
+              disabled={!isAdmin || !settings.dailySummary.enabled || isSendingDailySummary}
+              onClick={() => void handleSendDailySummaryNow()}
+            >
+              {isSendingDailySummary ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Sending…
+                </>
+              ) : (
+                <>
+                  <Mail className="mr-2 h-4 w-4" />
+                  Send today&apos;s summary
+                </>
+              )}
+            </Button>
+          </div>
+          <p className="text-sm text-slate-500">
+            Recipients: enable <span className="font-medium">Daily Summary</span> under each staff
+            member&apos;s Configure preferences. Admin login emails are always included when enabled.
+          </p>
+        </CardContent>
+      </Card>
+
+      {/* Weekly Summary */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <TrendingUp className="h-5 w-5 text-violet-600" />
+            Weekly Summary Report
+          </CardTitle>
+          <CardDescription>
+            Monday-morning recap of the previous Mon–Sun week — revenue trend, top services,
+            customer mix, appointment funnel, and staff leaderboard.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between p-4 border rounded-lg">
+            <div>
+              <p className="font-medium text-slate-900">Enable weekly summary emails</p>
+              <p className="text-sm text-slate-600">Send the report automatically or on demand</p>
+            </div>
+            <Switch
+              checked={settings.weeklySummary.enabled}
+              disabled={!canEdit}
+              onCheckedChange={(checked) =>
+                setSettings((prev) => ({
+                  ...prev,
+                  weeklySummary: { ...prev.weeklySummary, enabled: checked },
+                }))
+              }
+            />
+          </div>
+          <div className="flex items-center justify-between p-4 border rounded-lg bg-slate-50">
+            <div>
+              <p className="font-medium text-slate-900">Schedule</p>
+              <p className="text-sm text-slate-600">
+                Sent every {settings.weeklySummary.day} at {settings.weeklySummary.time} IST (previous Mon–Sun week)
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between p-4 border rounded-lg">
+            <div>
+              <p className="font-medium text-slate-900">Send now</p>
+              <p className="text-sm text-slate-600">
+                Email last week&apos;s summary immediately to all recipients with Weekly Summary enabled
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              className="shrink-0 border-violet-200 text-violet-700 hover:bg-violet-50"
+              disabled={!isAdmin || !settings.weeklySummary.enabled || isSendingWeeklySummary}
+              onClick={() => void handleSendWeeklySummaryNow()}
+            >
+              {isSendingWeeklySummary ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Sending…
+                </>
+              ) : (
+                <>
+                  <Mail className="mr-2 h-4 w-4" />
+                  Send last week&apos;s summary
+                </>
+              )}
+            </Button>
+          </div>
+          <p className="text-sm text-slate-500">
+            Recipients: enable <span className="font-medium">Weekly Summary</span> under each staff
+            member&apos;s Configure preferences. Admin login emails are always included when enabled.
+          </p>
+        </CardContent>
+      </Card>
+
+      {/* Monthly Summary */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <CalendarDays className="h-5 w-5 text-indigo-600" />
+            Monthly Summary Report
+          </CardTitle>
+          <CardDescription>
+            Sent on the 1st of each month at 9 AM IST — full calendar-month recap with revenue vs goal,
+            category breakdown, 6-month trend, VIP clients, customer health, milestones, and forecast.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between p-4 border rounded-lg">
+            <div>
+              <p className="font-medium text-slate-900">Enable monthly summary emails</p>
+              <p className="text-sm text-slate-600">Send the report automatically or on demand</p>
+            </div>
+            <Switch
+              checked={settings.monthlySummary.enabled}
+              disabled={!canEdit}
+              onCheckedChange={(checked) =>
+                setSettings((prev) => ({
+                  ...prev,
+                  monthlySummary: { ...prev.monthlySummary, enabled: checked },
+                }))
+              }
+            />
+          </div>
+          <div className="flex items-center justify-between p-4 border rounded-lg bg-slate-50">
+            <div>
+              <p className="font-medium text-slate-900">Schedule</p>
+              <p className="text-sm text-slate-600">
+                Sent on the 1st of each month at {settings.monthlySummary.time} IST (previous calendar month)
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between p-4 border rounded-lg">
+            <div>
+              <p className="font-medium text-slate-900">Send now</p>
+              <p className="text-sm text-slate-600">
+                Email last month&apos;s summary immediately to all recipients with Monthly Summary enabled
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              className="shrink-0 border-indigo-200 text-indigo-700 hover:bg-indigo-50"
+              disabled={!isAdmin || !settings.monthlySummary.enabled || isSendingMonthlySummary}
+              onClick={() => void handleSendMonthlySummaryNow()}
+            >
+              {isSendingMonthlySummary ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Sending…
+                </>
+              ) : (
+                <>
+                  <Mail className="mr-2 h-4 w-4" />
+                  Send last month&apos;s summary
+                </>
+              )}
+            </Button>
+          </div>
+          <p className="text-sm text-slate-500">
+            Recipients: enable <span className="font-medium">Monthly Summary</span> under each staff
+            member&apos;s Configure preferences. Admin login emails are always included when enabled.
+          </p>
+        </CardContent>
+      </Card>
+
+      {/* Payroll / Salary Slip — Pro only */}
+      {canPayroll && (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Banknote className="h-5 w-5 text-emerald-600" />
+            Payroll & Salary Slip
+          </CardTitle>
+          <CardDescription>
+            Salary slips are emailed to admin recipients on the 1st of each month for the previous
+            month&apos;s payroll (e.g. July payroll on 1 August). One email includes all staff with
+            base, commission, deductions, net pay, and all salary slip PDFs attached.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between p-4 border rounded-lg">
+            <div>
+              <p className="font-medium text-slate-900">Enable payroll emails</p>
+              <p className="text-sm text-slate-600">Send salary slip notifications on the 1st of each month</p>
+            </div>
+            <Switch
+              checked={settings.payrollNotifications.enabled}
+              disabled={!canEdit}
+              onCheckedChange={(checked) =>
+                setSettings((prev) => ({
+                  ...prev,
+                  payrollNotifications: { ...prev.payrollNotifications, enabled: checked },
+                }))
+              }
+            />
+          </div>
+          <div className="flex items-center justify-between p-4 border rounded-lg bg-slate-50">
+            <div>
+              <p className="font-medium text-slate-900">Schedule</p>
+              <p className="text-sm text-slate-600">
+                Sent on the 1st of each month at {settings.payrollNotifications.time} IST for the previous month&apos;s payroll
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center justify-between p-4 border rounded-lg">
+            <div>
+              <p className="font-medium text-slate-900">Attach salary slip PDF</p>
+              <p className="text-sm text-slate-600">Include the PDF salary slip as an email attachment</p>
+            </div>
+            <Switch
+              checked={settings.payrollNotifications.attachSalarySlip}
+              disabled={!canEdit || !settings.payrollNotifications.enabled}
+              onCheckedChange={(checked) =>
+                setSettings((prev) => ({
+                  ...prev,
+                  payrollNotifications: { ...prev.payrollNotifications, attachSalarySlip: checked },
+                }))
+              }
+            />
+          </div>
+          <p className="text-sm text-slate-500">
+            Recipients: enable <span className="font-medium">Payroll / Salary slip</span> under each staff member&apos;s
+            Configure preferences above. Admin login emails are always included when enabled.
+          </p>
+        </CardContent>
+      </Card>
+      )}
 
       {/* Save Button */}
       <div className="flex justify-end items-center gap-3">

@@ -61,6 +61,24 @@ const staffSchema = new mongoose.Schema({
     startTime: { type: String, default: '09:00' }, // 24h "HH:mm"
     endTime: { type: String, default: '21:00' }    // 24h "HH:mm"
   }],
+  /** Assigned shift from Attendance & Payroll settings (attendance.shifts) */
+  shiftId: {
+    type: String,
+    default: '',
+    trim: true,
+  },
+  /**
+   * Per-staff overrides on business Attendance & Payroll rules. When
+   * useBusinessRules is true (default) the business defaults apply; individual
+   * fields override only when useBusinessRules is false.
+   */
+  payrollOverrides: {
+    useBusinessRules: { type: Boolean, default: true },
+    salary: { type: Number, default: null },
+    lateDeductionEnabled: { type: Boolean, default: null },
+    overtimeEnabled: { type: Boolean, default: null },
+    commissionPercent: { type: Number, default: null },
+  },
   permissions: [{
     module: { type: String, required: true },
     feature: { type: String, required: true },
@@ -97,7 +115,10 @@ const staffSchema = new mongoose.Schema({
     preferences: {
       dailySummary: { type: Boolean, default: false },
       weeklySummary: { type: Boolean, default: false },
+      monthlySummary: { type: Boolean, default: false },
       staffIncentiveSummary: { type: Boolean, default: false },
+      payrollSlip: { type: Boolean, default: false },
+      timesheetReport: { type: Boolean, default: false },
       appointmentAlerts: { type: Boolean, default: false },
       receiptAlerts: { type: Boolean, default: false },
       exportAlerts: { type: Boolean, default: false },

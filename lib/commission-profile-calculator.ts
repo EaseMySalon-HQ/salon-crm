@@ -2,6 +2,7 @@ import { CommissionProfile, type CommissionProfileType } from './commission-prof
 import {
   getAttributedRevenueForStaff,
   staffIsAttributedToLineItem,
+  getLinePreTaxTotal,
 } from './staff-line-revenue'
 
 export interface SaleItem {
@@ -28,6 +29,8 @@ export interface SaleItem {
     percentage?: number
     amount?: number
   }>
+  /** Units attributed to this staff on the line (after split). */
+  attributedUnits?: number
 }
 
 function normalizeSaleLineServiceId(
@@ -172,6 +175,22 @@ export function enrichSalesWithProductIdsFromCatalog(
   }
 }
 
+function getLineQuantity(item: Pick<SaleItem, 'quantity'>): number {
+  const q = Number(item.quantity)
+  return Number.isFinite(q) && q > 0 ? q : 1
+}
+
+function getAttributedUnits(
+  item: SaleItem,
+  attributedRevenue: number
+): number {
+  const units = getLineQuantity(item)
+  const linePreTax = getLinePreTaxTotal(item)
+  const attr = Math.max(0, Number(attributedRevenue) || 0)
+  if (linePreTax <= 0) return units
+  return units * (attr / linePreTax)
+}
+
 export class CommissionProfileCalculator {
   /**
    * Calculate commission for a single sale based on staff's commission profiles
@@ -188,10 +207,14 @@ export class CommissionProfileCalculator {
       .filter((item) =>
         staffIsAttributedToLineItem(item, staffId, staffName, saleFallback)
       )
-      .map((item) => ({
-        ...item,
-        total: getAttributedRevenueForStaff(item, staffId, staffName, saleFallback),
-      }))
+      .map((item) => {
+        const attributedTotal = getAttributedRevenueForStaff(item, staffId, staffName, saleFallback)
+        return {
+          ...item,
+          total: attributedTotal,
+          attributedUnits: getAttributedUnits(item, attributedTotal),
+        }
+      })
 
     if (staffItems.length === 0) {
       return null
@@ -518,7 +541,7 @@ export class CommissionProfileCalculator {
    * Lines without serviceId or without a matching rule earn 0.
    */
   /**
-   * Per-catalog-product rules: attributed line amount × % or flat ₹ per invoice line row.
+   * Per-catalog-product rules: attributed line amount × % or flat ₹ per unit sold.
    */
   private static calculateProductBasedCommission(
     productStaffItems: Array<SaleItem & { total: number }>,
@@ -553,15 +576,16 @@ export class CommissionProfileCalculator {
       if (attributed <= 0) continue
 
       let lineCommission = 0
+      const units = Math.max(0, Number(item.attributedUnits) || getLineQuantity(item))
       if (rule.calculateBy === 'percent') {
         lineCommission = (attributed * rule.value) / 100
       } else {
-        lineCommission = rule.value
+        lineCommission = rule.value * units
       }
 
       commission += lineCommission
       revenue += attributed
-      itemCount += 1
+      itemCount += units
     }
 
     return { commission, revenue, itemCount }
@@ -599,16 +623,16 @@ export class CommissionProfileCalculator {
       if (attributed <= 0) continue
 
       let lineCommission = 0
+      const units = Math.max(0, Number(item.attributedUnits) || getLineQuantity(item))
       if (rule.calculateBy === 'percent') {
         lineCommission = (attributed * rule.value) / 100
       } else {
-        // Fixed ₹ once per invoice line row (not multiplied by quantity)
-        lineCommission = rule.value
+        lineCommission = rule.value * units
       }
 
       commission += lineCommission
       revenue += attributed
-      itemCount += 1
+      itemCount += units
     }
 
     return { commission, revenue, itemCount }

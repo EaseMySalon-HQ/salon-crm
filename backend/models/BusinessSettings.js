@@ -85,7 +85,10 @@ const businessSettingsSchema = new mongoose.Schema({
 
   /** Wallet / reward redemption rules at billing (merged with defaults in API). */
   paymentConfiguration: { type: mongoose.Schema.Types.Mixed, default: undefined },
-  
+
+  /** Attendance & Payroll business defaults (merged with defaults in API). */
+  attendancePayroll: { type: mongoose.Schema.Types.Mixed, default: undefined },
+
   // Multi-tenant support
   branchId: {
     type: mongoose.Schema.Types.ObjectId,

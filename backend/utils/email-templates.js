@@ -3,180 +3,83 @@
  * Generates HTML and plain text email templates
  */
 
-function dailySummary({
-  businessName,
-  date,
-  dateFormatted,
-  logoUrl,
-  totalBillCount,
-  totalCustomerCount,
-  totalSales,
-  totalSalesCash,
-  totalSalesOnline,
-  totalSalesCard,
-  duesCollected,
-  cashExpense,
-  tipCollected,
-  cashBalance
-}) {
-  const fmt = (n) => (n != null && Number.isFinite(n) ? Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '0');
-  const fmtInt = (n) => (n != null && Number.isFinite(n) ? String(Math.round(n)) : '0');
-  const displayDate = dateFormatted || date;
+const { renderDailySummaryEmail } = require('../lib/daily-summary-email');
 
-  const html = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="utf-8">
-      <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; }
-        .container { max-width: 600px; margin: 0 auto; padding: 24px; }
-        .logo { max-height: 48px; max-width: 180px; display: block; margin-bottom: 16px; }
-        .branch-name { font-size: 18px; font-weight: 600; color: #1e293b; margin-bottom: 8px; }
-        .report-title { font-size: 20px; font-weight: 700; color: #334155; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 2px solid #e2e8f0; }
-        .content { background: #f8fafc; padding: 24px; border-radius: 12px; }
-        .row { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: #fff; margin-bottom: 8px; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
-        .row:nth-child(even) { background: #f1f5f9; }
-        .label { color: #475569; font-weight: 500; }
-        .value { font-weight: 700; color: #0f172a; }
-        .footer { text-align: center; margin-top: 24px; color: #94a3b8; font-size: 12px; }
-      </style>
-    </head>
-    <body>
-      <div class="container">
-        ${logoUrl ? `<img src="${logoUrl}" alt="EaseMySalon" class="logo" />` : ''}
-        <div class="branch-name">${businessName || 'Branch'}</div>
-        <div class="report-title">Daily Summary Report for ${displayDate}</div>
-        <div class="content">
-          <div class="row"><span class="label">1. Total Bill Count</span><span class="value">${fmtInt(totalBillCount)}</span></div>
-          <div class="row"><span class="label">2. Total Customer Count</span><span class="value">${fmtInt(totalCustomerCount)}</span></div>
-          <div class="row"><span class="label">3. Total Sales</span><span class="value">₹${fmt(totalSales)}</span></div>
-          <div class="row"><span class="label">4. Total Sales (Cash)</span><span class="value">₹${fmt(totalSalesCash)}</span></div>
-          <div class="row"><span class="label">5. Total Sales (Online)</span><span class="value">₹${fmt(totalSalesOnline)}</span></div>
-          <div class="row"><span class="label">6. Total Sales (Card)</span><span class="value">₹${fmt(totalSalesCard)}</span></div>
-          <div class="row"><span class="label">7. Dues Collected</span><span class="value">₹${fmt(duesCollected)}</span></div>
-          <div class="row"><span class="label">8. Cash Expense</span><span class="value">₹${fmt(cashExpense)}</span></div>
-          <div class="row"><span class="label">9. Tip Collected</span><span class="value">₹${fmt(tipCollected)}</span></div>
-          <div class="row"><span class="label">10. Cash Balance</span><span class="value">₹${fmt(cashBalance)}</span></div>
-        </div>
-        <div class="footer">
-          <p>This is an automated email from EaseMySalon</p>
-        </div>
-      </div>
-    </body>
-    </html>
-  `;
-
-  const text = `
-EaseMySalon
-${businessName || 'Branch'}
-Daily Summary Report for ${displayDate}
-
-1. Total Bill Count: ${fmtInt(totalBillCount)}
-2. Total Customer Count: ${fmtInt(totalCustomerCount)}
-3. Total Sales: ₹${fmt(totalSales)}
-4. Total Sales (Cash): ₹${fmt(totalSalesCash)}
-5. Total Sales (Online): ₹${fmt(totalSalesOnline)}
-6. Total Sales (Card): ₹${fmt(totalSalesCard)}
-7. Dues Collected: ₹${fmt(duesCollected)}
-8. Cash Expense: ₹${fmt(cashExpense)}
-9. Tip Collected: ₹${fmt(tipCollected)}
-10. Cash Balance: ₹${fmt(cashBalance)}
-
-This is an automated email from EaseMySalon
-  `;
-
-  return { html, text };
+/** @deprecated Use renderDailySummaryEmail via daily-summary-dispatch — kept for compatibility */
+function dailySummary(params) {
+  return renderDailySummaryEmail(
+    {
+      branchName: params.businessName,
+      date: params.date,
+      dateFormatted: params.dateFormatted,
+      todayBills: params.totalBillCount ?? params.todayBills ?? 0,
+      todayAppointments: params.todayAppointments ?? 0,
+      todayCancelledBills: params.todayCancelledBills ?? 0,
+      todayNetRevenue: params.todayNetRevenue ?? params.totalSales ?? 0,
+      todayGrossRevenue: params.todayGrossRevenue ?? params.totalSales ?? 0,
+      revenueByCategory: params.revenueByCategory ?? {
+        services: 0,
+        products: 0,
+        packages: 0,
+        membership: 0,
+        prepaid: 0,
+      },
+      paymentMode: params.paymentMode ?? {
+        cash: params.totalSalesCash ?? 0,
+        online: params.totalSalesOnline ?? 0,
+        card: params.totalSalesCard ?? 0,
+      },
+      averageBillValue: params.averageBillValue ?? 0,
+      duesCollected: params.duesCollected ?? 0,
+      cashExpense: params.cashExpense ?? 0,
+      tipCollected: params.tipCollected ?? 0,
+      cashBalance: params.cashBalance ?? 0,
+      feedbackReceived: params.feedbackReceived ?? 0,
+      consentFormReceived: params.consentFormReceived ?? 0,
+      yesterdayNetRevenue: params.yesterdayNetRevenue ?? 0,
+      last7DayAvgRevenue: params.last7DayAvgRevenue ?? 0,
+      monthToDateRevenue: params.monthToDateRevenue ?? 0,
+      monthToDateBills: params.monthToDateBills ?? 0,
+    },
+    params.charts || {},
+    {
+      ownerName: params.ownerName,
+      logoUrl: params.logoUrl,
+      dashboardUrl: params.dashboardUrl,
+      settingsUrl: params.settingsUrl,
+    }
+  );
 }
 
-function weeklySummary({ businessName, weekStart, weekEnd, totalRevenue, totalSales, appointmentCount, newClients, revenueGrowth, topServices, topProducts }) {
-  const html = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="utf-8">
-      <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
-        .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
-        .stat-box { background: white; padding: 20px; margin: 15px 0; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .stat-value { font-size: 32px; font-weight: bold; color: #667eea; }
-        .stat-label { color: #666; font-size: 14px; margin-top: 5px; }
-        .growth { color: #10b981; font-weight: bold; }
-        .section-title { font-size: 18px; font-weight: bold; margin: 20px 0 10px 0; color: #333; }
-        .footer { text-align: center; margin-top: 30px; color: #999; font-size: 12px; }
-      </style>
-    </head>
-    <body>
-      <div class="container">
-        <div class="header">
-          <h1>📈 Weekly Business Summary</h1>
-          <p>${weekStart} to ${weekEnd}</p>
-        </div>
-        <div class="content">
-          <h2>Hello ${businessName},</h2>
-          <p>Here's your weekly business summary:</p>
-          
-          <div class="stat-box">
-            <div class="stat-value">₹${totalRevenue?.toLocaleString() || '0'}</div>
-            <div class="stat-label">Total Revenue This Week</div>
-            ${revenueGrowth ? `<div class="growth">${revenueGrowth > 0 ? '+' : ''}${revenueGrowth}% vs last week</div>` : ''}
-          </div>
-          
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
-            <div class="stat-box">
-              <div class="stat-value">${totalSales || 0}</div>
-              <div class="stat-label">Total Sales</div>
-            </div>
-            <div class="stat-box">
-              <div class="stat-value">${appointmentCount || 0}</div>
-              <div class="stat-label">Appointments</div>
-            </div>
-          </div>
-          
-          <div class="stat-box">
-            <div class="stat-value">${newClients || 0}</div>
-            <div class="stat-label">New Clients This Week</div>
-          </div>
-          
-          ${topServices && topServices.length > 0 ? `
-            <div class="section-title">Top Services This Week</div>
-            ${topServices.map(service => `
-              <div style="padding: 10px; background: white; margin: 5px 0; border-radius: 5px;">
-                <strong>${service.name}</strong> - ${service.count} bookings
-              </div>
-            `).join('')}
-          ` : ''}
-          
-          <div class="footer">
-            <p>This is an automated email from EaseMySalon CRM</p>
-          </div>
-        </div>
-      </div>
-    </body>
-    </html>
-  `;
-
-  const text = `
-Weekly Business Summary - ${weekStart} to ${weekEnd}
-
-Hello ${businessName},
-
-Here's your weekly business summary:
-
-Total Revenue: ₹${totalRevenue?.toLocaleString() || '0'}
-${revenueGrowth ? `Growth: ${revenueGrowth > 0 ? '+' : ''}${revenueGrowth}% vs last week\n` : ''}
-Total Sales: ${totalSales || 0}
-Appointments: ${appointmentCount || 0}
-New Clients: ${newClients || 0}
-
-${topServices && topServices.length > 0 ? `Top Services:\n${topServices.map(s => `- ${s.name}: ${s.count} bookings`).join('\n')}\n` : ''}
-
-This is an automated email from EaseMySalon CRM
-  `;
-
-  return { html, text };
+function weeklySummary(params) {
+  const { renderWeeklySummaryEmail } = require('../lib/weekly-summary-email');
+  const { buildWeeklySummaryChartUrls } = require('../lib/weekly-summary-charts');
+  const data = {
+    branchName: params.businessName,
+    weekStartDate: params.weekStartDate || params.weekStart,
+    weekEndDate: params.weekEndDate || params.weekEnd,
+    weekRangeFormatted: params.weekRangeFormatted,
+    weekTotalRevenue: params.weekTotalRevenue ?? params.totalRevenue,
+    weekTotalBills: params.weekTotalBills ?? params.totalSales,
+    weekTotalAppointments: params.weekTotalAppointments ?? params.appointmentCount,
+    previousWeekTotalRevenue: params.previousWeekTotalRevenue,
+    dailyRevenue: params.dailyRevenue,
+    bestDay: params.bestDay,
+    slowestDay: params.slowestDay,
+    topServices: params.topServices,
+    newCustomers: params.newCustomers ?? params.newClients,
+    returningCustomers: params.returningCustomers,
+    appointmentFunnel: params.appointmentFunnel,
+    staffLeaderboard: params.staffLeaderboard,
+    weeklyRevenueGoal: params.weeklyRevenueGoal,
+    weeksSinceBest: params.weeksSinceBest,
+  };
+  const charts = buildWeeklySummaryChartUrls(data);
+  return renderWeeklySummaryEmail(data, charts, {
+    ownerName: params.ownerName,
+    logoUrl: params.logoUrl,
+    dashboardUrl: params.dashboardUrl,
+  });
 }
 
 function receipt({ clientName, receiptNumber, businessName, date, items, subtotal, tax, discount, total, paymentMethod, receiptLink }) {
@@ -897,10 +800,337 @@ function staffIncentiveSummary({
   return { html, text: textLines.filter(Boolean).join('\n') };
 }
 
+function staffTimesheetReport({
+  businessName,
+  staffName,
+  periodLabel,
+  daysWithCheckIn,
+  totalHours,
+  rowCount,
+  logoUrl,
+}) {
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #334155; margin: 0; }
+        .container { max-width: 600px; margin: 0 auto; padding: 24px; }
+        .logo { max-height: 48px; max-width: 180px; display: block; margin-bottom: 16px; }
+        .branch-name { font-size: 18px; font-weight: 600; color: #1e293b; margin-bottom: 4px; }
+        .title { font-size: 20px; font-weight: 700; color: #334155; margin: 16px 0 4px; }
+        .period { color: #64748b; margin-bottom: 20px; }
+        .greeting { font-size: 16px; font-weight: 600; color: #0f172a; margin-bottom: 12px; }
+        .stats { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin: 16px 0; }
+        .stat-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 14px; }
+        .stat-label { color: #64748b; }
+        .stat-value { font-weight: 600; color: #0f172a; }
+        .attachment { background: #eff6ff; border-left: 4px solid #3b82f6; padding: 14px 16px; margin-top: 20px; border-radius: 6px; color: #1e40af; }
+        .footer { text-align: center; margin-top: 24px; color: #94a3b8; font-size: 12px; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        ${logoUrl ? `<img src="${logoUrl}" alt="Logo" class="logo" />` : ''}
+        <div class="branch-name">${businessName || 'EaseMySalon'}</div>
+        <div class="title">Timesheet Report</div>
+        <div class="period">${periodLabel || ''}</div>
+        <div class="greeting">Hi ${staffName || 'there'},</div>
+        <p>Your timesheet for the period above is attached to this email.</p>
+        <div class="stats">
+          <div class="stat-row"><span class="stat-label">Days in period</span><span class="stat-value">${rowCount || 0}</span></div>
+          <div class="stat-row"><span class="stat-label">Days with check-in</span><span class="stat-value">${daysWithCheckIn || 0}</span></div>
+          <div class="stat-row"><span class="stat-label">Total logged time</span><span class="stat-value">${totalHours || '0m'}</span></div>
+        </div>
+        <div class="attachment">
+          <strong>Timesheets attached (Excel + PDF)</strong> — Includes scheduled hours, check-in/out, duration, status, and block times for each day.
+        </div>
+        <div class="footer">
+          <p>This is an automated email from EaseMySalon</p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  const text = [
+    businessName || 'EaseMySalon',
+    `Timesheet Report — ${periodLabel || ''}`,
+    '',
+    `Hi ${staffName || 'there'},`,
+    '',
+    'Your timesheet for the period above is attached to this email.',
+    '',
+    `Days in period: ${rowCount || 0}`,
+    `Days with check-in: ${daysWithCheckIn || 0}`,
+    `Total logged time: ${totalHours || '0m'}`,
+    '',
+    `Timesheet attached (Excel + PDF).`,
+    '',
+    'This is an automated email from EaseMySalon',
+  ].join('\n');
+
+  return { html, text };
+}
+
+function staffPayrollSummary({
+  businessName,
+  periodLabel,
+  logoUrl,
+  rows = [],
+  totals = {},
+  attachmentCount = 0,
+}) {
+  const tableRows = (rows || [])
+    .map(
+      (row) => `
+          <tr>
+            <td style="padding: 10px 8px; border-bottom: 1px solid #e2e8f0;">
+              <strong>${row.staffName || '—'}</strong>
+              ${row.role ? `<br><span style="font-size: 12px; color: #64748b;">${row.role}</span>` : ''}
+            </td>
+            <td style="padding: 10px 8px; border-bottom: 1px solid #e2e8f0; text-align: right; white-space: nowrap;">${row.baseSalary}</td>
+            <td style="padding: 10px 8px; border-bottom: 1px solid #e2e8f0; text-align: right; white-space: nowrap;">${row.commission}</td>
+            <td style="padding: 10px 8px; border-bottom: 1px solid #e2e8f0; text-align: right; white-space: nowrap; color: #b91c1c;">${row.deductions}</td>
+            <td style="padding: 10px 8px; border-bottom: 1px solid #e2e8f0; text-align: right; white-space: nowrap; font-weight: 700;">${row.netPay}</td>
+          </tr>`
+    )
+    .join('');
+
+  const emptyRow =
+    rows && rows.length > 0
+      ? ''
+      : `<tr><td colspan="5" style="padding: 16px; text-align: center; color: #64748b;">No payroll records for this period.</td></tr>`;
+
+  const totalsRow =
+    rows && rows.length > 0
+      ? `
+          <tr style="background: #ecfdf5;">
+            <td style="padding: 12px 8px; font-weight: 700;">Total (${totals.staffCount || rows.length} staff)</td>
+            <td style="padding: 12px 8px; text-align: right; font-weight: 700; white-space: nowrap;">${totals.baseSalary || '—'}</td>
+            <td style="padding: 12px 8px; text-align: right; font-weight: 700; white-space: nowrap;">${totals.commission || '—'}</td>
+            <td style="padding: 12px 8px; text-align: right; font-weight: 700; white-space: nowrap; color: #b91c1c;">${totals.deductions || '—'}</td>
+            <td style="padding: 12px 8px; text-align: right; font-weight: 700; white-space: nowrap; color: #065f46;">${totals.netPay || '—'}</td>
+          </tr>`
+      : '';
+
+  const attachmentNote =
+    attachmentCount > 0
+      ? `<div style="background: #eff6ff; border-left: 4px solid #3b82f6; padding: 14px 16px; margin-top: 20px; border-radius: 6px; color: #1e40af;">
+           <strong>${attachmentCount} salary slip PDF${attachmentCount === 1 ? '' : 's'} attached</strong> — Individual payslips for each staff member are attached to this email.
+         </div>`
+      : '';
+
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #334155; margin: 0; }
+        .container { max-width: 720px; margin: 0 auto; padding: 24px; }
+        .logo { max-height: 48px; max-width: 180px; display: block; margin-bottom: 16px; }
+        .branch-name { font-size: 18px; font-weight: 600; color: #1e293b; margin-bottom: 4px; }
+        .title { font-size: 20px; font-weight: 700; color: #334155; margin: 16px 0 4px; }
+        .period { color: #64748b; margin-bottom: 20px; }
+        table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; }
+        th { background: #f8fafc; text-align: left; padding: 10px 8px; font-size: 12px; color: #475569; border-bottom: 2px solid #e2e8f0; text-transform: uppercase; letter-spacing: 0.04em; }
+        th.num { text-align: right; }
+        .footer { text-align: center; margin-top: 24px; color: #94a3b8; font-size: 12px; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        ${logoUrl ? `<img src="${logoUrl}" alt="Logo" class="logo" />` : ''}
+        <div class="branch-name">${businessName || 'EaseMySalon'}</div>
+        <div class="title">Monthly Payroll Summary</div>
+        <div class="period">${periodLabel || ''}</div>
+        <table>
+          <thead>
+            <tr>
+              <th>Staff</th>
+              <th class="num">Base</th>
+              <th class="num">Commission</th>
+              <th class="num">Deductions</th>
+              <th class="num">Net pay</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tableRows}${emptyRow}${totalsRow}
+          </tbody>
+        </table>
+        ${attachmentNote}
+        <div class="footer">
+          <p>This is an automated email from EaseMySalon</p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  const textLines = [
+    businessName || 'EaseMySalon',
+    `Monthly Payroll Summary — ${periodLabel || ''}`,
+    '',
+  ];
+
+  for (const row of rows || []) {
+    textLines.push(
+      `${row.staffName || 'Staff'}${row.role ? ` (${row.role})` : ''}`,
+      `  Base: ${row.baseSalary}`,
+      `  Commission: ${row.commission}`,
+      `  Deductions: ${row.deductions}`,
+      `  Net pay: ${row.netPay}`,
+      ''
+    );
+  }
+
+  if (rows && rows.length > 0) {
+    textLines.push(
+      `Total (${totals.staffCount || rows.length} staff)`,
+      `  Base: ${totals.baseSalary || '—'}`,
+      `  Commission: ${totals.commission || '—'}`,
+      `  Deductions: ${totals.deductions || '—'}`,
+      `  Net pay: ${totals.netPay || '—'}`,
+      ''
+    );
+  }
+
+  if (attachmentCount > 0) {
+    textLines.push(`${attachmentCount} salary slip PDF(s) attached to this email.`, '');
+  }
+
+  textLines.push('This is an automated email from EaseMySalon');
+
+  return { html, text: textLines.filter(Boolean).join('\n') };
+}
+
+function staffPayrollSlip({
+  businessName,
+  periodLabel,
+  staffName,
+  role,
+  baseSalary,
+  commission,
+  deductions,
+  netPay,
+  paymentMethod,
+  paidAt,
+  logoUrl,
+  hasAttachment = true,
+}) {
+  const paidLine =
+    paidAt && paymentMethod
+      ? `<p style="margin: 12px 0 0; color: #475569; font-size: 14px;">Paid via <strong>${paymentMethod}</strong> on <strong>${paidAt}</strong></p>`
+      : '';
+
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #334155; margin: 0; }
+        .container { max-width: 600px; margin: 0 auto; padding: 24px; }
+        .logo { max-height: 48px; max-width: 180px; display: block; margin-bottom: 16px; }
+        .branch-name { font-size: 18px; font-weight: 600; color: #1e293b; margin-bottom: 4px; }
+        .title { font-size: 20px; font-weight: 700; color: #334155; margin: 16px 0 4px; }
+        .period { color: #64748b; margin-bottom: 20px; }
+        .staff-name { font-size: 18px; font-weight: 700; color: #0f172a; margin-bottom: 4px; }
+        .staff-role { color: #64748b; font-size: 14px; margin-bottom: 16px; }
+        table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; }
+        th, td { padding: 12px 14px; border-bottom: 1px solid #e2e8f0; }
+        th { background: #f8fafc; text-align: left; font-size: 12px; color: #475569; text-transform: uppercase; letter-spacing: 0.04em; }
+        td.amount { text-align: right; font-weight: 600; white-space: nowrap; }
+        tr.net td { background: #ecfdf5; font-size: 16px; font-weight: 700; color: #065f46; border-bottom: none; }
+        .attachment { background: #eff6ff; border-left: 4px solid #3b82f6; padding: 14px 16px; margin-top: 20px; border-radius: 6px; color: #1e40af; }
+        .footer { text-align: center; margin-top: 24px; color: #94a3b8; font-size: 12px; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        ${logoUrl ? `<img src="${logoUrl}" alt="Logo" class="logo" />` : ''}
+        <div class="branch-name">${businessName || 'EaseMySalon'}</div>
+        <div class="title">Salary Slip</div>
+        <div class="period">${periodLabel || ''}</div>
+
+        <div class="staff-name">${staffName || 'Staff'}</div>
+        ${role ? `<div class="staff-role">${role}</div>` : ''}
+
+        <table>
+          <thead>
+            <tr>
+              <th>Component</th>
+              <th class="amount">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Base salary</td>
+              <td class="amount">${baseSalary}</td>
+            </tr>
+            <tr>
+              <td>Commission</td>
+              <td class="amount">${commission}</td>
+            </tr>
+            <tr>
+              <td>Deductions</td>
+              <td class="amount" style="color:#b91c1c;">${deductions}</td>
+            </tr>
+            <tr class="net">
+              <td>Net pay</td>
+              <td class="amount">${netPay}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        ${paidLine}
+
+        ${
+          hasAttachment
+            ? `<div class="attachment"><strong>Salary slip attached</strong> — The PDF salary slip for ${staffName || 'this staff member'} is attached to this email.</div>`
+            : ''
+        }
+
+        <div class="footer">
+          <p>This is an automated email from EaseMySalon</p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  const text = [
+    businessName || 'EaseMySalon',
+    `Salary Slip — ${periodLabel || ''}`,
+    '',
+    staffName || 'Staff',
+    role ? `Role: ${role}` : '',
+    '',
+    `Base salary: ${baseSalary}`,
+    `Commission: ${commission}`,
+    `Deductions: ${deductions}`,
+    `Net pay: ${netPay}`,
+    paidAt && paymentMethod ? `Paid via ${paymentMethod} on ${paidAt}` : '',
+    '',
+    hasAttachment ? 'Salary slip PDF is attached to this email.' : '',
+    '',
+    'This is an automated email from EaseMySalon',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  return { html, text };
+}
+
 module.exports = {
   dailySummary,
   weeklySummary,
   staffIncentiveSummary,
+  staffPayrollSlip,
+  staffPayrollSummary,
+  staffTimesheetReport,
   receipt,
   appointmentConfirmation,
   appointmentReminder,

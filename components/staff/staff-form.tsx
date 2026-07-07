@@ -15,15 +15,21 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from "@/components/ui/command"
 import { Check, ChevronsUpDown, ChevronDown, ChevronUp } from "lucide-react"
 import { Textarea } from "@/components/ui/textarea"
-import { Checkbox } from "@/components/ui/checkbox"
 import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { ProfilePhotoCropDialog } from "@/components/ui/profile-photo-crop-dialog"
 import { useToast } from "@/hooks/use-toast"
-import { StaffAPI, CommissionProfileAPI } from "@/lib/api"
+import { StaffAPI, CommissionProfileAPI, AttendancePayrollSettingsAPI } from "@/lib/api"
 import { useCurrency } from "@/hooks/use-currency"
+import {
+  applyShiftToWorkSchedule,
+  findShiftById,
+  formatShiftTimeRange,
+  mergeAttendancePayrollSettings,
+  type ShiftTemplate,
+} from "@/lib/attendance-payroll-settings"
 
 const workScheduleDaySchema = z.object({
   day: z.number().min(0).max(6),
@@ -39,23 +45,14 @@ const staffSchema = z.object({
   role: z.enum(["admin", "manager", "staff"], {
     required_error: "Please select a role",
   }),
-  specialties: z.array(z.string()).optional(),
   salary: z.string().optional(),
   commissionProfileIds: z.array(z.string()).optional(),
   hasLoginAccess: z.boolean().optional(),
   allowAppointmentScheduling: z.boolean().optional(),
   password: z.string().optional(),
   notes: z.string().optional(),
+  shiftId: z.string().optional(),
   workSchedule: z.array(workScheduleDaySchema).optional(),
-}).refine((data) => {
-  // If appointment scheduling is enabled, specialties are required
-  if (data.allowAppointmentScheduling && (!data.specialties || data.specialties.length === 0)) {
-    return false;
-  }
-  return true;
-}, {
-  message: "Please select at least one specialty when appointment scheduling is enabled",
-  path: ["specialties"],
 })
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
@@ -85,19 +82,6 @@ function getDefaultWorkSchedule(existing?: Array<{ day: number; enabled?: boolea
   return DAY_NAMES.map((_, day) => byDay.get(day) ?? defaultRow(day))
 }
 
-const specialtyOptions = [
-  "Haircut",
-  "Hair Color",
-  "Hair Styling",
-  "Manicure",
-  "Pedicure",
-  "Facial",
-  "Massage",
-  "Eyebrow Threading",
-  "Makeup",
-  "Hair Extensions",
-]
-
 interface StaffFormProps {
   staff?: any
   onSuccess?: () => void
@@ -114,6 +98,8 @@ export function StaffForm({ staff, onSuccess, onResetPassword }: StaffFormProps)
   const [loadingProfiles, setLoadingProfiles] = useState(true)
   const [commissionDropdownOpen, setCommissionDropdownOpen] = useState(false)
   const [workScheduleOpen, setWorkScheduleOpen] = useState(false)
+  const [shifts, setShifts] = useState<ShiftTemplate[]>([])
+  const [loadingShifts, setLoadingShifts] = useState(true)
   const [profilePhoto, setProfilePhoto] = useState<string | null>(staff?.avatar || null)
   const [photoChanged, setPhotoChanged] = useState(false)
   const [cropDialogOpen, setCropDialogOpen] = useState(false)
@@ -190,16 +176,31 @@ export function StaffForm({ staff, onSuccess, onResetPassword }: StaffFormProps)
       email: staff?.email || "",
       phone: staff?.phone || "",
       role: staff?.role || "staff",
-      specialties: staff?.specialties || [],
       salary: staff?.salary?.toString() || "",
       commissionProfileIds: staff?.commissionProfileIds || [],
       hasLoginAccess: staff?.hasLoginAccess || false,
       allowAppointmentScheduling: staff?.allowAppointmentScheduling || false,
       password: "",
       notes: staff?.notes || "",
+      shiftId: staff?.shiftId || "",
       workSchedule: getDefaultWorkSchedule(staff?.workSchedule),
     },
   })
+
+  const handleShiftChange = (shiftId: string) => {
+    form.setValue("shiftId", shiftId)
+    const current = form.getValues("workSchedule") || getDefaultWorkSchedule()
+    if (!shiftId) return
+    const shift = findShiftById(shifts, shiftId)
+    if (!shift) return
+    form.setValue("workSchedule", applyShiftToWorkSchedule(current, shift))
+  }
+
+  const getEnabledDayTimes = () => {
+    const shift = findShiftById(shifts, form.getValues("shiftId"))
+    if (shift) return { startTime: shift.startTime, endTime: shift.endTime }
+    return { startTime: "09:00", endTime: "21:00" }
+  }
 
   // Fetch commission profiles
   useEffect(() => {
@@ -225,6 +226,26 @@ export function StaffForm({ staff, onSuccess, onResetPassword }: StaffFormProps)
     fetchCommissionProfiles()
   }, [toast])
 
+  useEffect(() => {
+    let active = true
+    ;(async () => {
+      setLoadingShifts(true)
+      try {
+        const res = await AttendancePayrollSettingsAPI.get()
+        if (active && res.success && res.data) {
+          setShifts(mergeAttendancePayrollSettings(res.data).attendance.shifts)
+        }
+      } catch (error) {
+        console.error("Error fetching shifts:", error)
+      } finally {
+        if (active) setLoadingShifts(false)
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [])
+
   async function onSubmit(values: z.infer<typeof staffSchema>) {
     // Require password only when enabling login for the first time (new staff or staff who didn't have login)
     if (values.hasLoginAccess && (!staff || !staff.hasLoginAccess) && (!values.password || values.password.trim() === "")) {
@@ -239,13 +260,14 @@ export function StaffForm({ staff, onSuccess, onResetPassword }: StaffFormProps)
         email: values.email,
         phone: values.phone,
         role: values.role,
-        specialties: values.specialties || [],
+        specialties: staff?.specialties || [],
         salary: values.salary && values.salary.trim() ? parseFloat(values.salary) : 0,
         commissionProfileIds: values.commissionProfileIds || [],
         hasLoginAccess: values.hasLoginAccess || false,
         allowAppointmentScheduling: values.allowAppointmentScheduling || false,
         password: values.password || undefined,
         notes: values.notes,
+        shiftId: values.shiftId || "",
         isActive: staff?.isActive ?? true,
         workSchedule: values.workSchedule && values.workSchedule.length === 7
           ? values.workSchedule.map((ws) => ({
@@ -624,6 +646,44 @@ export function StaffForm({ staff, onSuccess, onResetPassword }: StaffFormProps)
           />
         </div>
 
+        <div className="rounded-lg border border-slate-200 p-4 space-y-3">
+          <div>
+            <h3 className="text-lg font-medium text-slate-800">Shift</h3>
+            <p className="text-sm text-muted-foreground">
+              Assign a business shift. Working hours come from the shift; use Work Schedule below to pick days off.
+            </p>
+          </div>
+          <FormField
+            control={form.control}
+            name="shiftId"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Assigned shift</FormLabel>
+                <Select
+                  value={field.value || "none"}
+                  onValueChange={(v) => handleShiftChange(v === "none" ? "" : v)}
+                  disabled={loadingShifts}
+                >
+                  <FormControl>
+                    <SelectTrigger>
+                      <SelectValue placeholder={loadingShifts ? "Loading shifts…" : "Select a shift"} />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    <SelectItem value="none">No shift assigned</SelectItem>
+                    {shifts.map((shift) => (
+                      <SelectItem key={shift.id} value={shift.id}>
+                        {shift.name} ({formatShiftTimeRange(shift.startTime, shift.endTime)})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </div>
+
         {/* Work Schedule - Collapsible */}
         <Collapsible open={workScheduleOpen} onOpenChange={setWorkScheduleOpen}>
           <div className="rounded-lg border border-slate-200 overflow-hidden">
@@ -635,7 +695,7 @@ export function StaffForm({ staff, onSuccess, onResetPassword }: StaffFormProps)
                 <div>
                   <h3 className="text-lg font-medium text-slate-800">Work Schedule</h3>
                   <p className="text-sm text-muted-foreground">
-                    Set working days and hours for this staff member
+                    Select working days. Unselected days are week off.
                   </p>
                 </div>
                 {workScheduleOpen ? (
@@ -652,65 +712,52 @@ export function StaffForm({ staff, onSuccess, onResetPassword }: StaffFormProps)
                   name="workSchedule"
                   render={({ field }) => (
                     <FormItem>
-                      <div className="rounded-lg border border-slate-200 overflow-hidden">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="bg-slate-50 border-b border-slate-200">
-                              <th className="text-left font-semibold text-slate-700 py-3 px-4 w-[140px]">Day</th>
-                              <th className="text-left font-semibold text-slate-700 py-3 px-4">Start Time</th>
-                              <th className="text-left font-semibold text-slate-700 py-3 px-4">End Time</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {(field.value || []).map((row) => (
-                              <tr key={row.day} className="border-b border-slate-100 last:border-0 hover:bg-slate-50/50">
-                                <td className="py-2.5 px-4">
-                                  <div className="flex items-center gap-2">
-                                    <Checkbox
-                                      checked={row.enabled}
-                                      onCheckedChange={(checked) => {
-                                        const next = (field.value || []).map((r) =>
-                                          r.day === row.day ? { ...r, enabled: !!checked } : r
-                                        )
-                                        field.onChange(next)
-                                      }}
-                                    />
-                                    <span className={row.enabled ? "text-slate-800" : "text-slate-400"}>{DAY_NAMES[row.day]}</span>
-                                  </div>
-                                </td>
-                                <td className="py-2.5 px-4">
-                                  <Input
-                                    type="time"
-                                    value={row.startTime}
-                                    disabled={!row.enabled}
-                                    className="w-full max-w-[140px] bg-white"
-                                    onChange={(e) => {
-                                      const next = (field.value || []).map((r) =>
-                                        r.day === row.day ? { ...r, startTime: e.target.value } : r
-                                      )
-                                      field.onChange(next)
-                                    }}
-                                  />
-                                </td>
-                                <td className="py-2.5 px-4">
-                                  <Input
-                                    type="time"
-                                    value={row.endTime}
-                                    disabled={!row.enabled}
-                                    className="w-full max-w-[140px] bg-white"
-                                    onChange={(e) => {
-                                      const next = (field.value || []).map((r) =>
-                                        r.day === row.day ? { ...r, endTime: e.target.value } : r
-                                      )
-                                      field.onChange(next)
-                                    }}
-                                  />
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                      <FormLabel className="text-sm font-medium text-slate-800">Working days</FormLabel>
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        {(field.value || []).map((row) => {
+                          const on = row.enabled !== false
+                          return (
+                            <button
+                              key={row.day}
+                              type="button"
+                              onClick={() => {
+                                const times = getEnabledDayTimes()
+                                const next = (field.value || []).map((r) =>
+                                  r.day === row.day
+                                    ? on
+                                      ? { ...r, enabled: false }
+                                      : { ...r, enabled: true, ...times }
+                                    : r
+                                )
+                                field.onChange(next)
+                              }}
+                              className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+                                on
+                                  ? "border-indigo-200 bg-indigo-50 text-indigo-700"
+                                  : "border-slate-200 bg-white text-slate-400 hover:bg-slate-50"
+                              }`}
+                            >
+                              {DAY_NAMES[row.day].slice(0, 3)}
+                            </button>
+                          )
+                        })}
                       </div>
+                      {(() => {
+                        const selectedShift = findShiftById(shifts, form.watch("shiftId"))
+                        if (selectedShift) {
+                          return (
+                            <p className="mt-3 text-xs text-muted-foreground">
+                              Hours on working days follow the assigned shift (
+                              {formatShiftTimeRange(selectedShift.startTime, selectedShift.endTime)}).
+                            </p>
+                          )
+                        }
+                        return (
+                          <p className="mt-3 text-xs text-muted-foreground">
+                            Assign a shift above to set working hours, or default hours (9 AM – 9 PM) apply.
+                          </p>
+                        )
+                      })()}
                       <FormMessage />
                     </FormItem>
                   )}
@@ -719,51 +766,6 @@ export function StaffForm({ staff, onSuccess, onResetPassword }: StaffFormProps)
             </CollapsibleContent>
           </div>
         </Collapsible>
-
-        {/* Specialties - only show when appointment scheduling is enabled */}
-        {form.watch("allowAppointmentScheduling") && (
-          <FormField
-            control={form.control}
-            name="specialties"
-            render={() => (
-              <FormItem>
-                <div className="mb-4">
-                  <FormLabel className="text-base">Specialties *</FormLabel>
-                  <div className="text-sm text-muted-foreground">
-                    Select the services this staff member can provide
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                  {specialtyOptions.map((specialty) => (
-                    <FormField
-                      key={specialty}
-                      control={form.control}
-                      name="specialties"
-                      render={({ field }) => {
-                        return (
-                          <FormItem key={specialty} className="flex flex-row items-start space-x-3 space-y-0">
-                            <FormControl>
-                              <Checkbox
-                                checked={field.value?.includes(specialty)}
-                                onCheckedChange={(checked) => {
-                                  return checked
-                                    ? field.onChange([...field.value, specialty])
-                                    : field.onChange(field.value?.filter((value) => value !== specialty))
-                                }}
-                              />
-                            </FormControl>
-                            <FormLabel className="text-sm font-normal">{specialty}</FormLabel>
-                          </FormItem>
-                        )
-                      }}
-                    />
-                  ))}
-                </div>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-        )}
 
         <FormField
           control={form.control}

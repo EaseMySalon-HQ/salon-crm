@@ -171,12 +171,33 @@ class ModelFactory {
       StaffAvailabilityException: this.getModel('StaffAvailabilityException', require('./StaffAvailabilityException').schema, connection),
       BranchHoliday: this.getModel('BranchHoliday', require('./BranchHoliday').schema, connection),
 
+      // Staff payroll, attendance & leave
+      PayrollRecord: this.getModel('PayrollRecord', require('./PayrollRecord').schema, connection),
+      PayrollAuditLog: this.getModel('PayrollAuditLog', require('./PayrollAuditLog').schema, connection),
+      StaffAttendance: this.getModel('StaffAttendance', require('./StaffAttendance').schema, connection),
+      StaffAdvance: this.getModel('StaffAdvance', require('./StaffAdvance').schema, connection),
+      StaffAdvanceLedger: this.getModel(
+        'StaffAdvanceLedger',
+        require('./StaffAdvanceLedger').schema,
+        connection
+      ),
+      StaffLeaveRecord: this.getModel('StaffLeaveRecord', require('./StaffLeaveRecord').schema, connection),
+      StaffLeaveCreditLedger: this.getModel(
+        'StaffLeaveCreditLedger',
+        require('./StaffLeaveCreditLedger').schema,
+        connection
+      ),
+
       // Per-client WhatsApp / SMS / email consent history (tenant DB)
       ClientConsentEvent: this.getModel(
         'ClientConsentEvent',
         require('./ClientConsentEvent').schema,
         connection
-      )
+      ),
+
+      WeeklySummary: this.getModel('WeeklySummary', require('./WeeklySummary').schema, connection),
+
+      MonthlySummary: this.getModel('MonthlySummary', require('./MonthlySummary').schema, connection),
     };
   }
 
@@ -211,6 +232,12 @@ class ModelFactory {
       PlatformLeadActivity: this.getModel(
         'PlatformLeadActivity',
         require('./PlatformLeadActivity').schema,
+        connection
+      ),
+      PlanPromoCode: this.getModel('PlanPromoCode', require('./PlanPromoCode').schema, connection),
+      PlanPromoRedemption: this.getModel(
+        'PlanPromoRedemption',
+        require('./PlanPromoRedemption').schema,
         connection
       ),
 

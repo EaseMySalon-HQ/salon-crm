@@ -33,6 +33,8 @@ import {
   Bell,
   Boxes,
   Globe,
+  Banknote,
+  UserCog,
 } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 import { buildLoginRedirectHref } from "@/lib/auth-utils"
@@ -54,6 +56,8 @@ import { GoogleBusinessSettings } from "./google-business-settings"
 import RechargeSettings from "./recharge-settings"
 import { PrepaidWalletSettings } from "./prepaid-wallet-settings"
 import { RewardPointsProgramSettings } from "./reward-points-settings"
+import { AttendancePayrollSettings } from "./attendance-payroll-settings"
+import { StaffDirectory } from "./staff-directory"
 import { ServicesTable } from "@/components/services/services-table"
 import { ServiceStatsCards } from "@/components/dashboard/stats-cards"
 import { PackagesSettingsPanel } from "@/components/packages/packages-settings-panel"
@@ -85,6 +89,8 @@ const SETTINGS_SECTION_IDS = [
   "prepaid-wallet",
   "reward-points",
   "packages",
+  "attendance-payroll",
+  "staff-directory",
 ] as const
 
 function isSettingsSectionId(id: string | null): id is (typeof SETTINGS_SECTION_IDS)[number] {
@@ -217,6 +223,43 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     ],
   },
   {
+    id: "team-management",
+    title: "Team Management",
+    description: "Staff roster, attendance, timesheets, payroll rules, and salary settings.",
+    items: [
+      {
+        id: "staff-directory",
+        title: "Staff Directory",
+        description: "Team roster, timesheets, attendance, payroll, and commission assignments.",
+        icon: UserCog,
+        iconColors:
+          "bg-blue-50 text-blue-600 border-blue-100 group-hover:bg-blue-100/80 group-hover:border-blue-200",
+        searchTerms: ["staff", "team", "roster", "employees", "timesheet", "commission", "shifts"],
+      },
+      {
+        id: "attendance-payroll",
+        title: "Attendance & Payroll",
+        description:
+          "Working days, late/overtime rules, salary formula, holidays, and per-staff overrides.",
+        icon: Banknote,
+        iconColors:
+          "bg-lime-50 text-lime-700 border-lime-100 group-hover:bg-lime-100/80 group-hover:border-lime-200",
+        searchTerms: [
+          "attendance",
+          "payroll",
+          "salary",
+          "overtime",
+          "leave",
+          "holiday",
+          "commission",
+          "formula",
+          "salary formula",
+          "advance",
+        ],
+      },
+    ],
+  },
+  {
     id: "billing",
     title: "Billing & payments",
     description: "Checkout, in-store sales, plans, and recurring revenue.",
@@ -338,6 +381,7 @@ const SETTINGS_PLAN_FEATURES: Partial<Record<SettingsSectionId, string>> = {
   "reward-points": "reward_points",
   "whatsapp-integration": "whatsapp_integration",
   "google-business": "gmb",
+  "attendance-payroll": "attendance",
 }
 
 function itemMatchesQuery(item: SettingsItem, q: string): boolean {
@@ -504,6 +548,10 @@ export function SettingsPage() {
         return <PrepaidWalletSettings />
       case "reward-points":
         return <RewardPointsProgramSettings />
+      case "attendance-payroll":
+        return <AttendancePayrollSettings />
+      case "staff-directory":
+        return <StaffDirectory inSettings />
       default:
         return null
     }

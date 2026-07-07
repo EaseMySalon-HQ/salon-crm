@@ -12,9 +12,14 @@ import { useToast } from "@/components/ui/use-toast"
 import { AddCommissionProfileModal } from "./add-commission-profile-modal"
 import { EditCommissionProfileModal } from "./edit-commission-profile-modal"
 import { CommissionProfileAPI } from "@/lib/api"
+import { useAuth } from "@/lib/auth-context"
 
 export function CommissionProfileList() {
   const { toast } = useToast()
+  const { hasPermission } = useAuth()
+  const canCreate = hasPermission("incentive_settings", "create")
+  const canEdit = hasPermission("incentive_settings", "edit")
+  const canDelete = hasPermission("incentive_settings", "delete")
   const [profiles, setProfiles] = useState<CommissionProfile[]>([])
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
   const [isEditModalOpen, setIsEditModalOpen] = useState(false)
@@ -191,10 +196,12 @@ export function CommissionProfileList() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-end">
-        <Button onClick={handleAddProfile} className="bg-blue-600 hover:bg-blue-700">
-          <Plus className="h-4 w-4 mr-2" />
-          Add Commission Profile
-        </Button>
+        {canCreate ? (
+          <Button onClick={handleAddProfile} className="bg-blue-600 hover:bg-blue-700">
+            <Plus className="h-4 w-4 mr-2" />
+            Add Commission Profile
+          </Button>
+        ) : null}
       </div>
 
       {/* Profiles Table */}
@@ -248,6 +255,7 @@ export function CommissionProfileList() {
                     {profile.createdAt ? new Date(profile.createdAt).toLocaleDateString() : "—"}
                   </TableCell>
                   <TableCell className="text-right py-4 px-6">
+                    {(canEdit || canDelete) ? (
                     <DropdownMenu modal={false}>
                       <DropdownMenuTrigger asChild>
                         <Button variant="ghost" className="h-9 w-9 p-0 hover:bg-slate-100 rounded-lg transition-all duration-200">
@@ -256,11 +264,14 @@ export function CommissionProfileList() {
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
                         <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                        {canEdit ? (
                         <DropdownMenuItem onClick={() => handleEditProfile(profile)}>
                           <Edit className="h-4 w-4 mr-2" />
                           Edit Profile
                         </DropdownMenuItem>
-                        <DropdownMenuSeparator />
+                        ) : null}
+                        {canEdit && canDelete ? <DropdownMenuSeparator /> : null}
+                        {canDelete ? (
                         <DropdownMenuItem 
                           onClick={() => handleDeleteProfile(profile)}
                           className="text-red-600"
@@ -268,8 +279,12 @@ export function CommissionProfileList() {
                           <Trash2 className="h-4 w-4 mr-2" />
                           Delete Profile
                         </DropdownMenuItem>
+                        ) : null}
                       </DropdownMenuContent>
                     </DropdownMenu>
+                    ) : (
+                      <span className="text-sm text-slate-400">—</span>
+                    )}
                   </TableCell>
                 </TableRow>
               ))

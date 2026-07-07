@@ -1493,7 +1493,15 @@ export const AppointmentsCalendarGrid = forwardRef<
           sale.staffId
         const staffId = typeof rawStaffId === "object" && rawStaffId?._id ? rawStaffId._id : String(rawStaffId || "")
         if (!staffId || !map[staffId]) return
-        const itemKey = `${sale._id}-${serviceItem?.name || idx}-${staffId}`
+        const svcId =
+          serviceItem?.serviceId != null
+            ? String(
+                typeof serviceItem.serviceId === "object" && serviceItem.serviceId?._id
+                  ? serviceItem.serviceId._id
+                  : serviceItem.serviceId
+              )
+            : ""
+        const itemKey = `${sale._id}-line-${idx}-${staffId}-${svcId || String(serviceItem?.name || "service").trim()}`
         map[staffId].push({ sale, serviceItem, itemKey, top, height, startM, endM })
       })
     })
@@ -3240,14 +3248,14 @@ export const AppointmentsCalendarGrid = forwardRef<
                   })}
                   {(stackLayoutByColumn[col._id] || [])
                     .filter((e): e is Extract<CalendarStackLayoutItem, { kind: "sale" }> => e.kind === "sale")
-                    .map(({ sale, serviceItem, top, height, startM, endM, left, width }) => {
+                    .map(({ sale, serviceItem, itemKey, top, height, startM, endM, left, width }) => {
                     const serviceName = serviceItem?.name || "Service"
                     const isWalkInApt = (sale as any)?.__isWalkInAppointment === true
                     const billNo = sale?.billNo
                     return (
                       <div
                         data-sale-card
-                        key={`${sale._id}-${serviceName}-${col._id}-${startM}`}
+                        key={itemKey}
                         className={`group absolute overflow-hidden text-left flex flex-col z-10 pointer-events-auto animate-appointment-card-enter transition-all duration-[180ms] ease-out hover:-translate-y-0.5 ${billNo ? "cursor-pointer" : "cursor-default"}`}
                         style={{
                           top,

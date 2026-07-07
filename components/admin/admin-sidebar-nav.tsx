@@ -13,6 +13,7 @@ import {
   ScrollText,
   Settings,
   Shield,
+  Ticket,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { LucideIcon } from "lucide-react"
@@ -40,6 +41,7 @@ export const adminNavGroups: NavGroup[] = [
     items: [
       { title: "Businesses", href: "/admin/businesses", icon: Building2 },
       { title: "Leads", href: "/admin/leads", icon: Phone },
+      { title: "Promo/Coupons", href: "/admin/promo-coupons", icon: Ticket },
       { title: "Notifications & Alerts", href: "/admin/notifications", icon: Bell },
     ],
   },

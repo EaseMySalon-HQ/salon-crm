@@ -8,6 +8,9 @@ const {
   enrichSalesWithProductIdsFromCatalog,
   calculateAllStaffCommission,
 } = require('./commission-profile-calculator');
+const {
+  mergeAttendancePayrollSettings,
+} = require('./attendance-payroll-settings');
 
 /**
  * @param {object} businessModels
@@ -25,15 +28,15 @@ async function buildStaffIncentiveSummaryForRange(businessModels, branchId, rang
       }
     : getPreviousMonthRangeIST();
 
-  const { Sale, Staff, CommissionProfile, Service, Product } = businessModels;
+  const { Sale, Staff, CommissionProfile, Service, Product, BusinessSettings } = businessModels;
 
-  const [sales, staffMembers, commissionProfiles, services, products] = await Promise.all([
+  const [sales, staffMembers, commissionProfiles, services, products, settingsDoc] = await Promise.all([
     Sale.find({
       branchId,
       date: { $gte: period.start, $lte: period.end },
       status: { $nin: ['cancelled', 'Cancelled'] },
     })
-      .select('billNo date staffId staffName items customerId customerName')
+      .select('billNo date staffId staffName items customerId customerName paymentStatus status')
       .lean(),
     Staff.find({ branchId, isActive: true })
       .select('_id firstName lastName name commissionProfileIds')
@@ -41,6 +44,9 @@ async function buildStaffIncentiveSummaryForRange(businessModels, branchId, rang
     CommissionProfile.find({ isActive: true }).lean(),
     Service.find({ isActive: { $ne: false } }).select('_id name').lean(),
     Product.find({ isActive: { $ne: false } }).select('_id name').lean(),
+    BusinessSettings
+      ? BusinessSettings.findOne().select('attendancePayroll').lean()
+      : Promise.resolve(null),
   ]);
 
   const salesCopy = sales.map((s) => ({
@@ -51,7 +57,9 @@ async function buildStaffIncentiveSummaryForRange(businessModels, branchId, rang
   enrichSalesWithServiceIdsFromCatalog(salesCopy, services);
   enrichSalesWithProductIdsFromCatalog(salesCopy, products);
 
-  const rows = calculateAllStaffCommission(salesCopy, staffMembers, commissionProfiles).map((row) => ({
+  const commissionSettings = mergeAttendancePayrollSettings(settingsDoc?.attendancePayroll).payroll.commission;
+
+  const rows = calculateAllStaffCommission(salesCopy, staffMembers, commissionProfiles, commissionSettings).map((row) => ({
     staffId: row.staffId,
     staffName: row.staffName,
     totalRevenue: row.totalRevenue,
