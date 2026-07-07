@@ -254,7 +254,10 @@ export function StaffCommissionAssignments() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-muted-foreground max-w-2xl">
           Click a staff row to assign or remove commission profiles. You can also edit assignments from{" "}
-          <Link href="/staff" className="text-primary underline-offset-4 hover:underline inline-flex items-center gap-1">
+          <Link
+            href="/settings?section=staff-directory"
+            className="text-primary underline-offset-4 hover:underline inline-flex items-center gap-1"
+          >
             Staff
             <ExternalLink className="h-3 w-3" />
           </Link>

@@ -1,17 +1,19 @@
 "use client"
 
-import { ProtectedRoute } from "@/components/auth/protected-route"
-import { ProtectedLayout } from "@/components/layout/protected-layout"
-import { StaffDirectory } from "@/components/settings/staff-directory"
+import { useEffect } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
+import { PageSkeleton } from "@/components/loading"
 
-export default function StaffDirectoryPage() {
-  return (
-    <ProtectedRoute requiredModule="staff">
-      <ProtectedLayout requiredModule="staff">
-        <div className="flex flex-col space-y-6">
-          <StaffDirectory />
-        </div>
-      </ProtectedLayout>
-    </ProtectedRoute>
-  )
+/** Legacy /staff URL — Staff Directory now lives under Settings → Team Management. */
+export default function StaffDirectoryRedirectPage() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString())
+    params.set("section", "staff-directory")
+    router.replace(`/settings?${params.toString()}`)
+  }, [router, searchParams])
+
+  return <PageSkeleton variant="form" />
 }

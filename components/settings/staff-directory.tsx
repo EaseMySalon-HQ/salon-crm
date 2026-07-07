@@ -28,7 +28,21 @@ function isCommissionPanel(v: string | null): v is CommissionPanel {
   return v != null && (COMMISSION_PANELS as readonly string[]).includes(v)
 }
 
-export function StaffDirectory() {
+function buildStaffDirectoryUrl(params: URLSearchParams, inSettings: boolean): string {
+  if (inSettings) {
+    params.set("section", "staff-directory")
+    return `/settings?${params.toString()}`
+  }
+  const q = params.toString()
+  return q ? `/staff?${q}` : "/staff"
+}
+
+type StaffDirectoryProps = {
+  /** When true, tab URLs use /settings?section=staff-directory */
+  inSettings?: boolean
+}
+
+export function StaffDirectory({ inSettings = false }: StaffDirectoryProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { hasPermission } = useAuth()
@@ -57,8 +71,7 @@ export function StaffDirectory() {
     activeMainTab === "commission" && isCommissionPanel(panelParam) ? panelParam : "profiles"
 
   const pushStaffUrl = (params: URLSearchParams) => {
-    const q = params.toString()
-    router.push(q ? `/staff?${q}` : "/staff")
+    router.push(buildStaffDirectoryUrl(params, inSettings))
   }
 
   useEffect(() => {
@@ -67,10 +80,9 @@ export function StaffDirectory() {
       const params = new URLSearchParams(searchParams.toString())
       params.delete("tab")
       params.delete("panel")
-      const q = params.toString()
-      router.replace(q ? `/staff?${q}` : "/staff")
+      router.replace(buildStaffDirectoryUrl(params, inSettings))
     }
-  }, [showIncentiveTab, entitlementsLoading, tabParam, searchParams, router])
+  }, [showIncentiveTab, entitlementsLoading, tabParam, searchParams, router, inSettings])
 
   useEffect(() => {
     if (payrollEntitlementsLoading || attendanceEntitlementsLoading) return
@@ -81,10 +93,18 @@ export function StaffDirectory() {
       const params = new URLSearchParams(searchParams.toString())
       params.delete("tab")
       params.delete("panel")
-      const q = params.toString()
-      router.replace(q ? `/staff?${q}` : "/staff")
+      router.replace(buildStaffDirectoryUrl(params, inSettings))
     }
-  }, [showPayrollTab, showTimesheetTab, payrollEntitlementsLoading, attendanceEntitlementsLoading, tabParam, searchParams, router])
+  }, [
+    showPayrollTab,
+    showTimesheetTab,
+    payrollEntitlementsLoading,
+    attendanceEntitlementsLoading,
+    tabParam,
+    searchParams,
+    router,
+    inSettings,
+  ])
 
   const onMainTabChange = (value: string) => {
     if (!isMainTab(value)) return

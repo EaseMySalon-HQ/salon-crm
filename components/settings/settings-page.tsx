@@ -34,6 +34,7 @@ import {
   Boxes,
   Globe,
   Banknote,
+  UserCog,
 } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 import { buildLoginRedirectHref } from "@/lib/auth-utils"
@@ -56,6 +57,7 @@ import RechargeSettings from "./recharge-settings"
 import { PrepaidWalletSettings } from "./prepaid-wallet-settings"
 import { RewardPointsProgramSettings } from "./reward-points-settings"
 import { AttendancePayrollSettings } from "./attendance-payroll-settings"
+import { StaffDirectory } from "./staff-directory"
 import { ServicesTable } from "@/components/services/services-table"
 import { ServiceStatsCards } from "@/components/dashboard/stats-cards"
 import { PackagesSettingsPanel } from "@/components/packages/packages-settings-panel"
@@ -88,6 +90,7 @@ const SETTINGS_SECTION_IDS = [
   "reward-points",
   "packages",
   "attendance-payroll",
+  "staff-directory",
 ] as const
 
 function isSettingsSectionId(id: string | null): id is (typeof SETTINGS_SECTION_IDS)[number] {
@@ -216,6 +219,22 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         iconColors:
           "bg-fuchsia-50 text-fuchsia-600 border-fuchsia-100 group-hover:bg-fuchsia-100/80 group-hover:border-fuchsia-200",
         searchTerms: ["loyalty", "points", "rewards", "earn", "redeem"],
+      },
+    ],
+  },
+  {
+    id: "team-management",
+    title: "Team Management",
+    description: "Staff roster, attendance, timesheets, payroll rules, and salary settings.",
+    items: [
+      {
+        id: "staff-directory",
+        title: "Staff Directory",
+        description: "Team roster, timesheets, attendance, payroll, and commission assignments.",
+        icon: UserCog,
+        iconColors:
+          "bg-blue-50 text-blue-600 border-blue-100 group-hover:bg-blue-100/80 group-hover:border-blue-200",
+        searchTerms: ["staff", "team", "roster", "employees", "timesheet", "commission", "shifts"],
       },
       {
         id: "attendance-payroll",
@@ -531,6 +550,8 @@ export function SettingsPage() {
         return <RewardPointsProgramSettings />
       case "attendance-payroll":
         return <AttendancePayrollSettings />
+      case "staff-directory":
+        return <StaffDirectory inSettings />
       default:
         return null
     }

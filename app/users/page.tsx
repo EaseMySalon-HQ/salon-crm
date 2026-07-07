@@ -22,7 +22,7 @@ export default function UsersPage() {
           </div>
           {!isLoading && canIncentive && (
             <Button variant="outline" asChild>
-              <Link href="/staff/commission">
+              <Link href="/settings?section=staff-directory&tab=commission">
                 <Award className="h-4 w-4 mr-2" />
                 Incentive Management
               </Link>

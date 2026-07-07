@@ -16,7 +16,7 @@ export default function StaffCommissionPage() {
 
   useEffect(() => {
     if (!isLoading && !hasAccess) {
-      router.replace("/staff")
+      router.replace("/settings?section=staff-directory")
     }
   }, [hasAccess, isLoading, router])
 

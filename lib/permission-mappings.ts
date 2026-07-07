@@ -31,7 +31,8 @@
  * === SETTINGS SECTION ID → MODULE ===
  * general → general_settings, business → business_settings, appointments → appointment_settings,
  * currency → currency_settings, tax → tax_settings, payments → payment_settings,
- * attendance-payroll → payroll_settings, pos → pos_settings, notifications → notification_settings, whatsapp-integration → notification_settings,
+ * attendance-payroll → payroll_settings, staff-directory → staff, pos → pos_settings,
+ * notifications → notification_settings, whatsapp-integration → notification_settings,
  * plan-billing → plan_billing, feedback → feedback
  */
 
@@ -72,6 +73,7 @@ export const SETTINGS_PERMISSION_MAP: Record<string, string> = {
   tax: "tax_settings",
   payments: "payment_settings",
   "attendance-payroll": "payroll_settings",
+  "staff-directory": "staff",
   pos: "pos_settings",
   "reward-points": "pos_settings",
   notifications: "notification_settings",
