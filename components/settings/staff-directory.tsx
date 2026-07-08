@@ -13,6 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Users, Clock, Award, Wallet, UserCheck } from "lucide-react"
 import { useFeature } from "@/hooks/use-entitlements"
 import { useAuth } from "@/lib/auth-context"
+import { hasStaffDirectoryTabPermission } from "@/lib/permission-mappings"
 
 const MAIN_TABS = ["staff-list", "working-hours", "attendance", "payroll", "commission"] as const
 type MainTab = (typeof MAIN_TABS)[number]
@@ -49,17 +50,34 @@ export function StaffDirectory({ inSettings = false }: StaffDirectoryProps) {
   const { hasAccess: canIncentive, isLoading: entitlementsLoading } = useFeature("incentive_management")
   const { hasAccess: canPayroll, isLoading: payrollEntitlementsLoading } = useFeature("payroll")
   const { hasAccess: canAttendance, isLoading: attendanceEntitlementsLoading } = useFeature("attendance")
-  const canViewPayrollSettings = hasPermission("payroll_settings", "view")
-  const canViewIncentiveSettings = hasPermission("incentive_settings", "view")
-  const showPayrollTab = canPayroll && canViewPayrollSettings
-  const showIncentiveTab = canIncentive && canViewIncentiveSettings
-  const showTimesheetTab = canAttendance && canViewPayrollSettings
-  const showAttendanceTab = canAttendance && canViewPayrollSettings
+  const canViewStaffList = hasStaffDirectoryTabPermission(hasPermission, "staff", "view")
+  const canViewTimesheet = hasStaffDirectoryTabPermission(hasPermission, "staff_timesheet", "view")
+  const canViewAttendance = hasStaffDirectoryTabPermission(hasPermission, "staff_attendance", "view")
+  const canViewPayroll = hasStaffDirectoryTabPermission(hasPermission, "staff_payroll", "view")
+  const canViewIncentive = hasStaffDirectoryTabPermission(hasPermission, "staff_incentive", "view")
+  const showPayrollTab = canPayroll && canViewPayroll
+  const showIncentiveTab = canIncentive && canViewIncentive
+  const showTimesheetTab = canAttendance && canViewTimesheet
+  const showAttendanceTab = canAttendance && canViewAttendance
   const tabParam = searchParams.get("tab")
   const panelParam = searchParams.get("panel")
 
   const activeMainTab: MainTab = (() => {
-    if (!isMainTab(tabParam)) return "staff-list"
+    if (!isMainTab(tabParam)) {
+      if (canViewStaffList) return "staff-list"
+      if (showTimesheetTab) return "working-hours"
+      if (showAttendanceTab) return "attendance"
+      if (showPayrollTab) return "payroll"
+      if (showIncentiveTab) return "commission"
+      return "staff-list"
+    }
+    if (tabParam === "staff-list" && !canViewStaffList) {
+      if (showTimesheetTab) return "working-hours"
+      if (showAttendanceTab) return "attendance"
+      if (showPayrollTab) return "payroll"
+      if (showIncentiveTab) return "commission"
+      return "staff-list"
+    }
     if (tabParam === "commission" && !showIncentiveTab) return "staff-list"
     if (tabParam === "payroll" && !showPayrollTab) return "staff-list"
     if ((tabParam === "working-hours" || tabParam === "attendance") && !showTimesheetTab) {
@@ -155,10 +173,12 @@ export function StaffDirectory({ inSettings = false }: StaffDirectoryProps) {
 
       {/* Tab list: outside the header card */}
       <TabsList className="h-11 rounded-xl bg-slate-100 p-1 gap-1 w-full sm:w-auto inline-flex">
+        {canViewStaffList && (
         <TabsTrigger value="staff-list" className="rounded-lg gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm flex-1 sm:flex-initial">
           <Users className="h-4 w-4" />
           Staff List
         </TabsTrigger>
+        )}
         {showTimesheetTab && (
           <TabsTrigger value="working-hours" className="rounded-lg gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm flex-1 sm:flex-initial">
             <Clock className="h-4 w-4" />
@@ -188,9 +208,11 @@ export function StaffDirectory({ inSettings = false }: StaffDirectoryProps) {
       {/* Content card: tab panels only */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
         <div className="p-6">
+          {canViewStaffList && (
           <TabsContent value="staff-list" className="mt-0">
             <StaffTable />
           </TabsContent>
+          )}
           {showTimesheetTab && (
             <TabsContent value="working-hours" className="mt-0">
               <StaffWorkingHoursContent />

@@ -23,6 +23,8 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion"
 import {
+  Clock,
+  UserCheck,
   Home,
   Receipt,
   CalendarDays,
@@ -224,13 +226,7 @@ const SIDEBAR_MODULES = [
     label: "Staff Directory",
     module: "staff",
     icon: Users,
-    hasFeatureLevel: true,
-    features: [
-      { id: "add_staff", label: "Add Staff" },
-      { id: "edit_staff", label: "Edit Staff" },
-      { id: "delete_staff", label: "Delete Staff" },
-      { id: "manage_permissions", label: "Manage Permissions" },
-    ],
+    isStaffDirectoryParent: true,
   },
   {
     id: "settings",
@@ -241,8 +237,17 @@ const SIDEBAR_MODULES = [
   },
 ] as const
 
+// Staff Directory tabs — each tab has its own view/create/edit/delete (matches staff-directory.tsx)
+const STAFF_DIRECTORY_TABS = [
+  { id: "staff", label: "Staff List", icon: Users },
+  { id: "staff_timesheet", label: "Time Sheet", icon: Clock },
+  { id: "staff_attendance", label: "Attendance", icon: UserCheck },
+  { id: "staff_payroll", label: "Payroll", icon: Wallet },
+  { id: "staff_incentive", label: "Incentive Management", icon: Award },
+] as const
+
 // Settings categories - matches settings-page exactly
-// adminOnly: only Admin role can access by default; Admin permissions can be managed
+// adminOnly: excluded from Manager/Staff templates; Custom role can grant any category
 const SETTINGS_CATEGORIES = [
   { id: "general_settings", label: "General Settings", icon: Settings, adminOnly: false },
   { id: "business_settings", label: "Business Settings", icon: Building2, adminOnly: false },
@@ -272,8 +277,9 @@ function mergePermissions(existing: Permission[], updates: Permission[]): Permis
 
 // Build role templates with all modules
 const ALL_PAGE_MODULES = [
-  ...SIDEBAR_MODULES.filter((m) => !m.isSettingsParent).map((m) => m.module),
+  ...SIDEBAR_MODULES.filter((m) => !m.isSettingsParent && !m.isStaffDirectoryParent).map((m) => m.module),
   ...SETTINGS_CATEGORIES.map((s) => s.id),
+  ...STAFF_DIRECTORY_TABS.map((t) => t.id),
 ]
 function buildRoleTemplate(role: "admin" | "manager" | "staff"): Permission[] {
   const perms: Permission[] = []
@@ -691,19 +697,29 @@ export function StaffPermissionsModal({ isOpen, onClose, staff, onUpdate }: Staf
 
               {/* Right Main Panel - Accordion */}
               <div className="lg:col-span-8 p-6">
-                <Accordion type="multiple" defaultValue={["dashboard", "quick_sale", "appointments", "settings"]} className="space-y-2">
+                <Accordion type="multiple" defaultValue={["dashboard", "quick_sale", "appointments", "settings", "staff_directory"]} className="space-y-2">
                   {SIDEBAR_MODULES.map((mod) => {
                     const Icon = mod.icon
                     const backendModule = mod.module
                     const level = getModuleAccessLevel(backendModule)
                     const disabled = isModuleDisabled(mod.id, backendModule)
                     const isSettings = mod.isSettingsParent
+                    const isStaffDirectory = mod.isStaffDirectoryParent
 
                     // For categories with nested items: show "Full Access" in orange when mixed (some full, some none)
-                    const nestedIds = isSettings ? SETTINGS_CATEGORIES.map((s) => s.id) : []
+                    const nestedIds = isSettings
+                      ? SETTINGS_CATEGORIES.map((s) => s.id)
+                      : isStaffDirectory
+                        ? STAFF_DIRECTORY_TABS.map((t) => t.id)
+                        : []
+                    const nestedCategories = isSettings
+                      ? SETTINGS_CATEGORIES
+                      : isStaffDirectory
+                        ? STAFF_DIRECTORY_TABS
+                        : null
                     const mixedDisplay = nestedIds.length > 0 ? getNestedDisplayLevel(permissions, nestedIds) : null
                     const effectiveLevel =
-                      isSettings && nestedIds.length > 0
+                      nestedIds.length > 0
                         ? nestedIds.reduce<AccessLevel>((max, id) => {
                             const l = permissionsToAccessLevel(permissions, id)
                             const order = { full: 4, edit: 3, view: 2, none: 1 }
@@ -736,7 +752,7 @@ export function StaffPermissionsModal({ isOpen, onClose, staff, onUpdate }: Staf
                         <AccordionContent className="px-4 pb-4 pt-0">
                           <div className="space-y-4 pt-2">
                             {/* Page-level core feature toggles */}
-                            {!isSettings && (
+                            {!isSettings && !isStaffDirectory && (
                               <div className="grid grid-cols-4 gap-2 py-2">
                                 {CORE_FEATURES.map((f) => (
                                   <div
@@ -779,11 +795,16 @@ export function StaffPermissionsModal({ isOpen, onClose, staff, onUpdate }: Staf
                             )}
 
                             {/* Settings nested categories */}
-                            {isSettings && (
+                            {nestedCategories && (
                               <div className="space-y-4 mt-2">
-                                {SETTINGS_CATEGORIES.map((setCat) => {
+                                {nestedCategories.map((setCat) => {
                                   const SetIcon = setCat.icon
-                                  const setDisabled = setCat.adminOnly && selectedRole !== "admin"
+                                  const adminOnly =
+                                    "adminOnly" in setCat ? Boolean(setCat.adminOnly) : false
+                                  const setDisabled =
+                                    adminOnly &&
+                                    selectedRole !== "admin" &&
+                                    selectedRole !== "custom"
                                   return (
                                     <div
                                       key={setCat.id}
@@ -792,7 +813,9 @@ export function StaffPermissionsModal({ isOpen, onClose, staff, onUpdate }: Staf
                                       <div className="flex items-center gap-2 mb-2">
                                         <SetIcon className="h-4 w-4 text-slate-500" />
                                         <span className="text-sm font-medium text-slate-800">{setCat.label}</span>
-                                        {setCat.adminOnly && selectedRole !== "admin" && (
+                                        {adminOnly &&
+                                          selectedRole !== "admin" &&
+                                          selectedRole !== "custom" && (
                                           <Lock className="h-3.5 w-3.5 text-amber-500" />
                                         )}
                                       </div>
@@ -826,7 +849,10 @@ export function StaffPermissionsModal({ isOpen, onClose, staff, onUpdate }: Staf
                 </Accordion>
 
                 <p className="text-xs text-slate-500 mt-6">
-                  Admin has full access to all categories by default. Payment Settings, POS Settings, and Plan & Billing are admin-only; permissions can be managed.
+                  Admin has full access by default. Manager and Staff templates exclude sensitive settings
+                  (Payment, POS, Plan &amp; Billing, etc.). With <span className="font-medium">Custom</span>, you
+                  choose exactly which permissions to grant. Staff Directory tabs each have their own View,
+                  Create, Edit, and Delete controls.
                 </p>
               </div>
             </div>

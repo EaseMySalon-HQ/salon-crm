@@ -50,6 +50,7 @@ import {
 } from "@/components/ui/table"
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/lib/auth-context"
+import { hasStaffDirectoryTabPermission } from "@/lib/permission-mappings"
 import { formatInIST, getTodayIST } from "@/lib/date-utils"
 import {
   StaffAttendanceAPI,
@@ -267,8 +268,8 @@ export function StaffAttendanceContent() {
   const { toast } = useToast()
   const { user, hasPermission } = useAuth()
   const isStaffUser = user?.role === "staff" && !user?.isOwner
-  const canMarkForOthers = hasPermission("payroll_settings", "view")
-  const canCorrectAttendance = hasPermission("payroll_settings", "edit")
+  const canMarkForOthers = hasStaffDirectoryTabPermission(hasPermission, "staff_attendance", "view")
+  const canCorrectAttendance = hasStaffDirectoryTabPermission(hasPermission, "staff_attendance", "edit")
 
   const [date, setDate] = useState(getTodayIST())
   const [rows, setRows] = useState<StaffAttendanceRow[]>([])

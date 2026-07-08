@@ -6,6 +6,9 @@
  * dashboard, sales, appointments, clients, lead_management, campaigns, services, products,
  * cash_registry, analytics, reports, staff, settings
  *
+ * === STAFF DIRECTORY TABS (staff-permissions-modal) ===
+ * staff (Staff List), staff_timesheet, staff_attendance, staff_payroll, staff_incentive
+ *
  * === SETTINGS CATEGORIES (staff-permissions-modal) ===
  * general_settings, business_settings, appointment_settings, currency_settings, tax_settings,
  * payment_settings, payroll_settings, incentive_settings, pos_settings, notification_settings, plan_billing, feedback
@@ -95,3 +98,37 @@ export const SETTINGS_MODULES = Object.values(SETTINGS_PERMISSION_MAP)
 
 // Reports granular permissions
 export const REPORTS_VIEW_PERMISSIONS = ["view", "view_financial_reports", "view_staff_commission"] as const
+
+/** Staff Directory tab permission modules (sync with staff-permissions-modal STAFF_DIRECTORY_TABS). */
+export const STAFF_DIRECTORY_TAB_MODULES = [
+  "staff",
+  "staff_timesheet",
+  "staff_attendance",
+  "staff_payroll",
+  "staff_incentive",
+] as const
+
+/** Legacy module used before per-tab staff directory permissions. */
+export const STAFF_DIRECTORY_LEGACY_TAB_FALLBACK: Record<string, string> = {
+  staff_timesheet: "payroll_settings",
+  staff_attendance: "payroll_settings",
+  staff_payroll: "payroll_settings",
+  staff_incentive: "incentive_settings",
+}
+
+export function hasStaffDirectoryTabPermission(
+  hasPermission: (module: string, feature: string) => boolean,
+  tabModule: (typeof STAFF_DIRECTORY_TAB_MODULES)[number],
+  feature = "view"
+): boolean {
+  if (hasPermission(tabModule, feature)) return true
+  const legacy = STAFF_DIRECTORY_LEGACY_TAB_FALLBACK[tabModule]
+  if (legacy) return hasPermission(legacy, feature)
+  return false
+}
+
+export function canAccessStaffDirectory(
+  hasPermission: (module: string, feature: string) => boolean
+): boolean {
+  return STAFF_DIRECTORY_TAB_MODULES.some((m) => hasStaffDirectoryTabPermission(hasPermission, m, "view"))
+}

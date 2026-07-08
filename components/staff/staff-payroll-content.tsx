@@ -72,6 +72,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/hooks/use-toast"
 import { useCurrency } from "@/hooks/use-currency"
 import { useAuth } from "@/lib/auth-context"
+import { hasStaffDirectoryTabPermission } from "@/lib/permission-mappings"
 import {
   PayrollAPI,
   StaffAdvanceAPI,
@@ -129,7 +130,7 @@ export function StaffPayrollContent() {
   const { toast } = useToast()
   const { formatAmount, getSymbol, currencySettings } = useCurrency()
   const { user, hasPermission } = useAuth()
-  const canManage = hasPermission("payroll_settings", "edit")
+  const canManage = hasStaffDirectoryTabPermission(hasPermission, "staff_payroll", "edit")
 
   const [payslipBusinessName, setPayslipBusinessName] = useState<string>("")
 
