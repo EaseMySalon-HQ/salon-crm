@@ -29,6 +29,7 @@ import { useToast } from "@/components/ui/use-toast"
 import { StaffDirectoryAPI, CommissionProfileAPI, StaffAPI, UsersAPI } from "@/lib/api"
 import type { CommissionProfile } from "@/lib/commission-profile-types"
 import { useAuth } from "@/lib/auth-context"
+import { hasStaffDirectoryTabPermission } from "@/lib/permission-mappings"
 import { cn } from "@/lib/utils"
 
 type DirectoryStaff = {
@@ -55,7 +56,7 @@ function profileKey(p: CommissionProfile): string {
 export function StaffCommissionAssignments() {
   const { toast } = useToast()
   const { user, hasPermission } = useAuth()
-  const canManage = hasPermission("incentive_settings", "edit")
+  const canManage = hasStaffDirectoryTabPermission(hasPermission, "staff_incentive", "edit")
   const isAdmin = user?.role === "admin"
 
   const [loading, setLoading] = useState(true)

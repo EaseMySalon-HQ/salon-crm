@@ -50,6 +50,21 @@ const SETTINGS_SUB_MODULES = [
   'products',
 ];
 
+const STAFF_DIRECTORY_SUB_MODULES = [
+  'staff',
+  'staff_timesheet',
+  'staff_attendance',
+  'staff_payroll',
+  'staff_incentive',
+];
+
+const STAFF_DIRECTORY_LEGACY_TAB_FALLBACK = {
+  staff_timesheet: 'payroll_settings',
+  staff_attendance: 'payroll_settings',
+  staff_payroll: 'payroll_settings',
+  staff_incentive: 'incentive_settings',
+};
+
 function hasExplicitPermission(permissions, module, feature) {
   if (!Array.isArray(permissions) || permissions.length === 0) return false;
   return permissions.some(
@@ -114,6 +129,20 @@ function userHasPermission(user, module, feature) {
     return SETTINGS_SUB_MODULES.some((m) =>
       hasExplicitPermission(perms, m, 'view')
     );
+  }
+
+  // Staff Directory route: any tab view (or legacy payroll/incentive settings) counts.
+  if (module === 'staff' && feature === 'view') {
+    return STAFF_DIRECTORY_SUB_MODULES.some((tabModule) => {
+      if (hasExplicitPermission(perms, tabModule, 'view')) return true;
+      const legacy = STAFF_DIRECTORY_LEGACY_TAB_FALLBACK[tabModule];
+      return legacy ? hasExplicitPermission(perms, legacy, 'view') : false;
+    });
+  }
+
+  const legacyStaffTab = STAFF_DIRECTORY_LEGACY_TAB_FALLBACK[module];
+  if (legacyStaffTab && hasExplicitPermission(perms, legacyStaffTab, feature)) {
+    return true;
   }
 
   return false;

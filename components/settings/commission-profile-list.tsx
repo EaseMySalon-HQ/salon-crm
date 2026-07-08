@@ -13,13 +13,14 @@ import { AddCommissionProfileModal } from "./add-commission-profile-modal"
 import { EditCommissionProfileModal } from "./edit-commission-profile-modal"
 import { CommissionProfileAPI } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
+import { hasStaffDirectoryTabPermission } from "@/lib/permission-mappings"
 
 export function CommissionProfileList() {
   const { toast } = useToast()
   const { hasPermission } = useAuth()
-  const canCreate = hasPermission("incentive_settings", "create")
-  const canEdit = hasPermission("incentive_settings", "edit")
-  const canDelete = hasPermission("incentive_settings", "delete")
+  const canCreate = hasStaffDirectoryTabPermission(hasPermission, "staff_incentive", "create")
+  const canEdit = hasStaffDirectoryTabPermission(hasPermission, "staff_incentive", "edit")
+  const canDelete = hasStaffDirectoryTabPermission(hasPermission, "staff_incentive", "delete")
   const [profiles, setProfiles] = useState<CommissionProfile[]>([])
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
   const [isEditModalOpen, setIsEditModalOpen] = useState(false)

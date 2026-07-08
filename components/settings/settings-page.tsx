@@ -64,7 +64,7 @@ import { PackagesSettingsPanel } from "@/components/packages/packages-settings-p
 import { ProductsSettingsTabs } from "@/components/settings/products-settings-tabs"
 import { CategoryManagement } from "@/components/categories/category-management"
 
-import { SETTINGS_PERMISSION_MAP } from "@/lib/permission-mappings"
+import { SETTINGS_PERMISSION_MAP, canAccessStaffDirectory } from "@/lib/permission-mappings"
 import { useEntitlements } from "@/hooks/use-entitlements"
 import type { LucideIcon } from "lucide-react"
 
@@ -412,8 +412,14 @@ export function SettingsPage() {
 
   useEffect(() => {
     if (!activeSection || isLoading || entitlementsLoading || !user) return
-    const permissionModule = SETTINGS_PERMISSION_MAP[activeSection]
-    if (!permissionModule || !hasPermission(permissionModule, "view")) {
+    const canViewSection =
+      activeSection === "staff-directory"
+        ? canAccessStaffDirectory(hasPermission)
+        : (() => {
+            const permissionModule = SETTINGS_PERMISSION_MAP[activeSection]
+            return permissionModule ? hasPermission(permissionModule, "view") : false
+          })()
+    if (!canViewSection) {
       router.replace("/settings")
       return
     }
@@ -441,9 +447,13 @@ export function SettingsPage() {
 
   const canAccessSetting = (categoryId: string) => {
     if (!user) return false
-    const permissionModule = SETTINGS_PERMISSION_MAP[categoryId]
-    if (!permissionModule) return false
-    if (!hasPermission(permissionModule, "view")) return false
+    if (categoryId === "staff-directory") {
+      if (!canAccessStaffDirectory(hasPermission)) return false
+    } else {
+      const permissionModule = SETTINGS_PERMISSION_MAP[categoryId]
+      if (!permissionModule) return false
+      if (!hasPermission(permissionModule, "view")) return false
+    }
     const requiredFeature = SETTINGS_PLAN_FEATURES[categoryId as SettingsSectionId]
     if (requiredFeature && !hasFeature(requiredFeature)) return false
     return true
