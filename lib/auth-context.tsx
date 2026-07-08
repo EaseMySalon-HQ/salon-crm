@@ -3,7 +3,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from "react"
 import { useRouter } from "next/navigation"
 import { AuthAPI } from "@/lib/api"
-import { SETTINGS_MODULES } from "@/lib/permission-mappings"
+import { SETTINGS_MODULES, STAFF_DIRECTORY_TAB_MODULES, STAFF_DIRECTORY_LEGACY_TAB_FALLBACK } from "@/lib/permission-mappings"
 import { SessionTimeoutManager } from "@/components/auth/session-timeout-manager"
 import { AUTH_LOGOUT_EVENT, clearAuthStorage } from "@/lib/auth-utils"
 import { setCsrfTokenPersisted } from "@/lib/csrf"
@@ -496,6 +496,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return SETTINGS_MODULES.some((m) =>
         user.permissions!.some((p) => p.module === m && p.feature === "view" && p.enabled)
       )
+    }
+    // Staff Directory parent / route: any tab view grants access
+    if (module === "staff" && feature === "view") {
+      return STAFF_DIRECTORY_TAB_MODULES.some((tabModule) =>
+        user.permissions!.some((p) => {
+          if (!p.enabled || p.feature !== "view") return false
+          if (p.module === tabModule) return true
+          const legacy = STAFF_DIRECTORY_LEGACY_TAB_FALLBACK[tabModule]
+          return legacy != null && p.module === legacy
+        })
+      )
+    }
+    // Per-tab staff directory: legacy payroll_settings / incentive_settings fallback
+    const legacyStaffTab = STAFF_DIRECTORY_LEGACY_TAB_FALLBACK[module]
+    if (legacyStaffTab && user.permissions!.some((p) => p.module === legacyStaffTab && p.feature === feature && p.enabled)) {
+      return true
     }
     return false
   }

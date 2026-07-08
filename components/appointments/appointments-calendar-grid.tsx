@@ -45,7 +45,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { AppointmentsAPI, StaffDirectoryAPI, BlockTimeAPI, SalesAPI, SettingsAPI } from "@/lib/api"
+import { AppointmentsAPI, StaffDirectoryAPI, BlockTimeAPI, SalesAPI, SettingsAPI, StaffAttendanceAPI } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
 import { resolveCreatedByDisplay } from "@/lib/utils"
 import { formatAmountWithSymbol } from "@/lib/currency"
@@ -635,6 +635,7 @@ export const AppointmentsCalendarGrid = forwardRef<
   const [updatingStatus, setUpdatingStatus] = useState(false)
   const [cardStatusMenuUpdatingId, setCardStatusMenuUpdatingId] = useState<string | null>(null)
   const [blockTimes, setBlockTimes] = useState<BlockTime[]>([])
+  const [attendanceCheckedInStaffIds, setAttendanceCheckedInStaffIds] = useState<Set<string>>(() => new Set())
   const [walkInSales, setWalkInSales] = useState<any[]>([])
   /** Appointment ids with a linked sale that has partial payment (same calendar day as `selectedDate`). */
   const [partialPaymentAppointmentIds, setPartialPaymentAppointmentIds] = useState<Set<string>>(() => new Set())
@@ -1042,6 +1043,36 @@ export const AppointmentsCalendarGrid = forwardRef<
   }, [selectedDate, staffFilter, blockTimesRefreshKey])
 
   useEffect(() => {
+    let cancelled = false
+    if (!selectedDate) return
+    const loadAttendance = async () => {
+      try {
+        const res = await StaffAttendanceAPI.list({
+          date: selectedDate,
+          ...(staffFilter ? { staffId: staffFilter } : {}),
+        })
+        if (cancelled) return
+        const checkedIn = new Set<string>()
+        if (res?.success && Array.isArray(res.data)) {
+          for (const row of res.data) {
+            if (row.checkInAt && row.staffId) checkedIn.add(String(row.staffId))
+          }
+        }
+        setAttendanceCheckedInStaffIds(checkedIn)
+      } catch {
+        if (!cancelled) setAttendanceCheckedInStaffIds(new Set())
+      }
+    }
+    void loadAttendance()
+    const onFocus = () => void loadAttendance()
+    window.addEventListener("focus", onFocus)
+    return () => {
+      cancelled = true
+      window.removeEventListener("focus", onFocus)
+    }
+  }, [selectedDate, staffFilter, blockTimesRefreshKey, calendarRetryKey])
+
+  useEffect(() => {
     void reloadDaySalesForCalendar()
   }, [reloadDaySalesForCalendar])
 
@@ -1118,7 +1149,8 @@ export const AppointmentsCalendarGrid = forwardRef<
       if (!dayRow) return
 
       // If the day is explicitly unchecked in Work Schedule, mark the staff as unavailable for this day
-      if (dayRow.enabled === false) {
+      // unless they have checked in (worked weekoff).
+      if (dayRow.enabled === false && !attendanceCheckedInStaffIds.has(String(staff._id))) {
         windows[staff._id] = { start: defaultStart, end: defaultEnd, enabled: false }
         return
       }
@@ -1143,7 +1175,7 @@ export const AppointmentsCalendarGrid = forwardRef<
       staffWindowsById: windows,
       totalSlots: slots,
     }
-  }, [staffWithScheduling, selectedDayIndex])
+  }, [staffWithScheduling, selectedDayIndex, attendanceCheckedInStaffIds])
 
   const columns = useMemo(() => {
     if (staffFilter) {
