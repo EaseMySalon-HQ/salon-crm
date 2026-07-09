@@ -53,6 +53,7 @@ import {
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { StaffAPI } from "@/lib/api"
+import { normalizeIncentivePermissions } from "@/lib/permission-mappings"
 import { cn } from "@/lib/utils"
 
 interface Permission {
@@ -256,7 +257,6 @@ const SETTINGS_CATEGORIES = [
   { id: "tax_settings", label: "Tax Settings", icon: Calculator, adminOnly: false },
   { id: "payment_settings", label: "Payment Settings", icon: CreditCard, adminOnly: true },
   { id: "payroll_settings", label: "Attendance & Payroll", icon: Banknote, adminOnly: true },
-  { id: "incentive_settings", label: "Incentive Management", icon: Award, adminOnly: true },
   { id: "pos_settings", label: "POS Settings", icon: Receipt, adminOnly: true },
   { id: "notification_settings", label: "Notifications", icon: Bell, adminOnly: false },
   { id: "feedback", label: "Feedback Management", icon: MessageSquare, adminOnly: false },
@@ -360,7 +360,7 @@ export function StaffPermissionsModal({ isOpen, onClose, staff, onUpdate }: Staf
 
   useEffect(() => {
     if (staff) {
-      const perms = staff.permissions || []
+      const perms = normalizeIncentivePermissions(staff.permissions || [])
       setPermissions(perms)
       setInitialPermissions(perms)
       // Use last saved template if set, otherwise fall back to staff.role
@@ -554,7 +554,8 @@ export function StaffPermissionsModal({ isOpen, onClose, staff, onUpdate }: Staf
     if (!staff) return
     setIsLoading(true)
     try {
-      await StaffAPI.update(staff._id, { permissions, permissionsTemplate: selectedRole })
+      const normalized = normalizeIncentivePermissions(permissions)
+      await StaffAPI.update(staff._id, { permissions: normalized, permissionsTemplate: selectedRole })
       toast({ title: "Success", description: "Permissions updated successfully" })
       onUpdate()
       onClose()

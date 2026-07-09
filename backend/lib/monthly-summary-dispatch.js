@@ -8,19 +8,17 @@ const { isPlatformEmailDisabled } = require('./business-email-policy');
 const { buildMonthlySummaryData } = require('./monthly-summary-data');
 const { buildMonthlySummaryChartUrls } = require('./monthly-summary-charts');
 const { renderMonthlySummaryEmail } = require('./monthly-summary-email');
-const { staffEmailPreferenceFindQuery } = require('./admin-email-preferences');
 const { getPreviousMonthRangeIST } = require('../utils/date-utils');
 const { getAllActiveBranchesForOwner } = require('./get-all-branches');
+const {
+  resolveReportRecipients,
+  resolveAdminRecipientsForBusiness,
+} = require('./report-email-recipients');
 
 const EMAIL_DELAY_MS = 600;
 
 function appBaseUrl() {
   return (process.env.APP_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
-}
-
-function resolveRecipientsQuery(settings, branchId) {
-  const recipientStaffIds = settings?.monthlySummary?.recipientStaffIds || [];
-  return staffEmailPreferenceFindQuery('monthlySummary', { branchId, recipientStaffIds });
 }
 
 async function buildRollupSummary(mainConnection, ownerId, monthKey) {
@@ -79,7 +77,6 @@ async function sendMonthlySummaryForBusiness(business, mainConnection, options =
 
   const businessDb = await databaseManager.getConnection(business._id, mainConnection);
   const businessModels = modelFactory.createBusinessModels(businessDb);
-  const { Staff } = businessModels;
 
   const goal =
     settings.monthlySummary?.revenueGoal > 0
@@ -101,29 +98,14 @@ async function sendMonthlySummaryForBusiness(business, mainConnection, options =
   const settingsUrl = baseUrl ? `${baseUrl}/settings?section=notifications` : '#';
   const reportUrl = baseUrl ? `${baseUrl}/reports?month=${monthKey}` : dashboardUrl;
 
-  let recipients = await Staff.find(resolveRecipientsQuery(settings, business._id))
-    .select('name email role')
-    .lean();
-
-  const User = mainConnection.model('User', require('../models/User').schema);
-  const adminUsers = await User.find({
-    branchId: business._id,
-    role: 'admin',
-    email: { $exists: true, $ne: '' },
-  })
-    .select('name firstName lastName email role')
-    .lean();
-
-  for (const admin of adminUsers) {
-    if (!recipients.some((r) => r.email === admin.email)) {
-      recipients.push({
-        _id: admin._id,
-        name: admin.name || `${admin.firstName || ''} ${admin.lastName || ''}`.trim() || admin.email,
-        email: admin.email,
-        role: 'admin',
-      });
-    }
-  }
+  const recipients = await resolveReportRecipients({
+    business,
+    businessModels,
+    mainConnection,
+    prefKey: 'monthlySummary',
+    recipientStaffIds: settings?.monthlySummary?.recipientStaffIds || [],
+  });
+  const adminRecipients = await resolveAdminRecipientsForBusiness(business, mainConnection);
 
   if (recipients.length === 0) {
     return { sent: 0, skipped: false, reason: 'no_recipients' };
@@ -161,7 +143,7 @@ async function sendMonthlySummaryForBusiness(business, mainConnection, options =
     const rollup = await buildRollupSummary(mainConnection, business.owner, monthKey);
     if (rollup) {
       const rollupCharts = buildMonthlySummaryChartUrls(rollup);
-      for (const admin of adminUsers) {
+      for (const admin of adminRecipients) {
         try {
           const { html, text } = renderMonthlySummaryEmail(rollup, rollupCharts, {
             ownerName: admin.name || admin.email,

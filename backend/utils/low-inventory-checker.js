@@ -2,7 +2,7 @@ const emailService = require('../services/email-service');
 const databaseManager = require('../config/database-manager');
 const { logger } = require('./logger');
 const modelFactory = require('../models/model-factory');
-const { staffEmailPreferenceFindQuery } = require('../lib/admin-email-preferences');
+const { resolveReportRecipients } = require('../lib/report-email-recipients');
 
 /**
  * Check for low inventory products and send alerts for a specific business
@@ -41,7 +41,7 @@ async function checkAndSendLowInventoryAlerts(businessId, productId = null) {
     // Get business database connection
     const businessDb = await databaseManager.getConnection(business._id, mainConnection);
     const businessModels = modelFactory.createBusinessModels(businessDb);
-    const { Product, Staff } = businessModels;
+    const { Product } = businessModels;
     
     // Find products with low stock
     let query = { isActive: true };
@@ -63,41 +63,13 @@ async function checkAndSendLowInventoryAlerts(businessId, productId = null) {
     
     logger.debug(`⚠️  Found ${lowStockProducts.length} low stock product(s) for ${business.name}`);
     
-    // Get recipient staff
-    const recipientStaffIds = emailSettings?.systemAlerts?.recipientStaffIds || [];
-    let recipients = [];
-    
-    if (recipientStaffIds.length > 0) {
-      recipients = await Staff.find(
-        staffEmailPreferenceFindQuery('lowInventory', { recipientStaffIds })
-      ).lean();
-    } else {
-      recipients = await Staff.find(
-        staffEmailPreferenceFindQuery('lowInventory', { branchId: business._id })
-      ).lean();
-    }
-    
-    // Add admin users from User model
-    const User = mainConnection.model('User', require('../models/User').schema);
-    const adminUsers = await User.find({
-      branchId: business._id,
-      role: 'admin',
-      email: { $exists: true, $ne: '' }
-    }).lean();
-    
-    // Add admin users to recipients (they always have notifications enabled)
-    for (const admin of adminUsers) {
-      // Check if admin has low inventory preference enabled (default to true)
-      const adminHasPreference = admin.emailNotifications?.preferences?.lowInventory !== false;
-      if (adminHasPreference && admin.email) {
-        recipients.push({
-          _id: admin._id,
-          email: admin.email,
-          name: admin.firstName + ' ' + admin.lastName || admin.email,
-          role: 'admin'
-        });
-      }
-    }
+    const recipients = await resolveReportRecipients({
+      business,
+      businessModels,
+      mainConnection,
+      prefKey: 'lowInventory',
+      recipientStaffIds: emailSettings?.systemAlerts?.recipientStaffIds || [],
+    });
     
     if (recipients.length === 0) {
       logger.debug(`⚠️  No recipients found for low inventory alerts for ${business.name}`);

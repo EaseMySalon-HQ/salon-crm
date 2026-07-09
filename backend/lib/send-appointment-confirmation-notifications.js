@@ -5,7 +5,7 @@ const { isAdminAppointmentNotificationsEnabled } = require('./whatsapp-admin-gat
 const { getWhatsAppSettingsWithDefaults } = require('./whatsapp-settings-defaults');
 const { logSmsMessage, logEmailMessage } = require('./channel-logs');
 const { canDeductSms, deductSms, canDeductWhatsApp, deductWhatsApp } = require('./wallet-deduction');
-const { staffEmailPreferenceFindQuery } = require('./admin-email-preferences');
+const { resolveReportRecipients } = require('./report-email-recipients');
 
 async function sendAppointmentConfirmationNotifications(req, createdAppointments, getEmailSettingsWithDefaults) {
   // Send email notifications if enabled
@@ -251,58 +251,15 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
       });
       
       if (staffNotificationsEnabled) {
-        // If recipient list is empty, find all staff with appointment alerts enabled
-        let recipients = [];
+        const recipients = await resolveReportRecipients({
+          business,
+          businessModels: req.businessModels,
+          mainConnection,
+          prefKey: 'appointmentAlerts',
+          recipientStaffIds,
+        });
         
-        if (recipientStaffIds.length > 0) {
-          // Use configured recipient list
-          recipients = await Staff.find(
-            staffEmailPreferenceFindQuery('appointmentAlerts', { recipientStaffIds })
-          ).lean();
-        } else {
-          logger.debug('No recipient list configured, finding all staff with appointment alerts enabled');
-          recipients = await Staff.find(
-            staffEmailPreferenceFindQuery('appointmentAlerts', { branchId: req.user.branchId })
-          ).lean();
-        }
-        
-        // Also check for admin users (business owners) who should receive notifications
-        // Admin users are in the main database, not the business database
-        const User = mainConnection.model('User', require('../models/User').schema);
-        const adminUsers = await User.find({
-          branchId: req.user.branchId,
-          role: 'admin',
-          email: { $exists: true, $ne: '' }
-        }).lean();
-        
-        logger.info(`Found ${adminUsers.length} admin user(s) for business`);
-        
-        // Add admin users to recipients (they always have notifications enabled)
-        let adminCount = 0;
-        for (const admin of adminUsers) {
-          // Check if admin is already in recipients
-          const alreadyInList = recipients.some(r => r.email === admin.email);
-          if (!alreadyInList) {
-            recipients.push({
-              _id: admin._id,
-              name: admin.name || `${admin.firstName || ''} ${admin.lastName || ''}`.trim() || admin.email,
-              email: admin.email,
-              role: 'admin',
-              emailNotifications: {
-                enabled: true,
-                preferences: {
-                  appointmentAlerts: true // Admin users always have this enabled
-                }
-              }
-            });
-            adminCount++;
-            logger.debug(`Added admin user to recipients: ${admin.email} (${admin.name || admin.email})`);
-          } else {
-            logger.debug(`Admin user already in recipients: ${admin.email}`);
-          }
-        }
-        
-        logger.info(`Found ${recipients.length} total recipients for appointment notifications (${recipients.length - adminCount} staff + ${adminCount} admin)`);
+        logger.info(`Found ${recipients.length} total recipients for appointment notifications`);
         
         if (recipients.length === 0) {
           logger.warn('No recipients found. Check: staff email notifications enabled, staff appointment alerts preference enabled, staff have valid email addresses, recipient list configured in business settings, admin users have email addresses');

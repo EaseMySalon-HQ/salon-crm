@@ -9,6 +9,7 @@ import { StaffAttendanceContent } from "@/components/staff/staff-attendance-cont
 import { StaffPayrollContent } from "@/components/staff/staff-payroll-content"
 import { CommissionProfileList } from "@/components/settings/commission-profile-list"
 import { StaffCommissionAssignments } from "@/components/settings/staff-commission-assignments"
+import { SalesTargetTracking } from "@/components/settings/sales-target-tracking"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Users, Clock, Award, Wallet, UserCheck } from "lucide-react"
 import { useFeature } from "@/hooks/use-entitlements"
@@ -18,7 +19,7 @@ import { hasStaffDirectoryTabPermission } from "@/lib/permission-mappings"
 const MAIN_TABS = ["staff-list", "working-hours", "attendance", "payroll", "commission"] as const
 type MainTab = (typeof MAIN_TABS)[number]
 
-const COMMISSION_PANELS = ["profiles", "assignments"] as const
+const COMMISSION_PANELS = ["profiles", "assignments", "targets"] as const
 type CommissionPanel = (typeof COMMISSION_PANELS)[number]
 
 function isMainTab(v: string | null): v is MainTab {
@@ -46,15 +47,16 @@ type StaffDirectoryProps = {
 export function StaffDirectory({ inSettings = false }: StaffDirectoryProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const { hasPermission } = useAuth()
+  const { hasPermission, user } = useAuth()
   const { hasAccess: canIncentive, isLoading: entitlementsLoading } = useFeature("incentive_management")
   const { hasAccess: canPayroll, isLoading: payrollEntitlementsLoading } = useFeature("payroll")
   const { hasAccess: canAttendance, isLoading: attendanceEntitlementsLoading } = useFeature("attendance")
-  const canViewStaffList = hasStaffDirectoryTabPermission(hasPermission, "staff", "view")
-  const canViewTimesheet = hasStaffDirectoryTabPermission(hasPermission, "staff_timesheet", "view")
-  const canViewAttendance = hasStaffDirectoryTabPermission(hasPermission, "staff_attendance", "view")
-  const canViewPayroll = hasStaffDirectoryTabPermission(hasPermission, "staff_payroll", "view")
-  const canViewIncentive = hasStaffDirectoryTabPermission(hasPermission, "staff_incentive", "view")
+  const userPermissions = user?.permissions
+  const canViewStaffList = hasStaffDirectoryTabPermission(hasPermission, "staff", "view", userPermissions)
+  const canViewTimesheet = hasStaffDirectoryTabPermission(hasPermission, "staff_timesheet", "view", userPermissions)
+  const canViewAttendance = hasStaffDirectoryTabPermission(hasPermission, "staff_attendance", "view", userPermissions)
+  const canViewPayroll = hasStaffDirectoryTabPermission(hasPermission, "staff_payroll", "view", userPermissions)
+  const canViewIncentive = hasStaffDirectoryTabPermission(hasPermission, "staff_incentive", "view", userPermissions)
   const showPayrollTab = canPayroll && canViewPayroll
   const showIncentiveTab = canIncentive && canViewIncentive
   const showTimesheetTab = canAttendance && canViewTimesheet
@@ -235,15 +237,19 @@ export function StaffDirectory({ inSettings = false }: StaffDirectoryProps) {
                 onValueChange={onCommissionPanelChange}
                 className="space-y-6"
               >
-                <TabsList className="grid w-full max-w-md grid-cols-2 h-auto">
+                <TabsList className="grid w-full max-w-2xl grid-cols-3 h-auto">
                   <TabsTrigger value="profiles">Commission profiles</TabsTrigger>
                   <TabsTrigger value="assignments">Staff &amp; profiles</TabsTrigger>
+                  <TabsTrigger value="targets">Sales Target Tracking</TabsTrigger>
                 </TabsList>
                 <TabsContent value="profiles" className="mt-0 outline-none">
                   <CommissionProfileList />
                 </TabsContent>
                 <TabsContent value="assignments" className="mt-0 outline-none">
                   <StaffCommissionAssignments />
+                </TabsContent>
+                <TabsContent value="targets" className="mt-0 outline-none">
+                  <SalesTargetTracking />
                 </TabsContent>
               </Tabs>
             </TabsContent>

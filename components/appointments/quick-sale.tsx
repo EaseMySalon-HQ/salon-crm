@@ -90,6 +90,7 @@ import {
   StaffDirectoryAPI,
   AppointmentsAPI,
   BlockTimeAPI,
+  StaffAttendanceAPI,
   MembershipAPI,
   ClientWalletAPI,
   ClientsAPI,
@@ -881,6 +882,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const [catalogRetryKey, setCatalogRetryKey] = useState(0)
   const [appointmentsForDate, setAppointmentsForDate] = useState<any[]>([])
   const [blockTimesForDate, setBlockTimesForDate] = useState<any[]>([])
+  const [attendanceCheckedInStaffIds, setAttendanceCheckedInStaffIds] = useState<Set<string>>(
+    () => new Set(),
+  )
   const [, setTimeTick] = useState(0)
 
   // Refresh availability every minute (billing uses current time)
@@ -956,9 +960,15 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     const dayOfWeek = selectedDate.getDay() // 0 = Sunday, 6 = Saturday
     return staff.filter((s) => {
       const id = String(s._id || s.id)
-      // Exclude staff marked as absent (Full Day Off) for this day in work schedule
+      // Exclude staff on week off unless they checked in (worked weekoff).
       const daySchedule = (s.workSchedule || []).find((d: { day: number; enabled?: boolean }) => d.day === dayOfWeek)
-      if (daySchedule && daySchedule.enabled === false) return false
+      if (
+        daySchedule &&
+        daySchedule.enabled === false &&
+        !attendanceCheckedInStaffIds.has(id)
+      ) {
+        return false
+      }
       return availableIds.includes(id) || includeSet.has(id)
     })
   }
@@ -1171,6 +1181,34 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     }
     load()
     return () => { cancelled = true }
+  }, [selectedDate])
+
+  // Staff who checked in on a scheduled week off should appear in staff dropdowns.
+  useEffect(() => {
+    let cancelled = false
+    const dateStr = format(selectedDate, "yyyy-MM-dd")
+    const loadAttendance = async () => {
+      try {
+        const res = await StaffAttendanceAPI.list({ date: dateStr })
+        if (cancelled) return
+        const checkedIn = new Set<string>()
+        if (res?.success && Array.isArray(res.data)) {
+          for (const row of res.data) {
+            if (row.checkInAt && row.staffId) checkedIn.add(String(row.staffId))
+          }
+        }
+        setAttendanceCheckedInStaffIds(checkedIn)
+      } catch {
+        if (!cancelled) setAttendanceCheckedInStaffIds(new Set())
+      }
+    }
+    void loadAttendance()
+    const onFocus = () => void loadAttendance()
+    window.addEventListener("focus", onFocus)
+    return () => {
+      cancelled = true
+      window.removeEventListener("focus", onFocus)
+    }
   }, [selectedDate])
 
   // Subscribe to client store changes

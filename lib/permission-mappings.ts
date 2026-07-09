@@ -11,7 +11,8 @@
  *
  * === SETTINGS CATEGORIES (staff-permissions-modal) ===
  * general_settings, business_settings, appointment_settings, currency_settings, tax_settings,
- * payment_settings, payroll_settings, incentive_settings, pos_settings, notification_settings, plan_billing, feedback
+ * payment_settings, payroll_settings, pos_settings, notification_settings, plan_billing, feedback
+ * (Incentive Management lives under Staff Directory as staff_incentive — not a Settings category.)
  *
  * === REPORTS GRANULAR ===
  * view_financial_reports → Sales tab, Expense tab, Unpaid Bills
@@ -108,23 +109,97 @@ export const STAFF_DIRECTORY_TAB_MODULES = [
   "staff_incentive",
 ] as const
 
+/** Canonical permission module for Incentive Management (Staff Directory tab + commission APIs). */
+export const INCENTIVE_PERMISSION_MODULE = "staff_incentive"
+
+/** @deprecated Legacy alias — kept for existing saved permissions; mirrors backend alias map. */
+export const INCENTIVE_PERMISSION_LEGACY_MODULE = "incentive_settings"
+
+/** Bidirectional aliases — either module satisfies checks for the other. */
+export const PERMISSION_MODULE_ALIASES: Record<string, string> = {
+  staff_incentive: INCENTIVE_PERMISSION_LEGACY_MODULE,
+  incentive_settings: INCENTIVE_PERMISSION_MODULE,
+}
+
 /** Legacy module used before per-tab staff directory permissions. */
 export const STAFF_DIRECTORY_LEGACY_TAB_FALLBACK: Record<string, string> = {
   staff_timesheet: "payroll_settings",
   staff_attendance: "payroll_settings",
   staff_payroll: "payroll_settings",
-  staff_incentive: "incentive_settings",
+  staff_incentive: INCENTIVE_PERMISSION_LEGACY_MODULE,
+}
+
+export function permissionModulesEquivalent(a: string, b: string): boolean {
+  if (a === b) return true
+  return PERMISSION_MODULE_ALIASES[a] === b || PERMISSION_MODULE_ALIASES[b] === a
+}
+
+/** Migrate legacy incentive_settings rows to staff_incentive for storage/display. */
+export function normalizeIncentivePermissions<T extends { module: string; feature: string; enabled: boolean }>(
+  permissions: T[],
+): T[] {
+  const byKey = new Map<string, T>()
+  for (const p of permissions) {
+    if (p.module === INCENTIVE_PERMISSION_LEGACY_MODULE) {
+      const canonicalKey = `${INCENTIVE_PERMISSION_MODULE}:${p.feature}`
+      if (!byKey.has(canonicalKey)) {
+        byKey.set(canonicalKey, { ...p, module: INCENTIVE_PERMISSION_MODULE })
+      }
+      continue
+    }
+    byKey.set(`${p.module}:${p.feature}`, p)
+  }
+  return Array.from(byKey.values())
+}
+
+/** Per-tab Staff Directory modules (excluding Staff List). */
+export const GRANULAR_STAFF_DIRECTORY_TAB_MODULES = [
+  "staff_timesheet",
+  "staff_attendance",
+  "staff_payroll",
+  "staff_incentive",
+] as const
+
+export type StaffDirectoryPermission = { module: string; feature: string; enabled: boolean }
+
+/**
+ * Staff Directory tab access with explicit per-tab overrides.
+ * When a tab module appears in the user's permissions array, only enabled rows grant access
+ * (legacy payroll_settings / incentive_settings fallback is skipped).
+ * Legacy fallback applies only when no granular tab modules are configured.
+ */
+export function staffDirectoryTabPermissionGranted(
+  permissions: StaffDirectoryPermission[] | null | undefined,
+  tabModule: (typeof STAFF_DIRECTORY_TAB_MODULES)[number],
+  feature: string,
+  hasPermission: (module: string, feature: string) => boolean,
+): boolean {
+  const perms = permissions ?? []
+  const tabConfigured = perms.some((p) => p.module === tabModule)
+  if (tabConfigured) {
+    return perms.some((p) => p.module === tabModule && p.feature === feature && p.enabled)
+  }
+
+  const hasGranularTabs = perms.some((p) =>
+    (GRANULAR_STAFF_DIRECTORY_TAB_MODULES as readonly string[]).includes(p.module),
+  )
+  if (hasGranularTabs && tabModule !== "staff") {
+    return false
+  }
+
+  if (hasPermission(tabModule, feature)) return true
+  const legacy = STAFF_DIRECTORY_LEGACY_TAB_FALLBACK[tabModule]
+  if (legacy) return hasPermission(legacy, feature)
+  return false
 }
 
 export function hasStaffDirectoryTabPermission(
   hasPermission: (module: string, feature: string) => boolean,
   tabModule: (typeof STAFF_DIRECTORY_TAB_MODULES)[number],
-  feature = "view"
+  feature = "view",
+  permissions?: StaffDirectoryPermission[] | null,
 ): boolean {
-  if (hasPermission(tabModule, feature)) return true
-  const legacy = STAFF_DIRECTORY_LEGACY_TAB_FALLBACK[tabModule]
-  if (legacy) return hasPermission(legacy, feature)
-  return false
+  return staffDirectoryTabPermissionGranted(permissions, tabModule, feature, hasPermission)
 }
 
 export function canAccessStaffDirectory(

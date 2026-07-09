@@ -14,7 +14,6 @@ import { format } from "date-fns"
 import { Calendar as CalendarComponent } from "@/components/ui/calendar"
 import type { DateRange } from "react-day-picker"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { StaffServiceDetailDrawer } from "@/components/reports/staff-service-detail-drawer"
 import { UsersAPI, SalesAPI, StaffPerformanceAPI, SettingsAPI, CommissionProfileAPI, StaffDirectoryAPI, ReportsAPI, ServicesAPI, ProductsAPI } from "@/lib/api"
 import {
@@ -105,17 +104,14 @@ const formatCurrency = (amount: number, symbol: string) => {
   return `${symbol}${amount.toFixed(2)}`
 }
 
-// Function to calculate performance trend
 const getPerformanceTrend = (currentScore: number, previousScore: number) => {
   if (previousScore === 0) {
-    return currentScore > 0 ? 'up' : 'neutral'
+    return currentScore > 0 ? "up" : "neutral"
   }
-  
   const change = ((currentScore - previousScore) / previousScore) * 100
-  
-  if (change > 5) return 'up'      // More than 5% improvement
-  if (change < -5) return 'down'   // More than 5% decline
-  return 'neutral'                 // Less than 5% change
+  if (change > 5) return "up"
+  if (change < -5) return "down"
+  return "neutral"
 }
 
 /** Split each line by staffContributions (or single staff); attribute revenue & share of qty per staff. */
@@ -194,17 +190,11 @@ export function StaffPerformanceReport() {
   const [selectedStaff, setSelectedStaff] = useState<string>("all")
   const [staffMembers, setStaffMembers] = useState<StaffMember[]>([])
   const [performanceData, setPerformanceData] = useState<StaffPerformanceData[]>([])
-  const [previousMonthData, setPreviousMonthData] = useState<StaffPerformanceData[]>([])
   const [commissionData, setCommissionData] = useState<StaffCommissionResult[]>([])
   const [commissionProfiles, setCommissionProfiles] = useState<CommissionProfile[]>([])
   const [salesData, setSalesData] = useState<SalesRecord[]>([])
   const [isLoading, setIsLoading] = useState(true)
-  const [showCommissionModal, setShowCommissionModal] = useState(false)
-  const [selectedStaffForCommission, setSelectedStaffForCommission] = useState<StaffMember | null>(null)
-  const [commissionRates, setCommissionRates] = useState({
-    serviceRate: 0,
-    productRate: 0
-  })
+  const [previousMonthData, setPreviousMonthData] = useState<StaffPerformanceData[]>([])
   const [paymentSettings, setPaymentSettings] = useState<any>(null)
   const [currencySymbol, setCurrencySymbol] = useState("$")
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -287,7 +277,6 @@ export function StaffPerformanceReport() {
               })()
             : null
 
-        // Keep sales fetches bounded by the selected period so the report does not page through all bills.
         const [allSales, previousMonthSalesResponse, servicesResponse, productsResponse] = await Promise.all([
           SalesAPI.getAllMergePages({ ...salesRangeParams, batchSize: 500 }),
           previousMonthParams
@@ -474,13 +463,11 @@ export function StaffPerformanceReport() {
             }
           })
 
-          // Calculate previous month's performance data for comparison
           let previousMonthPerformance: StaffPerformanceData[] = []
           if (previousMonthSales.length > 0) {
             const prevPerformanceMap = new Map<string, StaffPerformanceData>()
 
-            // Initialize previous month performance data
-            staffMembers.forEach(staff => {
+            staffMembers.forEach((staff) => {
               const staffId = staff._id || staff.id
               if (!staffId) return
               prevPerformanceMap.set(staffId, {
@@ -504,11 +491,10 @@ export function StaffPerformanceReport() {
                 lastActivity: "",
                 performanceScore: 0,
                 effectiveCommissionRate: 0,
-                profileBreakdown: []
+                profileBreakdown: [],
               })
             })
 
-            // Process previous month sales data
             const prevStaffCustomers = new Map<string, Set<string>>()
             const prevCustomerStaffMap = new Map<string, Set<string>>()
             const prevStaffServiceRevenue = new Map<string, number>()
@@ -529,29 +515,27 @@ export function StaffPerformanceReport() {
               )
             })
 
-            // Calculate previous month metrics
             prevPerformanceMap.forEach((data, staffId) => {
               const customers = prevStaffCustomers.get(staffId) || new Set()
               data.customerCount = customers.size
 
               let repeatCustomers = 0
-              customers.forEach(customerId => {
+              customers.forEach((customerId) => {
                 const staffSet = prevCustomerStaffMap.get(customerId)
-                if (staffSet && staffSet.size > 1) {
-                  repeatCustomers++
-                }
+                if (staffSet && staffSet.size > 1) repeatCustomers++
               })
               data.repeatCustomers = repeatCustomers
 
-              data.performanceScore = Math.min(100, 
+              data.performanceScore = Math.min(
+                100,
                 (data.totalRevenue / 1000) * 10 +
-                (data.totalTransactions * 2) +
-                (data.customerCount * 5) +
-                (data.repeatCustomers * 10) +
-                (data.serviceCount * 0.5) +
-                (data.productCount * 0.3) +
-                (data.membershipCount * 0.4) +
-                (data.packageCount * 0.4)
+                  data.totalTransactions * 2 +
+                  data.customerCount * 5 +
+                  data.repeatCustomers * 10 +
+                  data.serviceCount * 0.5 +
+                  data.productCount * 0.3 +
+                  data.membershipCount * 0.4 +
+                  data.packageCount * 0.4
               )
 
               data.serviceRevenue = prevStaffServiceRevenue.get(staffId) || 0
@@ -704,38 +688,6 @@ export function StaffPerformanceReport() {
       toast({
         title: "Export failed",
         description: e?.message || "Failed to export Excel. Please try again.",
-        variant: "destructive"
-      })
-    }
-  }
-
-  const handleSetCommission = (staff: StaffMember) => {
-    setSelectedStaffForCommission(staff)
-    // Commission rates are now managed through commission profiles
-    setCommissionRates({
-      serviceRate: 0,
-      productRate: 0
-    })
-    setShowCommissionModal(true)
-  }
-
-  const handleSaveCommission = async () => {
-    if (!selectedStaffForCommission) return
-
-    try {
-      // Commission rates are now managed through commission profiles
-      // This function can be used to redirect to staff management or show a message
-      toast({
-        title: "Info",
-        description: "Commission rates are now managed through commission profiles in Staff Management"
-      })
-      setShowCommissionModal(false)
-      setSelectedStaffForCommission(null)
-    } catch (error) {
-      console.error("Error updating commission rates:", error)
-      toast({
-        title: "Error",
-        description: "Failed to update commission rates",
         variant: "destructive"
       })
     }
@@ -965,12 +917,6 @@ export function StaffPerformanceReport() {
                 <TableHead className="font-semibold text-slate-800 text-right">Product Revenue</TableHead>
                 <TableHead className="font-semibold text-slate-800 text-right">Membership Revenue</TableHead>
                 <TableHead className="font-semibold text-slate-800 text-right">Package Revenue</TableHead>
-                <TableHead className="font-semibold text-slate-800">Transactions</TableHead>
-                <TableHead className="font-semibold text-slate-800">Services</TableHead>
-                <TableHead className="font-semibold text-slate-800">Products</TableHead>
-                <TableHead className="font-semibold text-slate-800 text-right">Service Commission</TableHead>
-                <TableHead className="font-semibold text-slate-800 text-right">Product Commission</TableHead>
-                <TableHead className="font-semibold text-slate-800 text-right">Total Commission</TableHead>
                 <TableHead className="font-semibold text-slate-800">Customers</TableHead>
                 <TableHead className="font-semibold text-slate-800">Performance Trend</TableHead>
                 <TableHead className="font-semibold text-slate-800">Actions</TableHead>
@@ -979,7 +925,7 @@ export function StaffPerformanceReport() {
             <TableBody>
               {filteredPerformanceData.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={15} className="text-center py-12 text-slate-500">
+                  <TableCell colSpan={9} className="text-center py-12 text-slate-500">
                     No staff performance data found for the selected filters.
                   </TableCell>
                 </TableRow>
@@ -1010,30 +956,6 @@ export function StaffPerformanceReport() {
                     <TableCell className="text-indigo-700 font-medium text-right">
                       {formatCurrency(data.packageRevenue, currencySymbol)}
                     </TableCell>
-                    <TableCell className="text-center">
-                      <Badge variant="outline" className="font-medium">
-                        {data.totalTransactions}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-center">
-                      <Badge variant="secondary" className="font-medium">
-                        {data.serviceCount}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-center">
-                      <Badge variant="secondary" className="font-medium">
-                        {data.productCount}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="font-semibold text-amber-600 text-right">
-                      {formatCurrency(data.serviceCommission, currencySymbol)}
-                    </TableCell>
-                    <TableCell className="font-semibold text-amber-600 text-right">
-                      {formatCurrency(data.productCommission, currencySymbol)}
-                    </TableCell>
-                    <TableCell className="font-bold text-amber-700 text-lg text-right">
-                      {formatCurrency(data.totalCommission, currencySymbol)}
-                    </TableCell>
                     <TableCell>
                       <div className="flex flex-col items-center">
                         <Badge variant="outline" className="font-medium mb-1">
@@ -1047,31 +969,42 @@ export function StaffPerformanceReport() {
                     <TableCell>
                       <div className="flex items-center gap-2">
                         {(() => {
-                          const previousData = previousMonthData.find(prev => prev.staffId === data.staffId)
-                          const trend = getPerformanceTrend(data.performanceScore, previousData?.performanceScore || 0)
-                          
-                          if (trend === 'up') {
+                          const previousData = previousMonthData.find(
+                            (prev) => prev.staffId === data.staffId
+                          )
+                          const trend = getPerformanceTrend(
+                            data.performanceScore,
+                            previousData?.performanceScore || 0
+                          )
+
+                          if (trend === "up") {
                             return (
                               <div className="flex items-center gap-1 text-green-600">
                                 <ArrowUp className="h-4 w-4" />
-                                <span className="text-sm font-semibold">{data.performanceScore.toFixed(1)}</span>
-                              </div>
-                            )
-                          } else if (trend === 'down') {
-                            return (
-                              <div className="flex items-center gap-1 text-red-600">
-                                <ArrowDown className="h-4 w-4" />
-                                <span className="text-sm font-semibold">{data.performanceScore.toFixed(1)}</span>
-                              </div>
-                            )
-                          } else {
-                            return (
-                              <div className="flex items-center gap-1 text-gray-600">
-                                <Minus className="h-4 w-4" />
-                                <span className="text-sm font-semibold">{data.performanceScore.toFixed(1)}</span>
+                                <span className="text-sm font-semibold">
+                                  {data.performanceScore.toFixed(1)}
+                                </span>
                               </div>
                             )
                           }
+                          if (trend === "down") {
+                            return (
+                              <div className="flex items-center gap-1 text-red-600">
+                                <ArrowDown className="h-4 w-4" />
+                                <span className="text-sm font-semibold">
+                                  {data.performanceScore.toFixed(1)}
+                                </span>
+                              </div>
+                            )
+                          }
+                          return (
+                            <div className="flex items-center gap-1 text-gray-600">
+                              <Minus className="h-4 w-4" />
+                              <span className="text-sm font-semibold">
+                                {data.performanceScore.toFixed(1)}
+                              </span>
+                            </div>
+                          )
                         })()}
                       </div>
                     </TableCell>
@@ -1084,14 +1017,7 @@ export function StaffPerformanceReport() {
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-48">
                           <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                          <DropdownMenuItem 
-                            onClick={() => handleSetCommission(staffMembers.find(s => (s._id || s.id) === data.staffId)!)}
-                            className="cursor-pointer hover:bg-blue-50"
-                          >
-                            <Award className="h-4 w-4 mr-2" />
-                            Manage Commission
-                          </DropdownMenuItem>
-                          <DropdownMenuItem 
+                          <DropdownMenuItem
                             onClick={() => openStaffDetailDrawer(data.staffId, data.staffName)}
                             className="cursor-pointer hover:bg-blue-50"
                           >
@@ -1108,46 +1034,6 @@ export function StaffPerformanceReport() {
           </Table>
         </div>
       </div>
-
-      {/* Commission Modal */}
-      <Dialog open={showCommissionModal} onOpenChange={setShowCommissionModal}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Set Commission Rates</DialogTitle>
-            <DialogDescription>
-              Set commission rates for {selectedStaffForCommission?.name}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <label className="text-sm font-medium">Service Commission Rate (%)</label>
-              <Input
-                type="number"
-                value={commissionRates.serviceRate}
-                onChange={(e) => setCommissionRates(prev => ({ ...prev, serviceRate: parseFloat(e.target.value) || 0 }))}
-                placeholder="Enter service commission rate"
-              />
-            </div>
-            <div>
-              <label className="text-sm font-medium">Product Commission Rate (%)</label>
-              <Input
-                type="number"
-                value={commissionRates.productRate}
-                onChange={(e) => setCommissionRates(prev => ({ ...prev, productRate: parseFloat(e.target.value) || 0 }))}
-                placeholder="Enter product commission rate"
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCommissionModal(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleSaveCommission}>
-              Save Commission Rates
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Staff Service Detail Drawer */}
       <StaffServiceDetailDrawer

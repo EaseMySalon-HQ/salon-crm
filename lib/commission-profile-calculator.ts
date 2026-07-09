@@ -5,6 +5,40 @@ import {
   getLinePreTaxTotal,
 } from './staff-line-revenue'
 
+type QualifyingRevenueBuckets = {
+  serviceRevenue: number
+  productRevenue: number
+  packageRevenue: number
+  membershipRevenue: number
+  prepaidRevenue: number
+}
+
+/** Split profile commission into service vs product columns by qualifying revenue mix. */
+function allocateCommissionBuckets(
+  profileType: CommissionProfileType | undefined,
+  profile: CommissionProfile,
+  commission: number,
+  revenues: QualifyingRevenueBuckets
+): { service: number; product: number } {
+  if (commission === 0) return { service: 0, product: 0 }
+  if (profileType === 'service_based') return { service: commission, product: 0 }
+  if (profileType === 'item_based') return { service: 0, product: commission }
+
+  const qualifying = profile.qualifyingItems ?? []
+  let serviceSide = 0
+  if (qualifying.includes('Service')) serviceSide += revenues.serviceRevenue
+  if (qualifying.includes('Package')) serviceSide += revenues.packageRevenue
+  if (qualifying.includes('Membership')) serviceSide += revenues.membershipRevenue
+  if (qualifying.includes('Prepaid')) serviceSide += revenues.prepaidRevenue
+  const productSide = qualifying.includes('Product') ? revenues.productRevenue : 0
+  const total = serviceSide + productSide
+  if (total <= 0) return { service: 0, product: 0 }
+  return {
+    service: commission * (serviceSide / total),
+    product: commission * (productSide / total),
+  }
+}
+
 export interface SaleItem {
   id: string
   name: string
@@ -240,6 +274,15 @@ export class CommissionProfileCalculator {
 
     // Calculate commission for each profile
     let totalCommission = 0
+    let serviceCommission = 0
+    let productCommission = 0
+    const revenueBuckets: QualifyingRevenueBuckets = {
+      serviceRevenue,
+      productRevenue,
+      packageRevenue,
+      membershipRevenue,
+      prepaidRevenue,
+    }
     const profileBreakdown: Array<{
       profileId: string
       profileName: string
@@ -266,6 +309,9 @@ export class CommissionProfileCalculator {
         }
 
         totalCommission += profileCommission
+        const split = allocateCommissionBuckets('service_based', profile, profileCommission, revenueBuckets)
+        serviceCommission += split.service
+        productCommission += split.product
 
         profileBreakdown.push({
           profileId,
@@ -290,6 +336,9 @@ export class CommissionProfileCalculator {
         }
 
         totalCommission += profileCommission
+        const split = allocateCommissionBuckets('item_based', profile, profileCommission, revenueBuckets)
+        serviceCommission += split.service
+        productCommission += split.product
 
         profileBreakdown.push({
           profileId,
@@ -344,6 +393,9 @@ export class CommissionProfileCalculator {
       }
 
       totalCommission += profileCommission
+      const split = allocateCommissionBuckets(profile.type, profile, profileCommission, revenueBuckets)
+      serviceCommission += split.service
+      productCommission += split.product
 
       profileBreakdown.push({
         profileId,
@@ -363,20 +415,8 @@ export class CommissionProfileCalculator {
       staffName: staffName || staffItems[0]?.staffName || staffId,
       totalCommission,
       totalRevenue,
-      serviceCommission: profileBreakdown
-        .filter(
-          (p) =>
-            p.profileType === 'service_based' ||
-            (p.profileType === 'target_based' && p.profileName.toLowerCase().includes('service'))
-        )
-        .reduce((sum, p) => sum + p.commission, 0),
-      productCommission: profileBreakdown
-        .filter(
-          (p) =>
-            p.profileType === 'item_based' ||
-            (p.profileType === 'target_based' && p.profileName.toLowerCase().includes('product'))
-        )
-        .reduce((sum, p) => sum + p.commission, 0),
+      serviceCommission,
+      productCommission,
       serviceRevenue,
       productRevenue,
       serviceCount: serviceItems.length,

@@ -1161,17 +1161,28 @@ export class ClientsAPI {
     return response.data
   }
 
-  static async getBulkStats(clientIds: string[]): Promise<ApiResponse<Record<string, { totalVisits: number; totalSpent: number; lastVisit: string }>>> {
+  static async getBulkStats(clientIds: string[]): Promise<
+    ApiResponse<
+      Record<string, { totalVisits: number; totalSpent: number; lastVisit: string; totalDues: number }>
+    >
+  > {
     const CHUNK = 250
     const ids = [...new Set(clientIds.map((id) => String(id || '').trim()).filter(Boolean))]
     if (ids.length === 0) {
-      return { success: true, data: {} } as ApiResponse<Record<string, { totalVisits: number; totalSpent: number; lastVisit: string }>>
+      return { success: true, data: {} } as ApiResponse<
+        Record<string, { totalVisits: number; totalSpent: number; lastVisit: string; totalDues: number }>
+      >
     }
-    const merged: Record<string, { totalVisits: number; totalSpent: number; lastVisit: string }> = {}
+    const merged: Record<
+      string,
+      { totalVisits: number; totalSpent: number; lastVisit: string; totalDues: number }
+    > = {}
     for (let i = 0; i < ids.length; i += CHUNK) {
       const slice = ids.slice(i, i + CHUNK)
       const response = await apiClient.post('/clients/bulk-stats', { clientIds: slice })
-      const payload = response.data as ApiResponse<Record<string, { totalVisits: number; totalSpent: number; lastVisit: string }>>
+      const payload = response.data as ApiResponse<
+        Record<string, { totalVisits: number; totalSpent: number; lastVisit: string; totalDues: number }>
+      >
       if (payload.success && payload.data) {
         Object.assign(merged, payload.data)
       }
@@ -3362,6 +3373,40 @@ export interface HolidayRow {
   id: string
   date: string
   name: string
+}
+
+/**
+ * Client segment threshold rules (CRM filters).
+ */
+export class ClientSegmentRulesAPI {
+  static async get(): Promise<
+    ApiResponse<{
+      newMaxVisits: number
+      vipSpendThreshold: number
+      atRiskAfterDays: number
+      winBackAfterDays: number
+    }>
+  > {
+    const response = await apiClient.get('/settings/client-segments')
+    return response.data
+  }
+
+  static async update(data: {
+    newMaxVisits: number
+    vipSpendThreshold: number
+    atRiskAfterDays: number
+    winBackAfterDays: number
+  }): Promise<
+    ApiResponse<{
+      newMaxVisits: number
+      vipSpendThreshold: number
+      atRiskAfterDays: number
+      winBackAfterDays: number
+    }>
+  > {
+    const response = await apiClient.put('/settings/client-segments', data)
+    return response.data
+  }
 }
 
 /**
