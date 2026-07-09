@@ -70,7 +70,7 @@ import {
 } from "@/lib/client-communication-consent"
 import { ClientCommunicationConsentFields } from "@/components/clients/client-communication-consent-fields"
 import { ClientGenderRadioField, isClientGenderSelected } from "@/components/clients/client-gender-radio-field"
-import { ClientsAPI, ServicesAPI, StaffAPI, AppointmentsAPI, UsersAPI, StaffDirectoryAPI, SalesAPI, SettingsAPI, type ApiResponse } from "@/lib/api"
+import { ClientsAPI, ServicesAPI, StaffAPI, AppointmentsAPI, UsersAPI, StaffDirectoryAPI, SalesAPI, SettingsAPI, StaffAttendanceAPI, type ApiResponse } from "@/lib/api"
 import type { Receipt as InvoiceReceipt } from "@/lib/data"
 import { isHiddenAppointment, getAppointmentStatusPillClass, getAppointmentEditAppearanceStatus, toMongoIdString } from "@/lib/appointment-calendar-helpers"
 import { readServiceCheckoutDraftByRef } from "@/lib/service-checkout-draft-storage"
@@ -579,6 +579,9 @@ export function AppointmentForm({
   const [services, setServices] = useState<any[]>([])
   const [staff, setStaff] = useState<any[]>([])
   const [appointmentsForDate, setAppointmentsForDate] = useState<any[]>([])
+  const [attendanceCheckedInStaffIds, setAttendanceCheckedInStaffIds] = useState<Set<string>>(
+    () => new Set(),
+  )
   const [loadingServices, setLoadingServices] = useState(true)
   const [loadingStaff, setLoadingStaff] = useState(true)
 
@@ -1232,6 +1235,37 @@ export function AppointmentForm({
       .catch(() => setAppointmentsForDate([]))
   }, [formDate])
 
+  useEffect(() => {
+    if (!formDate) {
+      setAttendanceCheckedInStaffIds(new Set())
+      return
+    }
+    let cancelled = false
+    const dateStr = format(formDate, "yyyy-MM-dd")
+    const loadAttendance = async () => {
+      try {
+        const res = await StaffAttendanceAPI.list({ date: dateStr })
+        if (cancelled) return
+        const checkedIn = new Set<string>()
+        if (res?.success && Array.isArray(res.data)) {
+          for (const row of res.data) {
+            if (row.checkInAt && row.staffId) checkedIn.add(String(row.staffId))
+          }
+        }
+        setAttendanceCheckedInStaffIds(checkedIn)
+      } catch {
+        if (!cancelled) setAttendanceCheckedInStaffIds(new Set())
+      }
+    }
+    void loadAttendance()
+    const onFocus = () => void loadAttendance()
+    window.addEventListener("focus", onFocus)
+    return () => {
+      cancelled = true
+      window.removeEventListener("focus", onFocus)
+    }
+  }, [formDate])
+
   // Total duration of selected services
   const totalDuration = useMemo(() => {
     const sum = selectedServices.reduce((sum, s) => sum + (s.duration || 0), 0)
@@ -1471,7 +1505,11 @@ export function AppointmentForm({
 
       const schedule = member.workSchedule || []
       const dayRow = schedule.find((r: any) => r.day === dayIndex)
-      if (dayRow && dayRow.enabled === false) return false
+      const workedWeekoff =
+        dayRow &&
+        dayRow.enabled === false &&
+        attendanceCheckedInStaffIds.has(String(staffId))
+      if (dayRow && dayRow.enabled === false && !workedWeekoff) return false
       const startStr = dayRow?.startTime ?? "09:00"
       const endStr = dayRow?.endTime ?? "21:00"
       const workStartM = parseTimeToMinutes(startStr)
@@ -1503,7 +1541,7 @@ export function AppointmentForm({
       })
       return !hasOverlappingAppointment
     })
-  }, [staff, formDate, formTime, selectedServices, appointmentsForDate, appointmentId, schedulingMode, getServiceStartMinutes])
+  }, [staff, formDate, formTime, selectedServices, appointmentsForDate, appointmentId, schedulingMode, getServiceStartMinutes, attendanceCheckedInStaffIds])
 
   // Load services and staff on component mount
   useEffect(() => {

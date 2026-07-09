@@ -89,6 +89,9 @@ const businessSettingsSchema = new mongoose.Schema({
   /** Attendance & Payroll business defaults (merged with defaults in API). */
   attendancePayroll: { type: mongoose.Schema.Types.Mixed, default: undefined },
 
+  /** Client segment thresholds for CRM filters (merged with defaults in API). */
+  clientSegmentRules: { type: mongoose.Schema.Types.Mixed, default: undefined },
+
   // Multi-tenant support
   branchId: {
     type: mongoose.Schema.Types.ObjectId,

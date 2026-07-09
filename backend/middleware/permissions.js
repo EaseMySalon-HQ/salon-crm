@@ -40,7 +40,6 @@ const SETTINGS_SUB_MODULES = [
   'tax_settings',
   'payment_settings',
   'payroll_settings',
-  'incentive_settings',
   'pos_settings',
   'notification_settings',
   'plan_billing',
@@ -65,11 +64,43 @@ const STAFF_DIRECTORY_LEGACY_TAB_FALLBACK = {
   staff_incentive: 'incentive_settings',
 };
 
+/** Bidirectional aliases — either module satisfies checks for the other. */
+const PERMISSION_MODULE_ALIASES = {
+  staff_incentive: 'incentive_settings',
+  incentive_settings: 'staff_incentive',
+};
+
+const GRANULAR_STAFF_DIRECTORY_TAB_MODULES = [
+  'staff_timesheet',
+  'staff_attendance',
+  'staff_payroll',
+  'staff_incentive',
+];
+
 function hasExplicitPermission(permissions, module, feature) {
   if (!Array.isArray(permissions) || permissions.length === 0) return false;
   return permissions.some(
     (p) => p && p.module === module && p.feature === feature && p.enabled === true
   );
+}
+
+/**
+ * Staff Directory tab access with explicit per-tab overrides (mirrors lib/permission-mappings.ts).
+ * @returns {boolean|null} true/false when granular rules apply; null to continue normal checks
+ */
+function staffDirectoryTabGranted(permissions, tabModule, feature) {
+  if (!Array.isArray(permissions) || permissions.length === 0) return null;
+  const tabConfigured = permissions.some((p) => p && p.module === tabModule);
+  if (tabConfigured) {
+    return hasExplicitPermission(permissions, tabModule, feature);
+  }
+  const hasGranularTabs = permissions.some(
+    (p) => p && GRANULAR_STAFF_DIRECTORY_TAB_MODULES.includes(p.module),
+  );
+  if (hasGranularTabs && tabModule !== 'staff') {
+    return false;
+  }
+  return null;
 }
 
 /**
@@ -115,6 +146,13 @@ function userHasPermission(user, module, feature) {
 
   if (hasExplicitPermission(perms, module, feature)) return true;
 
+  const staffTabModules = [...STAFF_DIRECTORY_SUB_MODULES];
+  if (staffTabModules.includes(module)) {
+    const granular = staffDirectoryTabGranted(perms, module, feature);
+    if (granular === true) return true;
+    if (granular === false) return false;
+  }
+
   // Reports view granular fallback — having either granular report-view permission
   // counts as reports.view (mirrors frontend logic).
   if (module === 'reports' && feature === 'view') {
@@ -131,9 +169,12 @@ function userHasPermission(user, module, feature) {
     );
   }
 
-  // Staff Directory route: any tab view (or legacy payroll/incentive settings) counts.
+  // Staff Directory route: any tab view (with per-tab overrides) counts.
   if (module === 'staff' && feature === 'view') {
     return STAFF_DIRECTORY_SUB_MODULES.some((tabModule) => {
+      const granular = staffDirectoryTabGranted(perms, tabModule, 'view');
+      if (granular === true) return true;
+      if (granular === false) return false;
       if (hasExplicitPermission(perms, tabModule, 'view')) return true;
       const legacy = STAFF_DIRECTORY_LEGACY_TAB_FALLBACK[tabModule];
       return legacy ? hasExplicitPermission(perms, legacy, 'view') : false;
@@ -142,6 +183,11 @@ function userHasPermission(user, module, feature) {
 
   const legacyStaffTab = STAFF_DIRECTORY_LEGACY_TAB_FALLBACK[module];
   if (legacyStaffTab && hasExplicitPermission(perms, legacyStaffTab, feature)) {
+    return true;
+  }
+
+  const aliasModule = PERMISSION_MODULE_ALIASES[module];
+  if (aliasModule && hasExplicitPermission(perms, aliasModule, feature)) {
     return true;
   }
 

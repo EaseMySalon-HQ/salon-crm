@@ -157,7 +157,7 @@ router.get(
   '/',
   authenticateToken,
   setupBusinessDatabase,
-  requirePermission('payroll_settings', 'view'),
+  requirePermission('staff_payroll', 'view'),
   async (req, res) => {
     try {
       const branchId = req.user.branchId;
@@ -184,8 +184,8 @@ router.get(
   authenticateToken,
   setupBusinessDatabase,
   requireAnyPermission(
-    { module: 'payroll_settings', feature: 'view' },
-    { module: 'incentive_settings', feature: 'view' },
+    { module: 'staff_payroll', feature: 'view' },
+    { module: 'staff_incentive', feature: 'view' },
     { module: 'reports', feature: 'view_staff_commission' }
   ),
   async (req, res) => {
@@ -224,7 +224,7 @@ router.get(
   '/records/:id/audit',
   authenticateToken,
   setupBusinessDatabase,
-  requirePermission('payroll_settings', 'view'),
+  requirePermission('staff_payroll', 'view'),
   async (req, res) => {
     try {
       const branchId = req.user.branchId;
@@ -261,7 +261,7 @@ router.post(
   '/',
   authenticateToken,
   setupBusinessDatabase,
-  requirePermission('payroll_settings', 'edit'),
+  requirePermission('staff_payroll', 'edit'),
   async (req, res) => {
     try {
       const branchId = req.user.branchId;
@@ -411,7 +411,7 @@ router.patch(
   '/:id/status',
   authenticateToken,
   setupBusinessDatabase,
-  requirePermission('payroll_settings', 'edit'),
+  requirePermission('staff_payroll', 'edit'),
   async (req, res) => {
     try {
       const branchId = req.user.branchId;
@@ -504,7 +504,7 @@ router.delete(
   '/:id',
   authenticateToken,
   setupBusinessDatabase,
-  requirePermission('payroll_settings', 'delete'),
+  requirePermission('staff_payroll', 'delete'),
   async (req, res) => {
     try {
       const branchId = req.user.branchId;

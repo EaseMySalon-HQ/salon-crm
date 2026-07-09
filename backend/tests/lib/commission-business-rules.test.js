@@ -155,3 +155,31 @@ test('item_based fixed commission applies per product across multiple lines', ()
   assert.equal(res.totalCommission, 500);
   assert.equal(res.profileBreakdown[0].itemCount, 10);
 });
+
+test('target_based service commission follows qualifying items, not profile name', () => {
+  const targetProfile = {
+    id: 'p-target',
+    name: 'Commission by Target',
+    isActive: true,
+    type: 'target_based',
+    qualifyingItems: ['Service'],
+    targetTiers: [{ from: 0, to: 1000000, calculateBy: 'percent', value: 5 }],
+  };
+  const serviceSale = sale({
+    items: [
+      {
+        type: 'service',
+        name: 'Haircut',
+        quantity: 1,
+        price: 65000,
+        total: 65000,
+        staffId: STAFF_ID,
+        staffName: STAFF_NAME,
+      },
+    ],
+  });
+  const res = calculateMultipleSalesCommission([serviceSale], [targetProfile], STAFF_ID, STAFF_NAME);
+  assert.equal(res.totalCommission, 3250);
+  assert.equal(res.serviceCommission, 3250);
+  assert.equal(res.productCommission, 0);
+});

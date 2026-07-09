@@ -49,7 +49,7 @@ const {
   buildAnalyticsStaffTab,
   buildAnalyticsStaffDrillDown,
 } = require('./lib/analytics-tabs');
-const { staffEmailPreferenceFindQuery } = require('./lib/admin-email-preferences');
+const { resolveReportRecipients } = require('./lib/report-email-recipients');
 
 // Import database manager and middleware
 const databaseManager = require('./config/database-manager');
@@ -706,6 +706,7 @@ app.use('/api/staff-leave-credits', authenticateToken, setupBusinessDatabase, PA
 // Attendance & timesheet routes (Growth+ plan). Payroll-specific settings within
 // the shared settings endpoint are stripped for non-payroll tenants server-side.
 app.use('/api/settings', authenticateToken, setupBusinessDatabase, ATTENDANCE, require('./routes/settings-attendance-payroll'));
+app.use('/api/settings', authenticateToken, setupBusinessDatabase, require('./routes/settings-client-segments'));
 app.use('/api/staff-attendance', authenticateToken, setupBusinessDatabase, ATTENDANCE, require('./routes/staff-attendance'));
 
 // Granular permission middleware
@@ -10624,59 +10625,15 @@ app.post('/api/appointments', authenticateToken, setupBusinessDatabase, requireP
         });
         
         if (staffNotificationsEnabled) {
-          // If recipient list is empty, find all staff with appointment alerts enabled
-          let recipients = [];
+          const recipients = await resolveReportRecipients({
+            business,
+            businessModels: req.businessModels,
+            mainConnection,
+            prefKey: 'appointmentAlerts',
+            recipientStaffIds,
+          });
           
-          if (recipientStaffIds.length > 0) {
-            // Use configured recipient list
-            recipients = await Staff.find(
-              staffEmailPreferenceFindQuery('appointmentAlerts', { recipientStaffIds })
-            ).lean();
-          } else {
-            // Fallback: Find all staff with appointment alerts enabled
-            logger.debug('⚠️ No recipient list configured, finding all staff with appointment alerts enabled');
-            recipients = await Staff.find(
-              staffEmailPreferenceFindQuery('appointmentAlerts', { branchId: req.user.branchId })
-            ).lean();
-          }
-          
-          // Also check for admin users (business owners) who should receive notifications
-          // Admin users are in the main database, not the business database
-          const User = mainConnection.model('User', require('./models/User').schema);
-          const adminUsers = await User.find({
-            branchId: req.user.branchId,
-            role: 'admin',
-            email: { $exists: true, $ne: '' }
-          }).lean();
-          
-          logger.debug(`📧 Found ${adminUsers.length} admin user(s) for business`);
-          
-          // Add admin users to recipients (they always have notifications enabled)
-          let adminCount = 0;
-          for (const admin of adminUsers) {
-            // Check if admin is already in recipients
-            const alreadyInList = recipients.some(r => r.email === admin.email);
-            if (!alreadyInList) {
-              recipients.push({
-                _id: admin._id,
-                name: admin.name || `${admin.firstName || ''} ${admin.lastName || ''}`.trim() || admin.email,
-                email: admin.email,
-                role: 'admin',
-                emailNotifications: {
-                  enabled: true,
-                  preferences: {
-                    appointmentAlerts: true // Admin users always have this enabled
-                  }
-                }
-              });
-              adminCount++;
-              logger.debug(`📧 Added admin user to recipients: ${admin.email} (${admin.name || admin.email})`);
-            } else {
-              logger.debug(`📧 Admin user already in recipients: ${admin.email}`);
-            }
-          }
-          
-          logger.debug(`📧 Found ${recipients.length} total recipients for appointment notifications (${recipients.length - adminCount} staff + ${adminCount} admin)`);
+          logger.debug(`📧 Found ${recipients.length} total recipients for appointment notifications`);
           
           if (recipients.length === 0) {
             logger.debug('⚠️ No recipients found. Check: staff email notifications enabled, appointment alerts preference enabled, valid email addresses, recipient list in business settings, admin user email addresses');
@@ -11092,9 +11049,13 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
           const sendToStaff = emailSettings?.receiptNotifications?.sendToStaff === true;
           if (sendToStaff) {
             const recipientStaffIds = emailSettings.receiptNotifications.recipientStaffIds || [];
-            const recipients = await Staff.find(
-              staffEmailPreferenceFindQuery('receiptAlerts', { recipientStaffIds })
-            ).lean();
+            const recipients = await resolveReportRecipients({
+              business,
+              businessModels: req.businessModels,
+              mainConnection,
+              prefKey: 'receiptAlerts',
+              recipientStaffIds,
+            });
             
             for (const staff of recipients) {
               try {
@@ -12005,39 +11966,14 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, requi
             (!explicitlyDisabledCancellations || !hasRecipientList);
           
           if (staffCancellationEnabled) {
-            const { Staff } = req.businessModels;
             const recipientStaffIds = emailSettings?.appointmentNotifications?.recipientStaffIds || [];
-            
-            let recipients = [];
-            if (recipientStaffIds.length > 0) {
-              recipients = await Staff.find(
-                staffEmailPreferenceFindQuery('appointmentAlerts', { recipientStaffIds })
-              ).lean();
-            } else {
-              recipients = await Staff.find(
-                staffEmailPreferenceFindQuery('appointmentAlerts', { branchId: req.user.branchId })
-              ).lean();
-            }
-            
-            // Add admin users
-            const User = mainConnection.model('User', require('./models/User').schema);
-            const adminUsers = await User.find({
-              branchId: req.user.branchId,
-              role: 'admin',
-              email: { $exists: true, $ne: '' }
-            }).lean();
-            
-            for (const admin of adminUsers) {
-              const alreadyInList = recipients.some(r => r.email === admin.email);
-              if (!alreadyInList) {
-                recipients.push({
-                  _id: admin._id,
-                  name: admin.name || `${admin.firstName || ''} ${admin.lastName || ''}`.trim() || admin.email,
-                  email: admin.email,
-                  role: 'admin'
-                });
-              }
-            }
+            const recipients = await resolveReportRecipients({
+              business,
+              businessModels: req.businessModels,
+              mainConnection,
+              prefKey: 'appointmentAlerts',
+              recipientStaffIds,
+            });
             
             // Send cancellation notification to staff/admin
             // Get service name for staff notifications
@@ -14631,14 +14567,29 @@ app.post('/api/clients/bulk-stats', authenticateToken, setupBusinessDatabase, as
       return res.json({ success: true, data: {} });
     }
 
+    const cancelledStatuses = ['cancelled', 'Cancelled'];
     const buildPipeline = (phoneBatch) => [
-      { $match: { customerPhone: { $in: phoneBatch } } },
+      {
+        $match: {
+          customerPhone: { $in: phoneBatch },
+          status: { $nin: cancelledStatuses },
+        },
+      },
       {
         $group: {
           _id: '$customerPhone',
           totalVisits: { $sum: 1 },
           totalSpent: { $sum: { $ifNull: ['$grossTotal', 0] } },
           lastVisit: { $max: '$date' },
+          totalDues: {
+            $sum: {
+              $cond: [
+                { $gt: [{ $ifNull: ['$paymentStatus.remainingAmount', 0] }, 0] },
+                { $ifNull: ['$paymentStatus.remainingAmount', 0] },
+                0,
+              ],
+            },
+          },
         },
       },
     ];
@@ -14658,6 +14609,7 @@ app.post('/api/clients/bulk-stats', authenticateToken, setupBusinessDatabase, as
           totalVisits: s.totalVisits,
           totalSpent: s.totalSpent,
           lastVisit: s.lastVisit,
+          totalDues: s.totalDues || 0,
         };
       }
     }
@@ -17571,7 +17523,7 @@ app.delete('/api/cash-registry/:id', authenticateToken, setupBusinessDatabase, r
 // Commission Profiles API — Incentive Management (target, service, and item profiles).
 
 // Get all commission profiles
-app.get('/api/commission-profiles', authenticateToken, setupBusinessDatabase, requirePermission('incentive_settings', 'view'), INCENTIVE_MANAGEMENT, async (req, res) => {
+app.get('/api/commission-profiles', authenticateToken, setupBusinessDatabase, requirePermission('staff_incentive', 'view'), INCENTIVE_MANAGEMENT, async (req, res) => {
   try {
     const { CommissionProfile } = req.businessModels;
     const commissionProfiles = await CommissionProfile.find().sort({ createdAt: -1 });
@@ -17590,7 +17542,7 @@ app.get('/api/commission-profiles', authenticateToken, setupBusinessDatabase, re
 });
 
 // Create commission profile
-app.post('/api/commission-profiles', authenticateToken, setupBusinessDatabase, requirePermission('incentive_settings', 'create'), INCENTIVE_MANAGEMENT, async (req, res) => {
+app.post('/api/commission-profiles', authenticateToken, setupBusinessDatabase, requirePermission('staff_incentive', 'create'), INCENTIVE_MANAGEMENT, async (req, res) => {
   try {
     const { CommissionProfile } = req.businessModels;
     const profile = await CommissionProfile.create({
@@ -17612,7 +17564,7 @@ app.post('/api/commission-profiles', authenticateToken, setupBusinessDatabase, r
 });
 
 // Update commission profile
-app.put('/api/commission-profiles/:id', authenticateToken, setupBusinessDatabase, requirePermission('incentive_settings', 'edit'), INCENTIVE_MANAGEMENT, async (req, res) => {
+app.put('/api/commission-profiles/:id', authenticateToken, setupBusinessDatabase, requirePermission('staff_incentive', 'edit'), INCENTIVE_MANAGEMENT, async (req, res) => {
   try {
     const { CommissionProfile } = req.businessModels;
     const { id } = req.params;
@@ -17648,7 +17600,7 @@ app.put('/api/commission-profiles/:id', authenticateToken, setupBusinessDatabase
 });
 
 // Delete commission profile
-app.delete('/api/commission-profiles/:id', authenticateToken, setupBusinessDatabase, requirePermission('incentive_settings', 'delete'), INCENTIVE_MANAGEMENT, async (req, res) => {
+app.delete('/api/commission-profiles/:id', authenticateToken, setupBusinessDatabase, requirePermission('staff_incentive', 'delete'), INCENTIVE_MANAGEMENT, async (req, res) => {
   try {
     const { CommissionProfile } = req.businessModels;
     const { id } = req.params;

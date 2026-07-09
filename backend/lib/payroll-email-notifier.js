@@ -8,7 +8,7 @@ const { isPlatformEmailDisabled } = require('../lib/business-email-policy');
 const { getPreviousMonthRangeIST } = require('../utils/date-utils');
 const { generatePayslipPdfBuffer, fmtMoney, formatPayPeriodMonth } = require('./payslip-pdf');
 
-const { staffEmailPreferenceFindQuery } = require('./admin-email-preferences');
+const { resolveReportRecipients } = require('./report-email-recipients');
 
 const EMAIL_DELAY_MS = 600;
 
@@ -19,40 +19,13 @@ function previousPayrollMonthKey(referenceDate = new Date()) {
 
 async function resolvePayrollEmailRecipients(business, businessModels, mainConnection) {
   const emailSettings = business.settings?.emailNotificationSettings;
-  const recipientStaffIds = emailSettings?.payrollNotifications?.recipientStaffIds || [];
-  const { Staff } = businessModels;
-  let recipients = [];
-
-  if (recipientStaffIds.length > 0) {
-    recipients = await Staff.find(
-      staffEmailPreferenceFindQuery('payrollSlip', { recipientStaffIds })
-    ).lean();
-  } else {
-    recipients = await Staff.find(
-      staffEmailPreferenceFindQuery('payrollSlip', { branchId: business._id })
-    ).lean();
-  }
-
-  const User = mainConnection.model('User', require('../models/User').schema);
-  const adminUsers = await User.find({
-    branchId: business._id,
-    role: 'admin',
-    email: { $exists: true, $ne: '' },
-  }).lean();
-
-  for (const admin of adminUsers) {
-    const alreadyInList = recipients.some((r) => r.email === admin.email);
-    if (!alreadyInList) {
-      recipients.push({
-        _id: admin._id,
-        name: admin.name || `${admin.firstName || ''} ${admin.lastName || ''}`.trim() || admin.email,
-        email: admin.email,
-        role: 'admin',
-      });
-    }
-  }
-
-  return recipients;
+  return resolveReportRecipients({
+    business,
+    businessModels,
+    mainConnection,
+    prefKey: 'payrollSlip',
+    recipientStaffIds: emailSettings?.payrollNotifications?.recipientStaffIds || [],
+  });
 }
 
 function payrollRecordToRow(record, staffMeta = {}) {

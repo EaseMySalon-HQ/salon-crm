@@ -80,6 +80,26 @@ function enrichSalesWithProductIdsFromCatalog(sales, products) {
   }
 }
 
+function allocateCommissionBuckets(profileType, profile, commission, revenues) {
+  if (commission === 0) return { service: 0, product: 0 };
+  if (profileType === 'service_based') return { service: commission, product: 0 };
+  if (profileType === 'item_based') return { service: 0, product: commission };
+
+  const qualifying = profile.qualifyingItems ?? [];
+  let serviceSide = 0;
+  if (qualifying.includes('Service')) serviceSide += revenues.serviceRevenue;
+  if (qualifying.includes('Package')) serviceSide += revenues.packageRevenue;
+  if (qualifying.includes('Membership')) serviceSide += revenues.membershipRevenue;
+  if (qualifying.includes('Prepaid')) serviceSide += revenues.prepaidRevenue;
+  const productSide = qualifying.includes('Product') ? revenues.productRevenue : 0;
+  const total = serviceSide + productSide;
+  if (total <= 0) return { service: 0, product: 0 };
+  return {
+    service: commission * (serviceSide / total),
+    product: commission * (productSide / total),
+  };
+}
+
 function calculateTargetBasedCommission(revenue, targetTiers, cascadingCommission = false) {
   let totalCommission = 0;
   if (cascadingCommission) {
@@ -324,6 +344,15 @@ function calculateSaleCommission(sale, staffCommissionProfiles, staffId, staffNa
   const totalRevenue = serviceRevenue + productRevenue + packageRevenue + membershipRevenue + prepaidRevenue;
 
   let totalCommission = 0;
+  let serviceCommission = 0;
+  let productCommission = 0;
+  const revenueBuckets = {
+    serviceRevenue,
+    productRevenue,
+    packageRevenue,
+    membershipRevenue,
+    prepaidRevenue,
+  };
   const profileBreakdown = [];
 
   for (const profile of staffCommissionProfiles || []) {
@@ -336,6 +365,9 @@ function calculateSaleCommission(sale, staffCommissionProfiles, staffId, staffNa
         calculateServiceBasedCommission(serviceItems, profile.serviceRules);
       if (profileCommission === 0 && profileRevenue === 0) continue;
       totalCommission += profileCommission;
+      const split = allocateCommissionBuckets('service_based', profile, profileCommission, revenueBuckets);
+      serviceCommission += split.service;
+      productCommission += split.product;
       profileBreakdown.push({
         profileId,
         profileName: profile.name,
@@ -352,6 +384,9 @@ function calculateSaleCommission(sale, staffCommissionProfiles, staffId, staffNa
         calculateProductBasedCommission(productItems, profile.productRules);
       if (profileCommission === 0 && profileRevenue === 0) continue;
       totalCommission += profileCommission;
+      const split = allocateCommissionBuckets('item_based', profile, profileCommission, revenueBuckets);
+      serviceCommission += split.service;
+      productCommission += split.product;
       profileBreakdown.push({
         profileId,
         profileName: profile.name,
@@ -404,6 +439,9 @@ function calculateSaleCommission(sale, staffCommissionProfiles, staffId, staffNa
     }
 
     totalCommission += profileCommission;
+    const split = allocateCommissionBuckets(profile.type, profile, profileCommission, revenueBuckets);
+    serviceCommission += split.service;
+    productCommission += split.product;
     profileBreakdown.push({
       profileId,
       profileName: profile.name,
@@ -426,20 +464,8 @@ function calculateSaleCommission(sale, staffCommissionProfiles, staffId, staffNa
     staffName: staffDisplayName,
     totalCommission,
     totalRevenue,
-    serviceCommission: profileBreakdown
-      .filter(
-        (p) =>
-          p.profileType === 'service_based' ||
-          (p.profileType === 'target_based' && String(p.profileName).toLowerCase().includes('service'))
-      )
-      .reduce((sum, p) => sum + p.commission, 0),
-    productCommission: profileBreakdown
-      .filter(
-        (p) =>
-          p.profileType === 'item_based' ||
-          (p.profileType === 'target_based' && String(p.profileName).toLowerCase().includes('product'))
-      )
-      .reduce((sum, p) => sum + p.commission, 0),
+    serviceCommission,
+    productCommission,
     serviceRevenue,
     productRevenue,
     serviceCount: serviceItems.length,

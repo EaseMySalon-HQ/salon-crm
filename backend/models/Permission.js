@@ -141,12 +141,12 @@ const roleDefinitions = {
       { module: 'payroll_settings', feature: 'delete', enabled: true },
       { module: 'payroll_settings', feature: 'manage', enabled: true },
 
-      // Incentive Management
-      { module: 'incentive_settings', feature: 'view', enabled: true },
-      { module: 'incentive_settings', feature: 'create', enabled: true },
-      { module: 'incentive_settings', feature: 'edit', enabled: true },
-      { module: 'incentive_settings', feature: 'delete', enabled: true },
-      { module: 'incentive_settings', feature: 'manage', enabled: true }
+      // Incentive Management (Staff Directory tab)
+      { module: 'staff_incentive', feature: 'view', enabled: true },
+      { module: 'staff_incentive', feature: 'create', enabled: true },
+      { module: 'staff_incentive', feature: 'edit', enabled: true },
+      { module: 'staff_incentive', feature: 'delete', enabled: true },
+      { module: 'staff_incentive', feature: 'manage', enabled: true }
     ]
   },
   manager: {

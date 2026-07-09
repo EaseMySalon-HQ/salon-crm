@@ -44,7 +44,7 @@ router.get(
   '/',
   authenticateToken,
   setupBusinessDatabase,
-  requirePermission('payroll_settings', 'view'),
+  requirePermission('staff_payroll', 'view'),
   async (req, res) => {
     try {
       const branchId = req.user.branchId;
@@ -74,7 +74,7 @@ router.post(
   '/',
   authenticateToken,
   setupBusinessDatabase,
-  requirePermission('payroll_settings', 'edit'),
+  requirePermission('staff_payroll', 'edit'),
   async (req, res) => {
     try {
       const branchId = req.user.branchId;
@@ -137,7 +137,7 @@ router.patch(
   '/:id',
   authenticateToken,
   setupBusinessDatabase,
-  requirePermission('payroll_settings', 'edit'),
+  requirePermission('staff_payroll', 'edit'),
   async (req, res) => {
     try {
       const branchId = req.user.branchId;
@@ -256,7 +256,7 @@ router.patch(
   '/:id/close',
   authenticateToken,
   setupBusinessDatabase,
-  requirePermission('payroll_settings', 'edit'),
+  requirePermission('staff_payroll', 'edit'),
   async (req, res) => {
     try {
       const branchId = req.user.branchId;
@@ -301,7 +301,7 @@ router.get(
   '/:id/logs',
   authenticateToken,
   setupBusinessDatabase,
-  requirePermission('payroll_settings', 'view'),
+  requirePermission('staff_payroll', 'view'),
   async (req, res) => {
     try {
       const branchId = req.user.branchId;
