@@ -3,7 +3,12 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from "react"
 import { useRouter } from "next/navigation"
 import { AuthAPI } from "@/lib/api"
-import { SETTINGS_MODULES, STAFF_DIRECTORY_TAB_MODULES, STAFF_DIRECTORY_LEGACY_TAB_FALLBACK } from "@/lib/permission-mappings"
+import {
+  SETTINGS_MODULES,
+  STAFF_DIRECTORY_TAB_MODULES,
+  PERMISSION_MODULE_ALIASES,
+  staffDirectoryTabPermissionGranted,
+} from "@/lib/permission-mappings"
 import { SessionTimeoutManager } from "@/components/auth/session-timeout-manager"
 import { AUTH_LOGOUT_EVENT, clearAuthStorage } from "@/lib/auth-utils"
 import { setCsrfTokenPersisted } from "@/lib/csrf"
@@ -479,9 +484,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     )
       return true
     if (!user?.permissions?.length) return false
+    const perms = user.permissions
+    const explicitMatch = (m: string, f: string) =>
+      perms.some((p) => p.module === m && p.feature === f && p.enabled)
     const match = (p: { module: string; feature: string; enabled: boolean }) =>
       p.module === module && p.feature === feature && p.enabled
-    if (user.permissions.some(match)) return true
+    if (perms.some(match)) return true
     // Reports "view": grant when any granular report view is enabled
     if (module === "reports" && feature === "view") {
       return user.permissions.some(
@@ -500,17 +508,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Staff Directory parent / route: any tab view grants access
     if (module === "staff" && feature === "view") {
       return STAFF_DIRECTORY_TAB_MODULES.some((tabModule) =>
-        user.permissions!.some((p) => {
-          if (!p.enabled || p.feature !== "view") return false
-          if (p.module === tabModule) return true
-          const legacy = STAFF_DIRECTORY_LEGACY_TAB_FALLBACK[tabModule]
-          return legacy != null && p.module === legacy
-        })
+        staffDirectoryTabPermissionGranted(perms, tabModule, "view", explicitMatch),
       )
     }
-    // Per-tab staff directory: legacy payroll_settings / incentive_settings fallback
-    const legacyStaffTab = STAFF_DIRECTORY_LEGACY_TAB_FALLBACK[module]
-    if (legacyStaffTab && user.permissions!.some((p) => p.module === legacyStaffTab && p.feature === feature && p.enabled)) {
+    // Per-tab staff directory with explicit tab overrides (no legacy bleed between tabs)
+    if ((STAFF_DIRECTORY_TAB_MODULES as readonly string[]).includes(module)) {
+      return staffDirectoryTabPermissionGranted(
+        perms,
+        module as (typeof STAFF_DIRECTORY_TAB_MODULES)[number],
+        feature,
+        explicitMatch,
+      )
+    }
+    // Legacy settings-module aliases (incentive only; payroll tabs use staffDirectoryTabPermissionGranted)
+    // Bidirectional module aliases (e.g. staff_incentive ↔ incentive_settings)
+    const aliasModule = PERMISSION_MODULE_ALIASES[module]
+    if (
+      aliasModule &&
+      user.permissions!.some((p) => p.module === aliasModule && p.feature === feature && p.enabled)
+    ) {
       return true
     }
     return false

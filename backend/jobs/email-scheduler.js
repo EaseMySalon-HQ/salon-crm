@@ -14,7 +14,7 @@ const { sendWeeklySummaryForBusiness } = require('../lib/weekly-summary-dispatch
 const { sendMonthlySummaryForBusiness } = require('../lib/monthly-summary-dispatch');
 const { precomputeAllMonthlySummaries } = require('../lib/monthly-summary-precompute');
 const { isPlatformEmailDisabled } = require('../lib/business-email-policy');
-const { staffEmailPreferenceFindQuery } = require('../lib/admin-email-preferences');
+const { resolveReportRecipients } = require('../lib/report-email-recipients');
 
 /**
  * Send daily summary emails to all businesses
@@ -301,7 +301,7 @@ async function checkLowInventory() {
         // Get business database connection
         const businessDb = await databaseManager.getConnection(business._id, mainConnection);
         const businessModels = modelFactory.createBusinessModels(businessDb);
-        const { Product, Staff } = businessModels;
+        const { Product } = businessModels;
         
         // Find products with low stock
         const allProducts = await Product.find({ isActive: true }).lean();
@@ -318,40 +318,13 @@ async function checkLowInventory() {
         
         logger.debug(`Found ${lowStockProducts.length} low stock product(s) for ${business.name}`);
         
-        // Get recipient staff
-        const recipientStaffIds = emailSettings?.systemAlerts?.recipientStaffIds || [];
-        let recipients = [];
-        
-        if (recipientStaffIds.length > 0) {
-          recipients = await Staff.find(
-            staffEmailPreferenceFindQuery('lowInventory', { recipientStaffIds })
-          ).lean();
-        } else {
-          recipients = await Staff.find(
-            staffEmailPreferenceFindQuery('lowInventory', { branchId: business._id })
-          ).lean();
-        }
-        
-        // Add admin users from User model
-        const User = mainConnection.model('User', require('../models/User').schema);
-        const adminUsers = await User.find({
-          branchId: business._id,
-          role: 'admin',
-          email: { $exists: true, $ne: '' }
-        }).lean();
-        
-        // Add admin users to recipients (they always have notifications enabled)
-        for (const admin of adminUsers) {
-          const adminHasPreference = admin.emailNotifications?.preferences?.lowInventory !== false;
-          if (adminHasPreference && admin.email) {
-            recipients.push({
-              _id: admin._id,
-              email: admin.email,
-              name: admin.firstName + ' ' + admin.lastName || admin.email,
-              role: 'admin'
-            });
-          }
-        }
+        const recipients = await resolveReportRecipients({
+          business,
+          businessModels,
+          mainConnection,
+          prefKey: 'lowInventory',
+          recipientStaffIds: emailSettings?.systemAlerts?.recipientStaffIds || [],
+        });
         
         if (recipients.length === 0) {
           logger.warn(`No recipients found for low inventory alerts for ${business.name}`);

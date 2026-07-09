@@ -7,6 +7,7 @@ import { ProtectedLayout } from "@/components/layout/protected-layout"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { CommissionProfileList } from "@/components/settings/commission-profile-list"
 import { StaffCommissionAssignments } from "@/components/settings/staff-commission-assignments"
+import { SalesTargetTracking } from "@/components/settings/sales-target-tracking"
 import { useFeature } from "@/hooks/use-entitlements"
 import { PageSkeleton } from "@/components/loading"
 
@@ -45,15 +46,19 @@ export default function StaffCommissionPage() {
             </p>
           </div>
           <Tabs defaultValue="profiles" className="space-y-6">
-            <TabsList className="grid w-full max-w-md grid-cols-2">
+            <TabsList className="grid w-full max-w-2xl grid-cols-3">
               <TabsTrigger value="profiles">Commission profiles</TabsTrigger>
               <TabsTrigger value="assignments">Staff &amp; profiles</TabsTrigger>
+              <TabsTrigger value="targets">Sales Target Tracking</TabsTrigger>
             </TabsList>
             <TabsContent value="profiles" className="mt-0 outline-none">
               <CommissionProfileList />
             </TabsContent>
             <TabsContent value="assignments" className="mt-0 outline-none">
               <StaffCommissionAssignments />
+            </TabsContent>
+            <TabsContent value="targets" className="mt-0 outline-none">
+              <SalesTargetTracking />
             </TabsContent>
           </Tabs>
         </div>

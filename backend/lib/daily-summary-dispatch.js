@@ -9,17 +9,12 @@ const { buildDailySummaryData } = require('./daily-summary-data');
 const { buildDailySummaryChartUrls } = require('./daily-summary-charts');
 const { renderDailySummaryEmail } = require('./daily-summary-email');
 const { getTodayIST, toDateStringIST } = require('../utils/date-utils');
-const { staffEmailPreferenceFindQuery } = require('./admin-email-preferences');
+const { resolveReportRecipients } = require('./report-email-recipients');
 
 const EMAIL_DELAY_MS = 600;
 
 function appBaseUrl() {
   return (process.env.APP_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
-}
-
-function resolveRecipientsQuery(settings, branchId) {
-  const recipientStaffIds = settings?.dailySummary?.recipientStaffIds || [];
-  return staffEmailPreferenceFindQuery('dailySummary', { branchId, recipientStaffIds });
 }
 
 /**
@@ -62,7 +57,6 @@ async function sendDailySummaryForBusiness(business, mainConnection, options = {
 
   const businessDb = await databaseManager.getConnection(business._id, mainConnection);
   const businessModels = modelFactory.createBusinessModels(businessDb);
-  const { Staff } = businessModels;
 
   const summaryData = await buildDailySummaryData(businessModels, branchId, targetDate, {
     branchName: business.name || '',
@@ -74,29 +68,13 @@ async function sendDailySummaryForBusiness(business, mainConnection, options = {
   const dashboardUrl = baseUrl ? `${baseUrl}/dashboard` : '#';
   const settingsUrl = baseUrl ? `${baseUrl}/settings?section=notifications` : '#';
 
-  let recipients = await Staff.find(resolveRecipientsQuery(settings, branchId))
-    .select('name email role')
-    .lean();
-
-  const User = mainConnection.model('User', require('../models/User').schema);
-  const adminUsers = await User.find({
-    branchId,
-    role: 'admin',
-    email: { $exists: true, $ne: '' },
-  })
-    .select('name firstName lastName email role')
-    .lean();
-
-  for (const admin of adminUsers) {
-    if (!recipients.some((r) => r.email === admin.email)) {
-      recipients.push({
-        _id: admin._id,
-        name: admin.name || `${admin.firstName || ''} ${admin.lastName || ''}`.trim() || admin.email,
-        email: admin.email,
-        role: 'admin',
-      });
-    }
-  }
+  const recipients = await resolveReportRecipients({
+    business,
+    businessModels,
+    mainConnection,
+    prefKey: 'dailySummary',
+    recipientStaffIds: settings?.dailySummary?.recipientStaffIds || [],
+  });
 
   if (recipients.length === 0) {
     logger.warn(

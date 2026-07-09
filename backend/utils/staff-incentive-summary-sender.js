@@ -10,7 +10,7 @@ const { isPlatformEmailDisabled } = require('../lib/business-email-policy');
 const { hasFeature } = require('../lib/entitlements');
 const { buildStaffIncentiveSummaryForRange } = require('../lib/staff-incentive-monthly-data');
 
-const { staffEmailPreferenceFindQuery } = require('../lib/admin-email-preferences');
+const { resolveReportRecipients } = require('../lib/report-email-recipients');
 
 const EMAIL_DELAY_MS = 600;
 
@@ -19,40 +19,13 @@ const EMAIL_DELAY_MS = 600;
  */
 async function resolveStaffIncentiveRecipients(business, businessModels, mainConnection) {
   const emailSettings = business.settings?.emailNotificationSettings;
-  const recipientStaffIds = emailSettings?.staffIncentiveSummary?.recipientStaffIds || [];
-  const { Staff } = businessModels;
-  let recipients = [];
-
-  if (recipientStaffIds.length > 0) {
-    recipients = await Staff.find(
-      staffEmailPreferenceFindQuery('staffIncentiveSummary', { recipientStaffIds })
-    ).lean();
-  } else {
-    recipients = await Staff.find(
-      staffEmailPreferenceFindQuery('staffIncentiveSummary', { branchId: business._id })
-    ).lean();
-  }
-
-  const User = mainConnection.model('User', require('../models/User').schema);
-  const adminUsers = await User.find({
-    branchId: business._id,
-    role: 'admin',
-    email: { $exists: true, $ne: '' },
-  }).lean();
-
-  for (const admin of adminUsers) {
-    const alreadyInList = recipients.some((r) => r.email === admin.email);
-    if (!alreadyInList) {
-      recipients.push({
-        _id: admin._id,
-        name: admin.name || `${admin.firstName || ''} ${admin.lastName || ''}`.trim() || admin.email,
-        email: admin.email,
-        role: 'admin',
-      });
-    }
-  }
-
-  return recipients;
+  return resolveReportRecipients({
+    business,
+    businessModels,
+    mainConnection,
+    prefKey: 'staffIncentiveSummary',
+    recipientStaffIds: emailSettings?.staffIncentiveSummary?.recipientStaffIds || [],
+  });
 }
 
 async function sendStaffIncentiveSummariesForBusiness(business, mainConnection) {
