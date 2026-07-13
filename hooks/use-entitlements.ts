@@ -70,7 +70,9 @@ async function fetchPlanInfo(): Promise<PlanInfo> {
   })
   const data = await response.json().catch(() => null)
   if (!response.ok || !data?.success) {
-    throw new Error(data?.error || 'Failed to fetch plan info')
+    const err = new Error(data?.error || 'Failed to fetch plan info') as Error & { status?: number }
+    err.status = response.status
+    throw err
   }
   return data.data.plan as PlanInfo
 }
@@ -98,6 +100,11 @@ export function useEntitlements(): Entitlements {
     queryKey: ENTITLEMENTS_QUERY_KEY(branchId),
     queryFn: fetchPlanInfo,
     enabled: Boolean(branchId),
+    retry: (failureCount, error) => {
+      const status = (error as Error & { status?: number })?.status
+      if (status === 429) return false
+      return failureCount < 2
+    },
     // Entitlements change rarely; align with auth/me staleness and let explicit
     // invalidation drive freshness after plan changes.
     staleTime: 5 * 60_000,

@@ -17,8 +17,7 @@ type PageSkeletonProps = {
   className?: string
 }
 
-const shellClass =
-  "min-h-[calc(100vh-8rem)] bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 p-6"
+const shellClass = "min-h-[calc(100vh-8rem)] bg-background p-6"
 
 function DashboardPageSkeleton() {
   return (

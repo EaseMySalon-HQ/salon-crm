@@ -4,13 +4,13 @@ import { useEffect, useState } from "react"
 import { useParams, useSearchParams } from "next/navigation"
 import { ProtectedRoute } from "@/components/auth/protected-route"
 import { ProtectedLayout } from "@/components/layout/protected-layout"
-import { ReceiptPreview } from "@/components/receipts/receipt-preview"
+import { ReceiptTemplateView, printReceiptWithTemplate } from "@/components/receipts/receipt-template-view"
+import { ReceiptPrintStyles } from "@/components/receipts/receipt-print-styles"
 import { Button } from "@/components/ui/button"
-import { Printer, ArrowLeft, Thermometer, MessageCircle } from "lucide-react"
+import { Printer, ArrowLeft, MessageCircle } from "lucide-react"
 import Link from "next/link"
 import { SettingsAPI } from "@/lib/api"
 import { SalesAPI } from "@/lib/api"
-import { ThermalReceiptGenerator } from "@/components/receipts/thermal-receipt-generator"
 import { useToast } from "@/hooks/use-toast"
 import { buildReceiptPaymentsWithLegacyFallback } from "@/lib/sale-payment-lines"
 import { formatSaleTimeForDisplay } from "@/lib/sale-datetime-format"
@@ -367,7 +367,18 @@ export default function ReceiptPage() {
   }, [receipt, params.billNo, searchParams])
 
   const handlePrint = () => {
-    window.print()
+    if (!receipt) return
+    printReceiptWithTemplate(
+      receiptPreviewFromBillPageData({
+        ...receipt,
+        payments: receipt.payments.map((payment) => ({
+          mode: payment.type,
+          amount: payment.amount,
+          recordedAt: payment.recordedAt,
+        })),
+      }),
+      businessSettings
+    )
   }
 
   const handleShareWhatsApp = () => {
@@ -409,36 +420,15 @@ ${publicUrl}`
     window.open(whatsappUrl, '_blank', 'noopener,noreferrer')
   }
 
-  const handleThermalPrint = () => {
-    if (!receipt || !businessSettings) return
-    
-    // Convert receipt data to the format expected by ThermalReceiptGenerator
-      const receiptForThermal = receiptPreviewFromBillPageData({
-      ...receipt,
-      payments: receipt.payments.map((payment) => ({
-        mode: payment.type,
-        amount: payment.amount,
-        recordedAt: payment.recordedAt,
-      })),
-    })
-
-    const { printThermalReceipt } = ThermalReceiptGenerator({ 
-      receipt: receiptForThermal,
-      businessSettings 
-    })
-    
-    printThermalReceipt()
-  }
-
   const pageContent = isLoading ? (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+    <div className="min-h-screen bg-background flex items-center justify-center">
       <div className="text-center">
         <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
         <p className="text-gray-600">Loading receipt...</p>
       </div>
     </div>
   ) : error || !receipt ? (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+    <div className="min-h-screen bg-background flex items-center justify-center">
       <div className="text-center">
         <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
           <span className="text-2xl">❌</span>
@@ -454,9 +444,9 @@ ${publicUrl}`
       </div>
     </div>
   ) : (
-    <div className="min-h-screen bg-gray-50 p-6">
+    <div className="min-h-screen bg-background p-6">
       {/* Header with Actions */}
-      <div className="max-w-4xl mx-auto mb-6">
+      <div className="max-w-4xl mx-auto mb-6 no-print">
         <div className="flex items-center justify-between bg-white rounded-lg shadow-sm p-4">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Receipt #{receipt.billNo}</h1>
@@ -487,10 +477,6 @@ ${publicUrl}`
               <Printer className="h-4 w-4 mr-2" />
               Print
             </Button>
-            <Button onClick={handleThermalPrint} variant="outline" className="bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100">
-              <Thermometer className="h-4 w-4 mr-2" />
-              Thermal Print
-            </Button>
             <Button onClick={handleShareWhatsApp} variant="outline" className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
               <MessageCircle className="h-4 w-4 mr-2" />
               Share via WhatsApp
@@ -501,8 +487,8 @@ ${publicUrl}`
 
       {/* Receipt Content */}
       <div className="max-w-4xl mx-auto">
-        <div className="bg-white rounded-lg shadow-sm overflow-hidden">
-          <ReceiptPreview
+        <div className="bg-white rounded-lg shadow-sm overflow-hidden overflow-x-hidden flex justify-center">
+          <ReceiptTemplateView
             receipt={receiptPreviewFromBillPageData({
               ...receipt,
               payments: receipt.payments.map((payment) => ({
@@ -516,13 +502,7 @@ ${publicUrl}`
         </div>
       </div>
 
-      {/* Print-only styles */}
-      <style jsx global>{`
-        @media print {
-          body { margin: 0; }
-          .no-print { display: none !important; }
-        }
-      `}</style>
+      <ReceiptPrintStyles businessSettings={businessSettings} />
     </div>
   )
 

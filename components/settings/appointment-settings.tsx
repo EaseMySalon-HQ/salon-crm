@@ -18,9 +18,6 @@ import { useAuth } from "@/lib/auth-context"
 import { useEntitlements } from "@/hooks/use-entitlements"
 import { SettingsAPI, type AppointmentSettingsData, type WeekDay, type DayHours } from "@/lib/api"
 import { PublicBookingLink } from "@/components/settings/public-booking-link"
-import { BookingShowcaseManager } from "@/components/settings/booking-showcase-manager"
-import { prepareShowcaseImagesForSave } from "@/lib/compress-showcase-image"
-import { DEFAULT_BOOKING_HERO_THEME } from "@/lib/booking-hero-themes"
 
 const DAYS: { key: WeekDay; label: string }[] = [
   { key: "monday", label: "Monday" },
@@ -42,7 +39,7 @@ const defaultHours = (): Record<WeekDay, DayHours> => ({
   sunday: { open: "09:00", close: "18:00", closed: true },
 })
 
-export function AppointmentSettings() {
+export function AppointmentSettings({ embedded = false }: { embedded?: boolean }) {
   const { hasPermission } = useAuth()
   const { hasFeature } = useEntitlements()
   const canEdit = hasPermission("appointment_settings", "edit")
@@ -64,9 +61,6 @@ export function AppointmentSettings() {
         setSettings({
           ...response.data,
           operatingHours: { ...defaultHours(), ...response.data.operatingHours },
-          bookingTagline: response.data.bookingTagline ?? "",
-          showcaseImages: response.data.showcaseImages ?? [],
-          bookingHeroTheme: response.data.bookingHeroTheme ?? DEFAULT_BOOKING_HERO_THEME,
         })
       } else {
         throw new Error(response.error || "Failed to load settings")
@@ -104,17 +98,6 @@ export function AppointmentSettings() {
     if (!settings) return
     setIsSaving(true)
     try {
-      let showcaseImages = settings.showcaseImages ?? []
-      if (showcaseImages.length > 0) {
-        try {
-          showcaseImages = await prepareShowcaseImagesForSave(showcaseImages)
-        } catch {
-          throw new Error(
-            "One or more showcase photos are too large. Remove them or upload smaller images."
-          )
-        }
-      }
-
       const response = await SettingsAPI.updateAppointmentSettings({
         allowOnlineBooking: settings.allowOnlineBooking,
         slotDuration: settings.slotDuration,
@@ -122,9 +105,6 @@ export function AppointmentSettings() {
         bufferTime: settings.bufferTime,
         cancellationWindowHours: settings.cancellationWindowHours,
         operatingHours: settings.operatingHours,
-        bookingTagline: settings.bookingTagline ?? "",
-        showcaseImages,
-        bookingHeroTheme: settings.bookingHeroTheme ?? DEFAULT_BOOKING_HERO_THEME,
       })
       if (!response.success) {
         throw new Error(response.error || "Failed to save")
@@ -169,19 +149,21 @@ export function AppointmentSettings() {
 
   return (
     <div className="space-y-6">
-      <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
-        <div className="p-6">
-          <div className="mb-2 flex items-center gap-4">
-            <div className="rounded-lg bg-violet-50 p-2">
-              <Calendar className="h-5 w-5 text-violet-600" />
-            </div>
-            <div>
-              <h2 className="text-2xl font-bold text-slate-800">Appointment settings</h2>
-              <p className="text-slate-600">Online booking, scheduling rules, and working hours</p>
+      {!embedded ? (
+        <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
+          <div className="p-6">
+            <div className="mb-2 flex items-center gap-4">
+              <div className="rounded-lg bg-violet-50 p-2">
+                <Calendar className="h-5 w-5 text-violet-600" />
+              </div>
+              <div>
+                <h2 className="text-2xl font-bold text-slate-800">Appointment settings</h2>
+                <p className="text-slate-600">Online booking, scheduling rules, and working hours</p>
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      ) : null}
 
       {/* Online booking */}
       <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
@@ -220,36 +202,16 @@ export function AppointmentSettings() {
             )}
 
             {settings.allowOnlineBooking && settings.code && onlineBookingOnPlan && (
-              <PublicBookingLink code={settings.code} />
+              <PublicBookingLink
+                code={settings.code}
+                websiteEnabled={settings.websiteEnabled}
+                miniSiteBookPath={settings.miniSiteBookPath}
+              />
             )}
           </div>
         </div>
       </div>
 
-      {settings.allowOnlineBooking && onlineBookingOnPlan && (
-        <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
-          <div className="p-6">
-            <div className="mb-6 flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-r from-violet-100 to-fuchsia-100">
-                <Globe className="h-5 w-5 text-violet-600" />
-              </div>
-              <div>
-                <h3 className="text-lg font-semibold text-slate-800">Booking page showcase</h3>
-                <p className="text-sm text-slate-600">Hero background, tagline, and photo carousel for your public booking page</p>
-              </div>
-            </div>
-            <BookingShowcaseManager
-              tagline={settings.bookingTagline ?? ""}
-              images={settings.showcaseImages ?? []}
-              heroTheme={settings.bookingHeroTheme ?? DEFAULT_BOOKING_HERO_THEME}
-              disabled={!canEdit}
-              onTaglineChange={(bookingTagline) => update({ bookingTagline })}
-              onImagesChange={(showcaseImages) => update({ showcaseImages })}
-              onHeroThemeChange={(bookingHeroTheme) => update({ bookingHeroTheme })}
-            />
-          </div>
-        </div>
-      )}
 
       {/* Booking rules */}
       <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">

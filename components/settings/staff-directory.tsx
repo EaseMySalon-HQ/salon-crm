@@ -15,6 +15,11 @@ import { Users, Clock, Award, Wallet, UserCheck } from "lucide-react"
 import { useFeature } from "@/hooks/use-entitlements"
 import { useAuth } from "@/lib/auth-context"
 import { hasStaffDirectoryTabPermission } from "@/lib/permission-mappings"
+import {
+  SETTINGS_PANEL_SHELL,
+  SETTINGS_TAB_TRIGGER,
+  SETTINGS_TABS_LIST,
+} from "@/lib/settings-panel-theme"
 
 const MAIN_TABS = ["staff-list", "working-hours", "attendance", "payroll", "commission"] as const
 type MainTab = (typeof MAIN_TABS)[number]
@@ -159,48 +164,48 @@ export function StaffDirectory({ inSettings = false }: StaffDirectoryProps) {
   return (
     <Tabs value={activeMainTab} onValueChange={onMainTabChange} className="w-full space-y-6">
       {/* Header card: title and description only */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+      <div className={SETTINGS_PANEL_SHELL}>
         <div className="p-6">
           <div className="flex items-center gap-4">
-            <div className="p-2 bg-blue-50 rounded-lg">
-              <Users className="h-5 w-5 text-blue-600" />
+            <div className="p-2 bg-blue-50 dark:bg-blue-950/40 rounded-lg border border-transparent dark:border-blue-500/30">
+              <Users className="h-5 w-5 text-blue-600 dark:text-blue-400" />
             </div>
             <div>
-              <h2 className="text-2xl font-bold text-slate-800">Staff Directory</h2>
-              <p className="text-slate-600">Manage staff accounts, roles, and access permissions</p>
+              <h2 className="text-2xl font-bold text-slate-800 dark:text-foreground">Staff Directory</h2>
+              <p className="text-slate-600 dark:text-muted-foreground">Manage staff accounts, roles, and access permissions</p>
             </div>
           </div>
         </div>
       </div>
 
       {/* Tab list: outside the header card */}
-      <TabsList className="h-11 rounded-xl bg-slate-100 p-1 gap-1 w-full sm:w-auto inline-flex">
+      <TabsList className={SETTINGS_TABS_LIST}>
         {canViewStaffList && (
-        <TabsTrigger value="staff-list" className="rounded-lg gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm flex-1 sm:flex-initial">
+        <TabsTrigger value="staff-list" className={SETTINGS_TAB_TRIGGER}>
           <Users className="h-4 w-4" />
           Staff List
         </TabsTrigger>
         )}
         {showTimesheetTab && (
-          <TabsTrigger value="working-hours" className="rounded-lg gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm flex-1 sm:flex-initial">
+          <TabsTrigger value="working-hours" className={SETTINGS_TAB_TRIGGER}>
             <Clock className="h-4 w-4" />
             Time Sheet
           </TabsTrigger>
         )}
         {showAttendanceTab && (
-          <TabsTrigger value="attendance" className="rounded-lg gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm flex-1 sm:flex-initial">
+          <TabsTrigger value="attendance" className={SETTINGS_TAB_TRIGGER}>
             <UserCheck className="h-4 w-4" />
             Attendance
           </TabsTrigger>
         )}
         {showPayrollTab && (
-          <TabsTrigger value="payroll" className="rounded-lg gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm flex-1 sm:flex-initial">
+          <TabsTrigger value="payroll" className={SETTINGS_TAB_TRIGGER}>
             <Wallet className="h-4 w-4" />
             Payroll
           </TabsTrigger>
         )}
         {showIncentiveTab && (
-          <TabsTrigger value="commission" className="rounded-lg gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm flex-1 sm:flex-initial">
+          <TabsTrigger value="commission" className={SETTINGS_TAB_TRIGGER}>
             <Award className="h-4 w-4" />
             Incentive Management
           </TabsTrigger>
@@ -208,7 +213,7 @@ export function StaffDirectory({ inSettings = false }: StaffDirectoryProps) {
       </TabsList>
 
       {/* Content card: tab panels only */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+      <div className={SETTINGS_PANEL_SHELL}>
         <div className="p-6">
           {canViewStaffList && (
           <TabsContent value="staff-list" className="mt-0">

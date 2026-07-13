@@ -13,6 +13,7 @@ import { format } from "date-fns"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { ExpensesAPI, CashRegistryAPI, PettyCashAPI } from "@/lib/api"
+import { EXPENSE_CATEGORIES } from "@/lib/expense-categories"
 import { ExpenseForm } from "@/components/expenses/expense-form"
 import { useToast } from "@/hooks/use-toast"
 import { useFeature } from "@/hooks/use-entitlements"
@@ -458,16 +459,11 @@ export function ExpenseReport() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Categories</SelectItem>
-                  <SelectItem value="Supplies">Supplies</SelectItem>
-                  <SelectItem value="Equipment">Equipment</SelectItem>
-                  <SelectItem value="Utilities">Utilities</SelectItem>
-                  <SelectItem value="Marketing">Marketing</SelectItem>
-                  <SelectItem value="Rent">Rent</SelectItem>
-                  <SelectItem value="Insurance">Insurance</SelectItem>
-                  <SelectItem value="Maintenance">Maintenance</SelectItem>
-                  <SelectItem value="Professional Services">Professional Services</SelectItem>
-                  <SelectItem value="Travel">Travel</SelectItem>
-                  <SelectItem value="Other">Other</SelectItem>
+                  {EXPENSE_CATEGORIES.map((category) => (
+                    <SelectItem key={category} value={category}>
+                      {category}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
               <Select value={paymentMethodFilter} onValueChange={setPaymentMethodFilter}>

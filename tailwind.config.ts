@@ -98,11 +98,16 @@ const config: Config = {
   				'0%': { transform: 'translateX(-120%) skewX(-18deg)' },
   				'100%': { transform: 'translateX(280%) skewX(-18deg)' },
   			},
+  			'reviews-marquee': {
+  				'0%': { transform: 'translateX(0)' },
+  				'100%': { transform: 'translateX(-50%)' },
+  			},
   		},
   		animation: {
   			'accordion-down': 'accordion-down 0.2s ease-out',
   			'accordion-up': 'accordion-up 0.2s ease-out',
   			'gold-sheen': 'gold-sheen 2.6s ease-in-out infinite',
+  			'reviews-marquee': 'reviews-marquee 36s linear infinite alternate',
   		}
   	}
   },

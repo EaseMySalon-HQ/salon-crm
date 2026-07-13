@@ -62,12 +62,24 @@ const membershipPlanSchema = new mongoose.Schema({
   unlimitedDuration: {
     type: Boolean,
     default: false
-  }
+  },
+  isPublic: { type: Boolean, default: false },
+  isFeatured: { type: Boolean, default: false },
+  displayOrder: { type: Number, default: 0 },
+  slug: { type: String, trim: true, lowercase: true, default: '' },
+  shortDescription: { type: String, default: '', maxlength: 500 },
+  description: { type: String, default: '' },
+  seoTitle: { type: String, default: '', maxlength: 120 },
+  seoDescription: { type: String, default: '', maxlength: 320 },
+  imageUrl: { type: String, default: '' },
+  imageAlt: { type: String, default: '' },
 }, {
   timestamps: true
 });
 
 membershipPlanSchema.index({ branchId: 1, isActive: 1 });
+membershipPlanSchema.index({ branchId: 1, slug: 1 });
+membershipPlanSchema.index({ branchId: 1, isPublic: 1 });
 
 module.exports = {
   schema: membershipPlanSchema,

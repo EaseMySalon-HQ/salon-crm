@@ -36,6 +36,14 @@ import { useToast } from "@/hooks/use-toast"
 import { useRouter, usePathname, useSearchParams } from "next/navigation"
 import { useFeature } from "@/hooks/use-entitlements"
 import { useAuth } from "@/lib/auth-context"
+import {
+  REPORT_TABLE_FOOTER_CLASS,
+  REPORT_TABLE_HEAD_ROW_CLASS,
+  REPORT_TABLE_HEADER_CLASS,
+  REPORT_TABLE_HEADER_META_CLASS,
+  REPORT_TABLE_HEADER_TITLE_CLASS,
+  REPORT_TABLE_SHELL_CLASS,
+} from "@/lib/report-table-theme"
 
 function formatSalesRecordDateTimeParts(sale: { date: string; time?: string }): { dateLine: string; timeLine: string } | null {
   const d = new Date(sale.date)
@@ -220,6 +228,8 @@ export function SalesReport() {
     },
     [pathname, router, searchParams]
   )
+
+  const [filtersOpen, setFiltersOpen] = useState(false)
 
   const buildReportsReturnPath = useCallback(() => {
     const params = new URLSearchParams(searchParams.toString())
@@ -707,6 +717,171 @@ export function SalesReport() {
       setGstDateRange({})
     }
   }
+
+  const activeFilterCount = useMemo(() => {
+    switch (reportType) {
+      case "sales": {
+        let count = 0
+        if (searchTerm.trim()) count++
+        if (datePeriod !== "today") count++
+        if (paymentFilter !== "all") count++
+        if (statusFilter !== "all") count++
+        return count
+      }
+      case "summary":
+        return datePeriod !== "today" ? 1 : 0
+      case "staff-tip": {
+        let count = 0
+        if (datePeriod !== "today") count++
+        if (staffTipFilter !== "all") count++
+        return count
+      }
+      case "service-list": {
+        let count = 0
+        if (serviceListServiceFilter !== "all") count++
+        if (serviceListCategoryFilter !== "all") count++
+        if (serviceListDatePeriod !== "today") count++
+        if (serviceListStaffFilter !== "all") count++
+        if (serviceListStatusFilter !== "all") count++
+        if (serviceListModeFilter !== "all") count++
+        return count
+      }
+      case "product-list": {
+        let count = 0
+        if (productListProductFilter !== "all") count++
+        if (productListCategoryFilter !== "all") count++
+        if (productListDatePeriod !== "today") count++
+        if (productListStaffFilter !== "all") count++
+        if (productListStatusFilter !== "all") count++
+        if (productListModeFilter !== "all") count++
+        return count
+      }
+      case "appointment-list": {
+        let count = 0
+        if (appointmentListDateFilterType !== "appointment_date") count++
+        if (appointmentListDatePeriod !== "today") count++
+        if (appointmentListStatusFilter !== "all") count++
+        if (!appointmentListShowWalkIn) count++
+        return count
+      }
+      case "deleted-invoice":
+        return deletedInvoiceDatePeriod !== "today" ? 1 : 0
+      case "unpaid-part-paid": {
+        let count = 0
+        if (unpaidPartPaidDatePeriod !== "today") count++
+        if (unpaidPartPaidStatusFilter !== "all") count++
+        return count
+      }
+      case "cash-movement": {
+        let count = 0
+        if (cashMovementDatePeriod !== "today") count++
+        if (cashMovementTypeFilter !== "all") count++
+        if (cashMovementDirectionFilter !== "all") count++
+        return count
+      }
+      case "gst":
+        return gstDatePeriod !== "currentMonth" ? 1 : 0
+      default:
+        return 0
+    }
+  }, [
+    reportType,
+    searchTerm,
+    datePeriod,
+    paymentFilter,
+    statusFilter,
+    staffTipFilter,
+    serviceListServiceFilter,
+    serviceListCategoryFilter,
+    serviceListDatePeriod,
+    serviceListStaffFilter,
+    serviceListStatusFilter,
+    serviceListModeFilter,
+    productListProductFilter,
+    productListCategoryFilter,
+    productListDatePeriod,
+    productListStaffFilter,
+    productListStatusFilter,
+    productListModeFilter,
+    appointmentListDateFilterType,
+    appointmentListDatePeriod,
+    appointmentListStatusFilter,
+    appointmentListShowWalkIn,
+    deletedInvoiceDatePeriod,
+    unpaidPartPaidDatePeriod,
+    unpaidPartPaidStatusFilter,
+    cashMovementDatePeriod,
+    cashMovementTypeFilter,
+    cashMovementDirectionFilter,
+    gstDatePeriod,
+  ])
+
+  const clearReportFilters = useCallback(() => {
+    switch (reportType) {
+      case "sales":
+        setSearchTerm("")
+        handleDatePeriodChange("today")
+        setPaymentFilter("all")
+        setStatusFilter("all")
+        break
+      case "summary":
+        handleDatePeriodChange("today")
+        break
+      case "staff-tip":
+        handleDatePeriodChange("today")
+        setStaffTipFilter("all")
+        break
+      case "service-list":
+        setServiceListServiceFilter("all")
+        setServiceListCategoryFilter("all")
+        handleServiceListDatePeriodChange("today")
+        setServiceListStaffFilter("all")
+        setServiceListStatusFilter("all")
+        setServiceListModeFilter("all")
+        break
+      case "product-list":
+        setProductListProductFilter("all")
+        setProductListCategoryFilter("all")
+        handleProductListDatePeriodChange("today")
+        setProductListStaffFilter("all")
+        setProductListStatusFilter("all")
+        setProductListModeFilter("all")
+        break
+      case "appointment-list":
+        setAppointmentListDateFilterType("appointment_date")
+        handleAppointmentListDatePeriodChange("today")
+        setAppointmentListStatusFilter("all")
+        setAppointmentListShowWalkIn(true)
+        break
+      case "deleted-invoice":
+        handleDeletedInvoiceDatePeriodChange("today")
+        break
+      case "unpaid-part-paid":
+        handleUnpaidPartPaidDatePeriodChange("today")
+        setUnpaidPartPaidStatusFilter("all")
+        break
+      case "cash-movement":
+        handleCashMovementDatePeriodChange("today")
+        setCashMovementTypeFilter("all")
+        setCashMovementDirectionFilter("all")
+        break
+      case "gst":
+        handleGstDatePeriodChange("currentMonth")
+        break
+      default:
+        break
+    }
+  }, [
+    reportType,
+    handleDatePeriodChange,
+    handleServiceListDatePeriodChange,
+    handleProductListDatePeriodChange,
+    handleAppointmentListDatePeriodChange,
+    handleDeletedInvoiceDatePeriodChange,
+    handleUnpaidPartPaidDatePeriodChange,
+    handleCashMovementDatePeriodChange,
+    handleGstDatePeriodChange,
+  ])
 
   useEffect(() => {
     if (reportType !== "gst") return
@@ -1697,20 +1872,20 @@ export function SalesReport() {
   return (
     <div className="space-y-8">
       {/*
-        CONVENTION: Report type + filters live in this single bar.
+        CONVENTION: Report type stays in the toolbar; type-specific filters live in the Filters popover.
         When adding a new report/list type:
         1. Add the option to the report type Select below.
-        2. Add a {reportType === "new-type" && ( ... )} block here with that type's filters.
+        2. Add a {reportType === "new-type" && ( ... )} block inside the Filters popover grid.
         3. Add state and fetch for any dropdown options (e.g. services, staff) and pass controlledFilters if the report is an embedded component.
-        4. Do not add a separate filter bar for the new type—keep all filters in this same bar.
+        4. Extend activeFilterCount and clearReportFilters for the new type.
       */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
         <div className="p-4 sm:p-6">
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start xl:gap-6">
-            <div className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 lg:grid-cols-4 xl:grid-cols-[repeat(auto-fill,minmax(9rem,1fr))]">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-2">
               {/* Report type */}
               <Select value={reportType} onValueChange={setReportType}>
-                <SelectTrigger className="h-10 w-full min-w-0 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                <SelectTrigger className="h-10 w-40 min-w-[9.5rem] border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                   <SelectValue placeholder="Report type" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1726,10 +1901,43 @@ export function SalesReport() {
                   <SelectItem value="gst">GST Report</SelectItem>
                 </SelectContent>
               </Select>
+              <Popover open={filtersOpen} onOpenChange={setFiltersOpen} modal={false}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant={activeFilterCount > 0 ? "default" : "outline"}
+                    className="h-10 border-slate-200"
+                  >
+                    <Filter className="mr-2 h-4 w-4" />
+                    Filters
+                    {activeFilterCount > 0 && (
+                      <Badge
+                        variant="secondary"
+                        className="ml-2 h-5 min-w-5 rounded-full px-1.5 text-[10px] bg-white/20 text-inherit"
+                      >
+                        {activeFilterCount}
+                      </Badge>
+                    )}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="start" className="w-[min(100vw-2rem,44rem)] p-0">
+                  <div className="flex items-center justify-between border-b px-4 py-3">
+                    <p className="text-sm font-medium text-foreground">Filters</p>
+                    {activeFilterCount > 0 && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 text-xs"
+                        onClick={clearReportFilters}
+                      >
+                        Clear all
+                      </Button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 p-4 sm:grid-cols-2">
               {reportType === "summary" && (
                 <>
                   <Select value={datePeriod} onValueChange={handleDatePeriodChange}>
-                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Date" />
                     </SelectTrigger>
                     <SelectContent>
@@ -1743,7 +1951,7 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   {datePeriod === "custom" && (
-                    <div className="col-span-2 flex min-w-0 flex-wrap items-center gap-2 sm:col-span-full">
+                    <div className="flex items-center gap-2 sm:col-span-2">
                       <Popover>
                         <PopoverTrigger asChild>
                           <Button variant="outline" className="h-10 w-full min-w-[8.5rem] max-w-full justify-start px-3 text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 sm:w-auto">
@@ -1753,7 +1961,7 @@ export function SalesReport() {
                             </span>
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
+                        <PopoverContent className="!z-[120] w-auto p-0" align="start">
                           <Calendar
                             mode="single"
                             selected={dateRange?.from}
@@ -1764,14 +1972,14 @@ export function SalesReport() {
                       </Popover>
                       <Popover>
                         <PopoverTrigger asChild>
-                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                          <Button variant="outline" className="h-10 flex-1 min-w-0 justify-start px-3 text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                             <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                             <span className="truncate">
                               {dateRange?.to ? format(dateRange.to, "dd MMM yyyy") : "To"}
                             </span>
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
+                        <PopoverContent className="!z-[120] w-auto p-0" align="start">
                           <Calendar
                             mode="single"
                             selected={dateRange?.to}
@@ -1790,10 +1998,10 @@ export function SalesReport() {
                     placeholder="Search sales..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
-                    className="col-span-2 h-10 w-full min-w-0 border-slate-200 focus:border-blue-500 focus:ring-blue-500 sm:col-span-1"
+                    className="h-10 w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500"
                   />
                   <Select value={datePeriod} onValueChange={handleDatePeriodChange}>
-                    <SelectTrigger className="h-10 w-full min-w-0 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="h-10 w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Quick periods" />
                     </SelectTrigger>
                     <SelectContent>
@@ -1807,7 +2015,7 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   {datePeriod === "custom" && (
-                    <div className="col-span-2 flex min-w-0 flex-wrap items-center gap-2 sm:col-span-full">
+                    <div className="flex items-center gap-2 sm:col-span-2">
                       <Popover>
                         <PopoverTrigger asChild>
                           <Button variant="outline" className="h-10 w-full min-w-[8.5rem] max-w-full justify-start px-3 text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 sm:w-auto">
@@ -1817,7 +2025,7 @@ export function SalesReport() {
                             </span>
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
+                        <PopoverContent className="!z-[120] w-auto p-0" align="start">
                           <Calendar
                             mode="single"
                             selected={dateRange?.from}
@@ -1835,7 +2043,7 @@ export function SalesReport() {
                             </span>
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
+                        <PopoverContent className="!z-[120] w-auto p-0" align="start">
                           <Calendar
                             mode="single"
                             selected={dateRange?.to}
@@ -1847,7 +2055,7 @@ export function SalesReport() {
                     </div>
                   )}
                   <Select value={paymentFilter} onValueChange={setPaymentFilter}>
-                    <SelectTrigger className="h-10 w-full min-w-0 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="h-10 w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Payment" />
                     </SelectTrigger>
                     <SelectContent>
@@ -1860,7 +2068,7 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   <Select value={statusFilter} onValueChange={setStatusFilter}>
-                    <SelectTrigger className="h-10 w-full min-w-0 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="h-10 w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Status" />
                     </SelectTrigger>
                     <SelectContent>
@@ -1876,7 +2084,7 @@ export function SalesReport() {
               {reportType === "staff-tip" && (
                 <>
                   <Select value={datePeriod} onValueChange={handleDatePeriodChange}>
-                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Date" />
                     </SelectTrigger>
                     <SelectContent>
@@ -1890,7 +2098,7 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   {datePeriod === "custom" && (
-                    <div className="col-span-2 flex min-w-0 flex-wrap items-center gap-2 sm:col-span-full">
+                    <div className="flex items-center gap-2 sm:col-span-2">
                       <Popover>
                         <PopoverTrigger asChild>
                           <Button variant="outline" className="h-10 w-full min-w-[8.5rem] max-w-full justify-start px-3 text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 sm:w-auto">
@@ -1900,7 +2108,7 @@ export function SalesReport() {
                             </span>
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
+                        <PopoverContent className="!z-[120] w-auto p-0" align="start">
                           <Calendar
                             mode="single"
                             selected={dateRange?.from}
@@ -1911,14 +2119,14 @@ export function SalesReport() {
                       </Popover>
                       <Popover>
                         <PopoverTrigger asChild>
-                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                          <Button variant="outline" className="h-10 flex-1 min-w-0 justify-start px-3 text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                             <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                             <span className="truncate">
                               {dateRange?.to ? format(dateRange.to, "dd MMM yyyy") : "To"}
                             </span>
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
+                        <PopoverContent className="!z-[120] w-auto p-0" align="start">
                           <Calendar
                             mode="single"
                             selected={dateRange?.to}
@@ -1930,7 +2138,7 @@ export function SalesReport() {
                     </div>
                   )}
                   <Select value={staffTipFilter} onValueChange={setStaffTipFilter}>
-                    <SelectTrigger className="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="All staff" />
                     </SelectTrigger>
                     <SelectContent>
@@ -1948,10 +2156,10 @@ export function SalesReport() {
                     value={serviceListServiceFilter}
                     onValueChange={setServiceListServiceFilter}
                     services={serviceListServicesForFilter}
-                    triggerClassName="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500"
+                    triggerClassName="w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500"
                   />
                   <Select value={serviceListCategoryFilter} onValueChange={handleServiceListCategoryFilterChange}>
-                    <SelectTrigger className="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Category" />
                     </SelectTrigger>
                     <SelectContent>
@@ -1964,7 +2172,7 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   <Select value={serviceListDatePeriod} onValueChange={handleServiceListDatePeriodChange}>
-                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Date" />
                     </SelectTrigger>
                     <SelectContent>
@@ -1978,17 +2186,17 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   {serviceListDatePeriod === "custom" && (
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 sm:col-span-2">
                       <Popover>
                         <PopoverTrigger asChild>
-                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                          <Button variant="outline" className="h-10 flex-1 min-w-0 justify-start px-3 text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                             <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                             <span className="truncate">
                               {serviceListDateRange?.from ? format(serviceListDateRange.from, "dd MMM yyyy") : "From"}
                             </span>
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
+                        <PopoverContent className="!z-[120] w-auto p-0" align="start">
                           <Calendar
                             mode="single"
                             selected={serviceListDateRange?.from}
@@ -1999,14 +2207,14 @@ export function SalesReport() {
                       </Popover>
                       <Popover>
                         <PopoverTrigger asChild>
-                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                          <Button variant="outline" className="h-10 flex-1 min-w-0 justify-start px-3 text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                             <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                             <span className="truncate">
                               {serviceListDateRange?.to ? format(serviceListDateRange.to, "dd MMM yyyy") : "To"}
                             </span>
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
+                        <PopoverContent className="!z-[120] w-auto p-0" align="start">
                           <Calendar
                             mode="single"
                             selected={serviceListDateRange?.to}
@@ -2018,7 +2226,7 @@ export function SalesReport() {
                     </div>
                   )}
                   <Select value={serviceListStaffFilter} onValueChange={setServiceListStaffFilter}>
-                    <SelectTrigger className="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Staff" />
                     </SelectTrigger>
                     <SelectContent>
@@ -2029,7 +2237,7 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   <Select value={serviceListStatusFilter} onValueChange={setServiceListStatusFilter}>
-                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Status" />
                     </SelectTrigger>
                     <SelectContent>
@@ -2041,7 +2249,7 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   <Select value={serviceListModeFilter} onValueChange={setServiceListModeFilter}>
-                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Mode" />
                     </SelectTrigger>
                     <SelectContent>
@@ -2060,10 +2268,10 @@ export function SalesReport() {
                     value={productListProductFilter}
                     onValueChange={setProductListProductFilter}
                     products={productListProductsForFilter}
-                    triggerClassName="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500"
+                    triggerClassName="w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500"
                   />
                   <Select value={productListCategoryFilter} onValueChange={handleProductListCategoryFilterChange}>
-                    <SelectTrigger className="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Category" />
                     </SelectTrigger>
                     <SelectContent>
@@ -2076,7 +2284,7 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   <Select value={productListDatePeriod} onValueChange={handleProductListDatePeriodChange}>
-                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Date" />
                     </SelectTrigger>
                     <SelectContent>
@@ -2090,17 +2298,17 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   {productListDatePeriod === "custom" && (
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 sm:col-span-2">
                       <Popover>
                         <PopoverTrigger asChild>
-                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                          <Button variant="outline" className="h-10 flex-1 min-w-0 justify-start px-3 text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                             <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                             <span className="truncate">
                               {productListDateRange?.from ? format(productListDateRange.from, "dd MMM yyyy") : "From"}
                             </span>
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
+                        <PopoverContent className="!z-[120] w-auto p-0" align="start">
                           <Calendar
                             mode="single"
                             selected={productListDateRange?.from}
@@ -2111,14 +2319,14 @@ export function SalesReport() {
                       </Popover>
                       <Popover>
                         <PopoverTrigger asChild>
-                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                          <Button variant="outline" className="h-10 flex-1 min-w-0 justify-start px-3 text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                             <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                             <span className="truncate">
                               {productListDateRange?.to ? format(productListDateRange.to, "dd MMM yyyy") : "To"}
                             </span>
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
+                        <PopoverContent className="!z-[120] w-auto p-0" align="start">
                           <Calendar
                             mode="single"
                             selected={productListDateRange?.to}
@@ -2130,7 +2338,7 @@ export function SalesReport() {
                     </div>
                   )}
                   <Select value={productListStaffFilter} onValueChange={setProductListStaffFilter}>
-                    <SelectTrigger className="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Staff" />
                     </SelectTrigger>
                     <SelectContent>
@@ -2141,7 +2349,7 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   <Select value={productListStatusFilter} onValueChange={setProductListStatusFilter}>
-                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Status" />
                     </SelectTrigger>
                     <SelectContent>
@@ -2153,7 +2361,7 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   <Select value={productListModeFilter} onValueChange={setProductListModeFilter}>
-                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Mode" />
                     </SelectTrigger>
                     <SelectContent>
@@ -2169,7 +2377,7 @@ export function SalesReport() {
               {reportType === "appointment-list" && (
                 <>
                   <Select value={appointmentListDateFilterType} onValueChange={(v: "appointment_date" | "created_date") => setAppointmentListDateFilterType(v)}>
-                    <SelectTrigger className="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Date type" />
                     </SelectTrigger>
                     <SelectContent>
@@ -2178,7 +2386,7 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   <Select value={appointmentListDatePeriod} onValueChange={(v: DatePeriod) => handleAppointmentListDatePeriodChange(v)}>
-                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Date" />
                     </SelectTrigger>
                     <SelectContent>
@@ -2192,17 +2400,17 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   {appointmentListDatePeriod === "custom" && (
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 sm:col-span-2">
                       <Popover>
                         <PopoverTrigger asChild>
-                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                          <Button variant="outline" className="h-10 flex-1 min-w-0 justify-start px-3 text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                             <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                             <span className="truncate">
                               {appointmentListDateRange?.from ? format(appointmentListDateRange.from, "dd MMM yyyy") : "From"}
                             </span>
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
+                        <PopoverContent className="!z-[120] w-auto p-0" align="start">
                           <Calendar
                             mode="single"
                             selected={appointmentListDateRange?.from}
@@ -2213,14 +2421,14 @@ export function SalesReport() {
                       </Popover>
                       <Popover>
                         <PopoverTrigger asChild>
-                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                          <Button variant="outline" className="h-10 flex-1 min-w-0 justify-start px-3 text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                             <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                             <span className="truncate">
                               {appointmentListDateRange?.to ? format(appointmentListDateRange.to, "dd MMM yyyy") : "To"}
                             </span>
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
+                        <PopoverContent className="!z-[120] w-auto p-0" align="start">
                           <Calendar
                             mode="single"
                             selected={appointmentListDateRange?.to}
@@ -2232,7 +2440,7 @@ export function SalesReport() {
                     </div>
                   )}
                   <Select value={appointmentListStatusFilter} onValueChange={setAppointmentListStatusFilter}>
-                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Status" />
                     </SelectTrigger>
                     <SelectContent>
@@ -2244,7 +2452,7 @@ export function SalesReport() {
                       <SelectItem value="cancelled">Cancelled</SelectItem>
                     </SelectContent>
                   </Select>
-                  <label className="flex items-center gap-2 cursor-pointer select-none text-slate-600 text-sm whitespace-nowrap">
+                  <label className="flex items-center gap-2 cursor-pointer select-none text-slate-600 text-sm whitespace-nowrap sm:col-span-2">
                     <Switch
                       checked={appointmentListShowWalkIn}
                       onCheckedChange={setAppointmentListShowWalkIn}
@@ -2256,7 +2464,7 @@ export function SalesReport() {
               {reportType === "deleted-invoice" && (
                 <>
                   <Select value={deletedInvoiceDatePeriod} onValueChange={(v: DatePeriod) => handleDeletedInvoiceDatePeriodChange(v)}>
-                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Date" />
                     </SelectTrigger>
                     <SelectContent>
@@ -2270,17 +2478,17 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   {deletedInvoiceDatePeriod === "custom" && (
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 sm:col-span-2">
                       <Popover>
                         <PopoverTrigger asChild>
-                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                          <Button variant="outline" className="h-10 flex-1 min-w-0 justify-start px-3 text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                             <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                             <span className="truncate">
                               {deletedInvoiceDateRange?.from ? format(deletedInvoiceDateRange.from, "dd MMM yyyy") : "From"}
                             </span>
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
+                        <PopoverContent className="!z-[120] w-auto p-0" align="start">
                           <Calendar
                             mode="single"
                             selected={deletedInvoiceDateRange?.from}
@@ -2291,14 +2499,14 @@ export function SalesReport() {
                       </Popover>
                       <Popover>
                         <PopoverTrigger asChild>
-                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                          <Button variant="outline" className="h-10 flex-1 min-w-0 justify-start px-3 text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                             <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                             <span className="truncate">
                               {deletedInvoiceDateRange?.to ? format(deletedInvoiceDateRange.to, "dd MMM yyyy") : "To"}
                             </span>
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
+                        <PopoverContent className="!z-[120] w-auto p-0" align="start">
                           <Calendar
                             mode="single"
                             selected={deletedInvoiceDateRange?.to}
@@ -2314,7 +2522,7 @@ export function SalesReport() {
               {reportType === "cash-movement" && (
                 <>
                   <Select value={cashMovementDatePeriod} onValueChange={(v: DatePeriod) => handleCashMovementDatePeriodChange(v)}>
-                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Date" />
                     </SelectTrigger>
                     <SelectContent>
@@ -2328,17 +2536,17 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   {cashMovementDatePeriod === "custom" && (
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 sm:col-span-2">
                       <Popover>
                         <PopoverTrigger asChild>
-                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                          <Button variant="outline" className="h-10 flex-1 min-w-0 justify-start px-3 text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                             <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                             <span className="truncate">
                               {cashMovementDateRange?.from ? format(cashMovementDateRange.from, "dd MMM yyyy") : "From"}
                             </span>
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
+                        <PopoverContent className="!z-[120] w-auto p-0" align="start">
                           <Calendar
                             mode="single"
                             selected={cashMovementDateRange?.from}
@@ -2349,14 +2557,14 @@ export function SalesReport() {
                       </Popover>
                       <Popover>
                         <PopoverTrigger asChild>
-                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                          <Button variant="outline" className="h-10 flex-1 min-w-0 justify-start px-3 text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                             <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                             <span className="truncate">
                               {cashMovementDateRange?.to ? format(cashMovementDateRange.to, "dd MMM yyyy") : "To"}
                             </span>
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
+                        <PopoverContent className="!z-[120] w-auto p-0" align="start">
                           <Calendar
                             mode="single"
                             selected={cashMovementDateRange?.to}
@@ -2368,7 +2576,7 @@ export function SalesReport() {
                     </div>
                   )}
                   <Select value={cashMovementTypeFilter} onValueChange={setCashMovementTypeFilter}>
-                    <SelectTrigger className="w-44 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Type" />
                     </SelectTrigger>
                     <SelectContent>
@@ -2381,7 +2589,7 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   <Select value={cashMovementDirectionFilter} onValueChange={setCashMovementDirectionFilter}>
-                    <SelectTrigger className="w-32 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Direction" />
                     </SelectTrigger>
                     <SelectContent>
@@ -2395,7 +2603,7 @@ export function SalesReport() {
               {reportType === "gst" && (
                 <>
                   <Select value={gstDatePeriod} onValueChange={(v: DatePeriod) => handleGstDatePeriodChange(v)}>
-                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Date" />
                     </SelectTrigger>
                     <SelectContent>
@@ -2409,17 +2617,17 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   {gstDatePeriod === "custom" && (
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 sm:col-span-2">
                       <Popover>
                         <PopoverTrigger asChild>
-                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                          <Button variant="outline" className="h-10 flex-1 min-w-0 justify-start px-3 text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                             <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                             <span className="truncate">
                               {gstDateRange?.from ? format(gstDateRange.from, "dd MMM yyyy") : "From"}
                             </span>
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
+                        <PopoverContent className="!z-[120] w-auto p-0" align="start">
                           <Calendar
                             mode="single"
                             selected={gstDateRange?.from}
@@ -2430,14 +2638,14 @@ export function SalesReport() {
                       </Popover>
                       <Popover>
                         <PopoverTrigger asChild>
-                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                          <Button variant="outline" className="h-10 flex-1 min-w-0 justify-start px-3 text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                             <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                             <span className="truncate">
                               {gstDateRange?.to ? format(gstDateRange.to, "dd MMM yyyy") : "To"}
                             </span>
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
+                        <PopoverContent className="!z-[120] w-auto p-0" align="start">
                           <Calendar
                             mode="single"
                             selected={gstDateRange?.to}
@@ -2449,11 +2657,11 @@ export function SalesReport() {
                     </div>
                   )}
                   {gstBusinessGstin ? (
-                    <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
+                    <Badge variant="outline" className="w-full justify-center border-emerald-200 bg-emerald-50 text-emerald-700 sm:col-span-2">
                       GSTIN: {gstBusinessGstin}
                     </Badge>
                   ) : (
-                    <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">
+                    <Badge variant="outline" className="w-full justify-center border-amber-200 bg-amber-50 text-amber-700 sm:col-span-2">
                       No GSTIN — set in Business Settings
                     </Badge>
                   )}
@@ -2462,7 +2670,7 @@ export function SalesReport() {
               {reportType === "unpaid-part-paid" && (
                 <>
                   <Select value={unpaidPartPaidDatePeriod} onValueChange={(v: DatePeriod) => handleUnpaidPartPaidDatePeriodChange(v)}>
-                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Date" />
                     </SelectTrigger>
                     <SelectContent>
@@ -2476,17 +2684,17 @@ export function SalesReport() {
                     </SelectContent>
                   </Select>
                   {unpaidPartPaidDatePeriod === "custom" && (
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 sm:col-span-2">
                       <Popover>
                         <PopoverTrigger asChild>
-                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                          <Button variant="outline" className="h-10 flex-1 min-w-0 justify-start px-3 text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                             <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                             <span className="truncate">
                               {unpaidPartPaidDateRange?.from ? format(unpaidPartPaidDateRange.from, "dd MMM yyyy") : "From"}
                             </span>
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
+                        <PopoverContent className="!z-[120] w-auto p-0" align="start">
                           <Calendar
                             mode="single"
                             selected={unpaidPartPaidDateRange?.from}
@@ -2497,14 +2705,14 @@ export function SalesReport() {
                       </Popover>
                       <Popover>
                         <PopoverTrigger asChild>
-                          <Button variant="outline" className="w-36 justify-start text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500 h-10 px-3">
+                          <Button variant="outline" className="h-10 flex-1 min-w-0 justify-start px-3 text-left font-normal border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                             <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                             <span className="truncate">
                               {unpaidPartPaidDateRange?.to ? format(unpaidPartPaidDateRange.to, "dd MMM yyyy") : "To"}
                             </span>
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
+                        <PopoverContent className="!z-[120] w-auto p-0" align="start">
                           <Calendar
                             mode="single"
                             selected={unpaidPartPaidDateRange?.to}
@@ -2516,7 +2724,7 @@ export function SalesReport() {
                     </div>
                   )}
                   <Select value={unpaidPartPaidStatusFilter} onValueChange={setUnpaidPartPaidStatusFilter}>
-                    <SelectTrigger className="w-40 border-slate-200 focus:border-blue-500 focus:ring-blue-500">
+                    <SelectTrigger className="w-full border-slate-200 focus:border-blue-500 focus:ring-blue-500">
                       <SelectValue placeholder="Status" />
                     </SelectTrigger>
                     <SelectContent>
@@ -2528,6 +2736,9 @@ export function SalesReport() {
                   </Select>
                 </>
               )}
+                  </div>
+                </PopoverContent>
+              </Popover>
             </div>
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-3">
               {(reportType === "sales" || reportType === "staff-tip" || reportType === "summary" || reportType === "service-list" || reportType === "product-list" || reportType === "appointment-list" || reportType === "deleted-invoice" || reportType === "unpaid-part-paid" || reportType === "cash-movement" || reportType === "gst") && canExport && (
@@ -3656,20 +3867,20 @@ export function SalesReport() {
       </div>
 
       {/* Sales Table – same layout as Service List / reports */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+      <div className={REPORT_TABLE_SHELL_CLASS}>
         {/* Table Header with pagination controls */}
-        <div className="px-6 py-4 bg-gradient-to-r from-gray-50 to-slate-50 border-b border-gray-200">
+        <div className={REPORT_TABLE_HEADER_CLASS}>
           <div className="flex items-center justify-between">
-            <h3 className="text-lg font-semibold text-gray-800">Sales Records</h3>
+            <h3 className={REPORT_TABLE_HEADER_TITLE_CLASS}>Sales Records</h3>
             <div className="flex items-center gap-4">
-              <div className="text-sm text-gray-600">
+              <div className={REPORT_TABLE_HEADER_META_CLASS}>
                 {salesListLoading
                   ? "Loading…"
                   : totalSalesRows > 0
                     ? `Showing ${salesStartRow}-${salesEndRow} of ${totalSalesRows} sales`
                     : "No sales"}
               </div>
-              <div className="flex items-center gap-2 text-sm text-gray-600">
+              <div className={`flex items-center gap-2 ${REPORT_TABLE_HEADER_META_CLASS}`}>
                 <span>Rows per page:</span>
                 <Select
                   value={String(salesPageSize)}
@@ -3696,7 +3907,7 @@ export function SalesReport() {
         <div className="overflow-x-auto">
           <Table>
             <TableHeader>
-              <TableRow className="bg-slate-50 border-b border-slate-200">
+              <TableRow className={REPORT_TABLE_HEAD_ROW_CLASS}>
                 <TableHead className="font-semibold text-slate-800">Bill No.</TableHead>
                 <TableHead className="font-semibold text-slate-800">Customer Name</TableHead>
                 <TableHead className="font-semibold text-slate-800">Date & Time</TableHead>
@@ -3870,9 +4081,9 @@ export function SalesReport() {
 
         {/* Pagination Footer */}
         {displayTotalPages > 1 && (
-          <div className="px-6 py-4 bg-gray-50/50 border-t border-gray-200">
+          <div className={REPORT_TABLE_FOOTER_CLASS}>
             <div className="flex items-center justify-between">
-              <div className="text-sm text-gray-600">
+              <div className={REPORT_TABLE_HEADER_META_CLASS}>
                 Page {safeSalesPageIndex + 1} of {displayTotalPages}
               </div>
               <div className="flex items-center space-x-2">
@@ -3881,7 +4092,7 @@ export function SalesReport() {
                   size="sm"
                   onClick={() => setSalesPageIndex(prev => Math.max(0, prev - 1))}
                   disabled={safeSalesPageIndex === 0 || salesListLoading}
-                  className="h-9 px-4 border-gray-200 hover:border-gray-300"
+                  className="h-9 px-4 border-gray-200 hover:border-gray-300 dark:border-border dark:hover:border-border"
                 >
                   Previous
                 </Button>
@@ -3890,7 +4101,7 @@ export function SalesReport() {
                   size="sm"
                   onClick={() => setSalesPageIndex(prev => Math.min(displayTotalPages - 1, prev + 1))}
                   disabled={safeSalesPageIndex >= displayTotalPages - 1 || salesListLoading}
-                  className="h-9 px-4 border-gray-200 hover:border-gray-300"
+                  className="h-9 px-4 border-gray-200 hover:border-gray-300 dark:border-border dark:hover:border-border"
                 >
                   Next
                 </Button>

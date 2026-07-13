@@ -13,6 +13,7 @@ import {
   buildReceiptTaxDetailHtml,
   renderReceiptTotalsHtml,
 } from "@/lib/receipt-totals-breakdown"
+import { getThermalPaperWidthMm, resolveReceiptPaperSize } from "@/lib/receipt-paper-size"
 
 const thermalFormat = (amount: number) => `₹${amount.toFixed(2)}`
 
@@ -73,13 +74,201 @@ function buildThermalSettlementTotals(receipt: Receipt): string {
   return h
 }
 
+function formatThermalItemDiscount(item: Receipt["items"][number]): string {
+  if ((item.discount || 0) <= 0) return "-"
+  return item.discountType === "percentage"
+    ? formatReceiptDiscountPercent(item.discount)
+    : `₹${item.discount.toFixed(2)}`
+}
+
+function formatThermalItemTaxRate(item: Receipt["items"][number]): string {
+  const rate = (item as { taxRate?: number }).taxRate ?? 0
+  return rate > 0 ? `${rate}%` : "-"
+}
+
+function buildThermalItemBlock(
+  item: Receipt["items"][number],
+  detailFontPx: number,
+  nameFontPx: number
+): string {
+  const staffLabel = formatReceiptItemStaffNames(item)
+  const walkInLabel = receiptWalkInSaleLabel(item.lineSource)
+  const hsn = (item as { hsnSacCode?: string }).hsnSacCode || ""
+  const qtySuffix = item.quantity > 1 ? ` x${item.quantity}` : ""
+
+  const metaLines = [
+    staffLabel ? `<div class="item-block-meta">Staff: ${staffLabel}</div>` : "",
+    walkInLabel ? `<div class="item-block-meta item-block-walkin">${walkInLabel}</div>` : "",
+    hsn ? `<div class="item-block-meta">HSN: ${hsn}</div>` : "",
+  ]
+    .filter(Boolean)
+    .join("")
+
+  return `
+    <div class="item-block">
+      <div class="item-block-name" style="font-size: ${nameFontPx}px;">${item.name}${qtySuffix}</div>
+      ${metaLines}
+      <div class="item-detail-line" style="font-size: ${detailFontPx}px;">
+        <span class="item-detail-label">Price</span>
+        <span class="item-detail-value">₹${item.price.toFixed(2)}</span>
+      </div>
+      <div class="item-detail-line" style="font-size: ${detailFontPx}px;">
+        <span class="item-detail-label">Disc</span>
+        <span class="item-detail-value">${formatThermalItemDiscount(item)}</span>
+      </div>
+      <div class="item-detail-line" style="font-size: ${detailFontPx}px;">
+        <span class="item-detail-label">Tax Rate</span>
+        <span class="item-detail-value">${formatThermalItemTaxRate(item)}</span>
+      </div>
+      <div class="item-detail-line item-detail-total" style="font-size: ${detailFontPx}px;">
+        <span class="item-detail-label">Total</span>
+        <span class="item-detail-value">₹${item.total.toFixed(2)}</span>
+      </div>
+    </div>`
+}
+
+function buildThermalItemsSectionHtml(receipt: Receipt, paperSize: string): string {
+  const detailFontPx = paperSize === "57mm" ? 14 : 16
+  const nameFontPx = paperSize === "57mm" ? 16 : 18
+
+  return `
+          <div class="items">
+            <div class="items-section-title">ITEMS</div>
+            ${receipt.items.map((item) => buildThermalItemBlock(item, detailFontPx, nameFontPx)).join("")}
+          </div>`
+}
+
+function getThermalLayoutCss(detailFontPx: number, metaFontPx: number): string {
+  return `
+          .items {
+            border-bottom: 1px dashed #000;
+            padding-bottom: 8px;
+            margin-bottom: 8px;
+          }
+          .items-section-title {
+            font-size: ${detailFontPx}px;
+            font-weight: bold;
+            border-bottom: 1px solid #000;
+            padding-bottom: 4px;
+            margin-bottom: 6px;
+            letter-spacing: 0.04em;
+          }
+          .item-block {
+            border-bottom: 1px dashed #999;
+            padding-bottom: 6px;
+            margin-bottom: 6px;
+            word-wrap: break-word;
+            overflow-wrap: anywhere;
+          }
+          .item-block:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+          }
+          .item-block-name {
+            font-weight: bold;
+            margin-bottom: 2px;
+            line-height: 1.25;
+          }
+          .item-block-meta {
+            font-size: ${metaFontPx}px;
+            color: #555;
+            margin-bottom: 2px;
+            line-height: 1.2;
+          }
+          .item-block-walkin {
+            color: #92400e;
+          }
+          .item-detail-line {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 8px;
+            margin-top: 2px;
+            line-height: 1.25;
+          }
+          .item-detail-label {
+            flex: 0 0 auto;
+            min-width: 4.5em;
+          }
+          .item-detail-value {
+            flex: 1 1 auto;
+            text-align: right;
+            white-space: nowrap;
+          }
+          .item-detail-total {
+            margin-top: 4px;
+            padding-top: 2px;
+            border-top: 1px dotted #999;
+            font-weight: bold;
+          }
+          .total-line {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 8px;
+            margin-bottom: 2px;
+            font-weight: bold;
+          }
+          .total-line > span:first-child {
+            flex: 1 1 auto;
+            min-width: 0;
+            word-break: break-word;
+          }
+          .total-line > span:last-child {
+            flex: 0 0 auto;
+            text-align: right;
+            white-space: nowrap;
+          }`
+}
+
 interface ThermalReceiptGeneratorProps {
   receipt: Receipt
   businessSettings?: any
 }
 
 export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalReceiptGeneratorProps) {
+  const paperSize = resolveReceiptPaperSize(businessSettings)
+  const paperWidthMm = getThermalPaperWidthMm(paperSize)
+  const baseFontPx = paperSize === "57mm" ? 16 : 20
+  const businessNameFontPx = paperSize === "57mm" ? 20 : 25
+  const infoFontPx = paperSize === "57mm" ? 14 : 17
+
   const generateThermalReceiptHTML = () => {
+    const detailFontPx = paperSize === "57mm" ? 14 : 16
+    const metaFontPx = paperSize === "57mm" ? 12 : 14
+    const itemsHtml = buildThermalItemsSectionHtml(receipt, paperSize)
+    const layoutCss = getThermalLayoutCss(detailFontPx, metaFontPx)
+
+    const pageCss = `
+            html {
+              overflow-x: hidden;
+              margin: 0;
+              padding: 0;
+            }
+            @page {
+              size: ${paperWidthMm}mm 200mm;
+              margin: 0;
+              padding: 0;
+            }`
+    const bodyCss = `
+            font-family: 'Courier New', 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: ${baseFontPx}px;
+            font-weight: bold;
+            line-height: 1.3;
+            margin: 0;
+            padding: 2mm 0mm 0mm 0mm;
+            width: ${paperWidthMm}mm;
+            max-width: ${paperWidthMm}mm;
+            overflow-x: hidden;
+            box-sizing: border-box;
+            background: white;
+            color: black;
+            -webkit-font-smoothing: none;
+            -moz-osx-font-smoothing: auto;
+            text-rendering: optimizeSpeed;
+            font-smooth: never;`
+
     if (!businessSettings) {
       return `
         <!DOCTYPE html>
@@ -87,25 +276,9 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
         <head>
           <title>Thermal Receipt - ${receipt.receiptNumber}</title>
           <style>
-            @page {
-              size: 80mm 200mm;
-              margin: 0;
-              padding: 0;
-            }
+            ${pageCss}
           body {
-            font-family: 'Courier New', 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-            font-size: 20px;
-            font-weight: bold;
-            line-height: 1.3;
-            margin: 0;
-            padding: 2mm 0mm 0mm 0mm;
-            width: 80mm;
-            background: white;
-            color: black;
-            -webkit-font-smoothing: none;
-            -moz-osx-font-smoothing: auto;
-            text-rendering: optimizeSpeed;
-            font-smooth: never;
+            ${bodyCss}
           }
             .header {
               text-align: center;
@@ -131,31 +304,9 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
               margin-bottom: 2px;
               font-weight: bold;
             }
-            .items {
-              border-bottom: 1px dashed #000;
-              padding-bottom: 8px;
-              margin-bottom: 8px;
-            }
-            .item {
-              margin-bottom: 4px;
-            }
-            .item-name {
-              font-weight: bold;
-              font-size: 20px;
-            }
-            .item-details {
-              font-size: 17px;
-              font-weight: bold;
-              margin-left: 4px;
-            }
+            ${layoutCss}
             .totals {
               margin-bottom: 8px;
-            }
-            .total-line {
-              display: flex;
-              justify-content: space-between;
-              margin-bottom: 2px;
-              font-weight: bold;
             }
             .total-line.total-amount {
               font-weight: bold;
@@ -223,27 +374,7 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
             <div><strong>Phone:</strong> ${receipt.clientPhone}</div>
           </div>
 
-          <div class="items">
-            <table style="width: 100%; border-collapse: collapse; font-size: 17px;">
-              <tr style="border-bottom: 1px solid #000;"><th style="text-align: left;">HSN</th><th style="text-align: left;">Item</th><th style="text-align: right;">Price</th><th style="text-align: right;">Disc</th><th style="text-align: right;">Tax Rate</th><th style="text-align: right;">Total</th></tr>
-              ${receipt.items.map(item => {
-                const staffLabel = formatReceiptItemStaffNames(item)
-                const walkInLabel = receiptWalkInSaleLabel(item.lineSource)
-                const lineMeta =
-                  (staffLabel || walkInLabel) &&
-                  `${staffLabel ? `<br><span style="font-size: 15px; color: #666;">${staffLabel}</span>` : ""}${walkInLabel ? `<br><span style="font-size: 15px; color: #92400e;">${walkInLabel}</span>` : ""}`
-                return `
-                <tr style="border-bottom: 1px dashed #999;">
-                  <td>${(item as any).hsnSacCode || "-"}</td>
-                  <td>${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ""}${lineMeta || ""}</td>
-                  <td style="text-align: right;">₹${item.price.toFixed(2)}</td>
-                  <td style="text-align: right;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? formatReceiptDiscountPercent(item.discount) : "₹" + item.discount.toFixed(2)) : "-"}</td>
-                  <td style="text-align: right;">${((item as any).taxRate ?? 0) > 0 ? (item as any).taxRate + "%" : "-"}</td>
-                  <td style="text-align: right; font-weight: bold;">₹${item.total.toFixed(2)}</td>
-                </tr>
-              `}).join('')}
-            </table>
-          </div>
+          ${itemsHtml}
 
           <div class="totals">
             ${renderReceiptTotalsHtml(receipt, thermalFormat, {
@@ -294,51 +425,25 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
       <head>
         <title>Thermal Receipt - ${receipt.receiptNumber}</title>
         <style>
-          @page {
-            size: 80mm 200mm;
-            margin: 0;
-            padding: 0;
-          }
+          ${pageCss}
           @media print {
-            @page {
-              size: 80mm 200mm;
-              margin: 0;
-              padding: 0;
-            }
+            ${pageCss}
             body {
               -webkit-print-color-adjust: exact;
               color-adjust: exact;
             }
           }
           body {
-            font-family: 'Courier New', 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-            font-size: 20px;
-            font-weight: bold;
-            line-height: 1.3;
-            margin: 0;
-            padding: 2mm 0mm 0mm 0mm;
-            width: 80mm;
-            background: white;
-            color: black;
-            -webkit-font-smoothing: none;
-            -moz-osx-font-smoothing: auto;
-            text-rendering: optimizeSpeed;
-            font-smooth: never;
-          }
-          .header {
-            text-align: center;
-            border-bottom: 1px dashed #000;
-            padding-bottom: 8px;
-            margin-bottom: 8px;
+            ${bodyCss}
           }
           .business-name {
-            font-size: 25px;
+            font-size: ${businessNameFontPx}px;
             font-weight: bold;
             margin-bottom: 4px;
             letter-spacing: 0.5px;
           }
           .business-info {
-            font-size: 17px;
+            font-size: ${infoFontPx}px;
             font-weight: bold;
             margin-bottom: 2px;
           }
@@ -349,31 +454,9 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
             margin-bottom: 2px;
             font-weight: bold;
           }
-          .items {
-            border-bottom: 1px dashed #000;
-            padding-bottom: 8px;
-            margin-bottom: 8px;
-          }
-          .item {
-            margin-bottom: 4px;
-          }
-          .item-name {
-            font-weight: bold;
-            font-size: 20px;
-          }
-          .item-details {
-            font-size: 17px;
-            font-weight: bold;
-            margin-left: 4px;
-          }
+          ${layoutCss}
           .totals {
             margin-bottom: 8px;
-          }
-          .total-line {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 2px;
-            font-weight: bold;
           }
           .total-line.total-amount {
             font-weight: bold;
@@ -442,27 +525,7 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
           <div><strong>Phone:</strong> ${receipt.clientPhone}</div>
         </div>
 
-        <div class="items">
-          <table style="width: 100%; border-collapse: collapse; font-size: 17px;">
-            <tr style="border-bottom: 1px solid #000;"><th style="text-align: left;">HSN</th><th style="text-align: left;">Item</th><th style="text-align: right;">Price</th><th style="text-align: right;">Disc</th><th style="text-align: right;">Tax Rate</th><th style="text-align: right;">Total</th></tr>
-            ${receipt.items.map(item => {
-              const staffLabel = formatReceiptItemStaffNames(item)
-              const walkInLabel = receiptWalkInSaleLabel(item.lineSource)
-              const lineMeta =
-                (staffLabel || walkInLabel) &&
-                `${staffLabel ? `<br><span style="font-size: 15px; color: #666;">${staffLabel}</span>` : ""}${walkInLabel ? `<br><span style="font-size: 15px; color: #92400e;">${walkInLabel}</span>` : ""}`
-              return `
-              <tr style="border-bottom: 1px dashed #999;">
-                <td>${(item as any).hsnSacCode || "-"}</td>
-                <td>${item.name}${item.quantity > 1 ? ` x${item.quantity}` : ""}${lineMeta || ""}</td>
-                <td style="text-align: right;">₹${item.price.toFixed(2)}</td>
-                <td style="text-align: right;">${(item.discount || 0) > 0 ? (item.discountType === "percentage" ? formatReceiptDiscountPercent(item.discount) : "₹" + item.discount.toFixed(2)) : "-"}</td>
-                <td style="text-align: right;">${((item as any).taxRate ?? 0) > 0 ? (item as any).taxRate + "%" : "-"}</td>
-                <td style="text-align: right; font-weight: bold;">₹${item.total.toFixed(2)}</td>
-              </tr>
-            `}).join('')}
-          </table>
-        </div>
+        ${itemsHtml}
 
         <div class="totals">
           <div class="total-line">

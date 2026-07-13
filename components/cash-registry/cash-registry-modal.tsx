@@ -1,7 +1,7 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { Calendar, X, RefreshCw } from "lucide-react"
+import { useState, useEffect, useCallback, useMemo } from "react"
+import { Calendar } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 import { toast } from "@/hooks/use-toast"
 import { Button } from "@/components/ui/button"
@@ -16,14 +16,15 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { format } from "date-fns"
-import { SalesAPI, CashRegistryAPI } from "@/lib/api"
+import { CashRegistryAPI } from "@/lib/api"
+import { getEndOfDayIST, getStartOfDayIST } from "@/lib/date-utils"
 
 interface CashRegistryModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onSaveSuccess?: () => void
-  onlineSalesAmount?: number // Add this prop to receive the amount from stats card
-  onPosCashChange?: (amount: number) => void // Add this prop to send POS cash amount back to parent
+  onlineSalesAmount?: number
+  onPosCashChange?: (amount: number) => void
 }
 
 interface CurrencyDenomination {
@@ -32,30 +33,161 @@ interface CurrencyDenomination {
   total: number
 }
 
-export function CashRegistryModal({ open, onOpenChange, onSaveSuccess, onlineSalesAmount = 0, onPosCashChange }: CashRegistryModalProps) {
+interface DayRegistryEntry {
+  date?: string
+  openingBalance?: number
+  closingBalance?: number
+  shiftType?: string
+  denominations?: CurrencyDenomination[]
+  closingDenominations?: CurrencyDenomination[]
+  posCash?: number
+}
+
+const DENOMINATION_VALUES = [500, 200, 100, 50, 20, 10, 5, 2, 1] as const
+
+function createEmptyDenominations(): CurrencyDenomination[] {
+  return DENOMINATION_VALUES.map((value) => ({ value, count: 0, total: 0 }))
+}
+
+function mergeDenominations(saved?: CurrencyDenomination[]): CurrencyDenomination[] {
+  const byValue = new Map((saved || []).map((d) => [d.value, d]))
+  return DENOMINATION_VALUES.map((value) => {
+    const existing = byValue.get(value)
+    if (existing) {
+      const count = Number(existing.count) || 0
+      return { value, count, total: count * value }
+    }
+    return { value, count: 0, total: 0 }
+  })
+}
+
+export function CashRegistryModal({
+  open,
+  onOpenChange,
+  onSaveSuccess,
+  onlineSalesAmount = 0,
+  onPosCashChange,
+}: CashRegistryModalProps) {
   const { user } = useAuth()
   const [date, setDate] = useState(new Date())
   const [shift, setShift] = useState<"opening" | "closing">("opening")
-  const [denominations, setDenominations] = useState<CurrencyDenomination[]>([
-    { value: 500, count: 0, total: 0 },
-    { value: 200, count: 0, total: 0 },
-    { value: 100, count: 0, total: 0 },
-    { value: 50, count: 0, total: 0 },
-    { value: 20, count: 0, total: 0 },
-    { value: 10, count: 0, total: 0 },
-    { value: 5, count: 0, total: 0 },
-    { value: 2, count: 0, total: 0 },
-    { value: 1, count: 0, total: 0 },
-  ])
+  const [denominations, setDenominations] = useState<CurrencyDenomination[]>(createEmptyDenominations)
+  const [savedOpeningDenominations, setSavedOpeningDenominations] = useState<CurrencyDenomination[] | null>(null)
+  const [dayOpeningEntry, setDayOpeningEntry] = useState<DayRegistryEntry | null>(null)
+  const [dayClosingEntry, setDayClosingEntry] = useState<DayRegistryEntry | null>(null)
   const [cashCollectedOnline, setCashCollectedOnline] = useState(onlineSalesAmount)
   const [cashInPosMachine, setCashInPosMachine] = useState(0)
   const [isLoading, setIsLoading] = useState(false)
+  const [isDayStateLoading, setIsDayStateLoading] = useState(false)
   const [errors, setErrors] = useState<{ [key: string]: string }>({})
   const [focusedCountIndex, setFocusedCountIndex] = useState<number | null>(null)
   const [isPosCashFocused, setIsPosCashFocused] = useState(false)
 
+  const pendingClosing = useMemo(
+    () =>
+      Boolean(
+        (dayOpeningEntry?.openingBalance ?? 0) > 0 &&
+          !((dayClosingEntry?.closingBalance ?? 0) > 0)
+      ),
+    [dayOpeningEntry, dayClosingEntry]
+  )
+
+  const hasSavedOpening = useMemo(
+    () => Boolean((dayOpeningEntry?.openingBalance ?? 0) > 0 && savedOpeningDenominations),
+    [dayOpeningEntry, savedOpeningDenominations]
+  )
+
+  const isViewingSavedOpening = shift === "opening" && hasSavedOpening && pendingClosing
+
+  const savedOpeningTotal = useMemo(
+    () => (savedOpeningDenominations || []).reduce((sum, denom) => sum + denom.total, 0),
+    [savedOpeningDenominations]
+  )
+
   const totalBalance = denominations.reduce((sum, denom) => sum + denom.total, 0)
-  const displayTotal = totalBalance
+  const displayedTotal = isViewingSavedOpening ? savedOpeningTotal : totalBalance
+
+  const resetEditableFields = useCallback(() => {
+    setDenominations(createEmptyDenominations())
+    setCashInPosMachine(0)
+    setErrors({})
+    setFocusedCountIndex(null)
+    setIsPosCashFocused(false)
+  }, [])
+
+  const applyShiftDefaults = useCallback(
+    (nextShift: "opening" | "closing", openingEntry: DayRegistryEntry | null, closingEntry: DayRegistryEntry | null) => {
+      if (nextShift === "closing" && closingEntry?.closingBalance && closingEntry.closingBalance > 0) {
+        const savedClosing =
+          closingEntry.closingDenominations?.length
+            ? closingEntry.closingDenominations
+            : closingEntry.denominations
+        setDenominations(mergeDenominations(savedClosing))
+        setCashInPosMachine(Number(closingEntry.posCash) || 0)
+      } else {
+        resetEditableFields()
+      }
+    },
+    [resetEditableFields]
+  )
+
+  const loadDayState = useCallback(
+    async (targetDate: Date, preserveShift?: "opening" | "closing") => {
+      const dateString = format(targetDate, "yyyy-MM-dd")
+      setIsDayStateLoading(true)
+      try {
+        const response = await CashRegistryAPI.getAll({
+          page: 1,
+          limit: 50,
+          dateFrom: getStartOfDayIST(dateString),
+          dateTo: getEndOfDayIST(dateString),
+        })
+
+        const entries: DayRegistryEntry[] = Array.isArray(response?.data) ? response.data : []
+        const openingEntry =
+          entries.find(
+            (entry) => entry.shiftType === "opening" && (entry.openingBalance ?? 0) > 0
+          ) || null
+        const closingEntry =
+          entries.find(
+            (entry) => entry.shiftType === "closing" && (entry.closingBalance ?? 0) > 0
+          ) || null
+
+        setDayOpeningEntry(openingEntry)
+        setDayClosingEntry(closingEntry)
+
+        const needsClosing =
+          Boolean((openingEntry?.openingBalance ?? 0) > 0) &&
+          !((closingEntry?.closingBalance ?? 0) > 0)
+
+        if (openingEntry?.openingBalance && openingEntry.openingBalance > 0) {
+          setSavedOpeningDenominations(mergeDenominations(openingEntry.denominations))
+        } else {
+          setSavedOpeningDenominations(null)
+        }
+
+        const nextShift = preserveShift ?? (needsClosing ? "closing" : "opening")
+
+        setShift(nextShift)
+        applyShiftDefaults(nextShift, openingEntry, closingEntry)
+      } catch (error) {
+        console.error("Error loading cash registry day state:", error)
+        setDayOpeningEntry(null)
+        setDayClosingEntry(null)
+        setSavedOpeningDenominations(null)
+        setShift("opening")
+        resetEditableFields()
+      } finally {
+        setIsDayStateLoading(false)
+      }
+    },
+    [applyShiftDefaults, resetEditableFields]
+  )
+
+  useEffect(() => {
+    if (!open) return
+    loadDayState(date)
+  }, [open, date, loadDayState])
 
   useEffect(() => {
     if (shift === "closing" && open) {
@@ -63,120 +195,99 @@ export function CashRegistryModal({ open, onOpenChange, onSaveSuccess, onlineSal
     }
   }, [shift, open, onlineSalesAmount])
 
+  const handleShiftChange = (value: "opening" | "closing") => {
+    setShift(value)
+    applyShiftDefaults(value, dayOpeningEntry, dayClosingEntry)
+    setErrors({})
+  }
 
   const validateForm = () => {
     const newErrors: { [key: string]: string } = {}
-    
+
     if (shift === "closing") {
-      // Validate Cash in POS Machine cannot be negative
       if (cashInPosMachine < 0) {
         newErrors.cashInPosMachine = "Cash in POS Machine cannot be negative"
       }
-      
-      // Validate Cash in POS Machine is mandatory when Cash Collected Online > 0
+
       if (cashCollectedOnline > 0 && cashInPosMachine === 0) {
         newErrors.cashInPosMachine = "Cash in POS Machine is mandatory when Cash Collected Online has value"
       }
     }
-    
+
     setErrors(newErrors)
     return Object.keys(newErrors).length === 0
   }
 
   const handleCountChange = (index: number, count: string) => {
-    // Handle empty string or invalid input
-    if (count === '' || count === null || count === undefined) {
+    if (count === "" || count === null || count === undefined) {
       const newDenominations = [...denominations]
       newDenominations[index] = {
         ...newDenominations[index],
         count: 0,
-        total: 0
+        total: 0,
       }
       setDenominations(newDenominations)
       return
     }
-    
+
     const newCount = parseInt(count) || 0
-    if (newCount < 0) return // Prevent negative counts
-    
+    if (newCount < 0) return
+
     const newDenominations = [...denominations]
     newDenominations[index] = {
       ...newDenominations[index],
       count: newCount,
-      total: newCount * newDenominations[index].value
+      total: newCount * newDenominations[index].value,
     }
     setDenominations(newDenominations)
   }
 
   const handlePosCashChange = (amount: number) => {
-    // Handle NaN or invalid amounts
     if (isNaN(amount) || amount < 0) {
       setCashInPosMachine(0)
-      if (onPosCashChange) {
-        onPosCashChange(0)
-      }
+      onPosCashChange?.(0)
       return
     }
-    
+
     setCashInPosMachine(amount)
-    // Notify parent component about POS cash change
-    if (onPosCashChange) {
-      onPosCashChange(amount)
-    }
+    onPosCashChange?.(amount)
   }
 
   const handleSave = async () => {
-    if (!validateForm()) {
-      return
-    }
+    if (isViewingSavedOpening) return
+    if (!validateForm()) return
 
     setIsLoading(true)
     try {
-      // Auth is handled by HttpOnly cookies — no token check needed
-
-      // Clean and validate denominations data
       const cleanDenominations = denominations
-        .filter(d => d.count > 0 && d.value > 0 && d.total > 0)
-        .map(d => ({
+        .filter((d) => d.count > 0 && d.value > 0 && d.total > 0)
+        .map((d) => ({
           value: Number(d.value),
           count: Number(d.count),
-          total: Number(d.total)
+          total: Number(d.total),
         }))
-      
-      // Recalculate total balance from cleaned denominations
+
       const calculatedTotalBalance = cleanDenominations.reduce((sum, d) => sum + d.total, 0)
-      
-      // Send date as YYYY-MM-DD to avoid timezone shift (e.g. 15th becoming 14th in UTC-* zones)
       const dateString = format(date, "yyyy-MM-dd")
       const cashRegistryData = {
         date: dateString,
         shiftType: shift,
-        createdBy: user?.name || user?.email || "Unknown User", // Add required createdBy field
-        denominations: cleanDenominations, // Use cleaned denominations
-        openingBalance: shift === "opening" ? calculatedTotalBalance : 0, // Send opening balance for opening shifts
-        closingBalance: shift === "closing" ? calculatedTotalBalance : 0, // Send closing balance for closing shifts
+        createdBy: user?.name || user?.email || "Unknown User",
+        denominations: cleanDenominations,
+        openingBalance: shift === "opening" ? calculatedTotalBalance : 0,
+        closingBalance: shift === "closing" ? calculatedTotalBalance : 0,
         onlineCash: shift === "closing" ? cashCollectedOnline : 0,
         posCash: shift === "closing" ? cashInPosMachine : 0,
-        notes: `Cash registry entry for ${shift} shift`
+        notes: `Cash registry entry for ${shift} shift`,
       }
 
-      console.log("Saving cash registry data:", cashRegistryData)
-      console.log("User info:", { name: user?.name, email: user?.email })
-      console.log("Denominations structure:", denominations.filter(d => d.count > 0).map(d => ({ value: d.value, count: d.count, total: d.total })))
-
-            console.log("Making API call to /cash-registry...")
-      console.log("Request data being sent:", cashRegistryData)
-      
-      // Check if backend is reachable
       try {
-        const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
+        const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api"
         const healthCheck = await fetch(`${API_URL}/health`)
         if (!healthCheck.ok) {
           throw new Error(`Backend health check failed: ${healthCheck.status}`)
         }
-        console.log("✅ Backend is reachable")
-      } catch (healthError) {
-        console.error("❌ Backend health check failed:", healthError)
+      } catch {
         toast({
           title: "Backend Unavailable",
           description: "Cannot connect to backend server. Please check if the server is running.",
@@ -184,40 +295,15 @@ export function CashRegistryModal({ open, onOpenChange, onSaveSuccess, onlineSal
         })
         return
       }
-      
+
       let response
       try {
         response = await CashRegistryAPI.create(cashRegistryData)
-        console.log("✅ API call successful!")
-        console.log("API Response:", response)
-        console.log("Response type:", typeof response)
-        console.log("Response keys:", Object.keys(response))
-        
-        // Check if response has success property (API wrapper) or is direct data
         if (response.success === false) {
-          console.error("❌ API returned error:", response)
           throw new Error(response.error || response.message || "API returned error")
         }
-        
-        // If response has data property, use it; otherwise use response directly
-        const responseData = response.data || response
-        console.log("Cash registry response data:", responseData)
-        
       } catch (apiError: any) {
-        console.error("❌ API Call Failed:", apiError)
-        console.error("API Error details:", {
-          message: apiError.message || 'Unknown error',
-          response: apiError.response?.data || 'No response data',
-          status: apiError.response?.status || 'No status',
-          statusText: apiError.response?.statusText || 'No status text',
-          url: apiError.config?.url || 'No URL',
-          method: apiError.config?.method || 'No method',
-          code: apiError.code || 'No error code',
-          name: apiError.name || 'Unknown error type'
-        })
-        
-        // Check if it's a network error
-        if (apiError.code === 'ECONNREFUSED' || apiError.message.includes('Network Error')) {
+        if (apiError.code === "ECONNREFUSED" || apiError.message?.includes("Network Error")) {
           toast({
             title: "Connection Error",
             description: "Cannot connect to backend server. Please check if the server is running.",
@@ -225,8 +311,7 @@ export function CashRegistryModal({ open, onOpenChange, onSaveSuccess, onlineSal
           })
           return
         }
-        
-        // Check if it's an authentication error
+
         if (apiError.response?.status === 401 || apiError.response?.status === 403) {
           toast({
             title: "Authentication Error",
@@ -235,13 +320,21 @@ export function CashRegistryModal({ open, onOpenChange, onSaveSuccess, onlineSal
           })
           return
         }
-        
-        throw apiError // Re-throw to be caught by outer catch block
+
+        const apiMessage = apiError.response?.data?.message
+        if (apiMessage) {
+          toast({
+            title: "Cannot save",
+            description: apiMessage,
+            variant: "destructive",
+          })
+          return
+        }
+
+        throw apiError
       }
 
-      // Check if response exists and has content
       if (!response || Object.keys(response).length === 0) {
-        console.error("❌ Empty response received from backend")
         toast({
           title: "Error",
           description: "Backend returned empty response. Please try again.",
@@ -250,45 +343,32 @@ export function CashRegistryModal({ open, onOpenChange, onSaveSuccess, onlineSal
         return
       }
 
-      // Check if response indicates success (either has success: true or is a valid cash registry object)
       const isSuccess = response.success === true || (response._id && response.shiftType)
-      
+
       if (isSuccess) {
         const action = shift === "opening" ? "Opening balance" : "Closing balance"
         toast({
           title: "Success",
           description: `${action} saved successfully`,
         })
-        if (onSaveSuccess) onSaveSuccess()
+        onSaveSuccess?.()
         onOpenChange(false)
       } else {
-        console.error("Backend error response:", response)
-        
-        // Show more specific error message
         let errorMessage = "Failed to save cash registry entry"
         if (response.error) {
           errorMessage = response.error
         } else if (response.message) {
           errorMessage = response.message
-        } else if ((response as any).details) {
-          errorMessage = `Error: ${JSON.stringify((response as any).details)}`
         }
-        
+
         toast({
           title: "Error",
           description: errorMessage,
           variant: "destructive",
         })
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error("Error saving cash registry:", error)
-      console.error("Error details:", {
-        message: error.message || 'Unknown error',
-        response: error.response?.data || 'No response data',
-        status: error.response?.status || 'No status',
-        name: error.name || 'Unknown error type',
-        stack: error.stack || 'No stack trace'
-      })
       toast({
         title: "Error",
         description: "An unexpected error occurred while saving",
@@ -304,26 +384,91 @@ export function CashRegistryModal({ open, onOpenChange, onSaveSuccess, onlineSal
     setDate(newDate)
   }
 
+  const renderDenominationGrid = (
+    rows: CurrencyDenomination[],
+    {
+      readOnly = false,
+      onCountChange,
+    }: {
+      readOnly?: boolean
+      onCountChange?: (index: number, count: string) => void
+    }
+  ) => (
+    <div className={`border border-border rounded-lg overflow-hidden bg-card ${readOnly ? "opacity-70" : ""}`}>
+      <div className="grid grid-cols-3 bg-muted/30 border-b">
+        <div className="px-4 py-3 font-semibold text-sm text-foreground">Currency Value (₹)</div>
+        <div className="px-4 py-3 font-semibold text-sm text-foreground">Count</div>
+        <div className="px-4 py-3 font-semibold text-sm text-foreground">Total (₹)</div>
+      </div>
+      {rows.map((denom, index) => (
+        <div
+          key={`${readOnly ? "saved" : "edit"}-${denom.value}`}
+          className={`grid grid-cols-3 border-b last:border-b-0 ${index % 2 === 0 ? "bg-background" : "bg-muted/20"}`}
+        >
+          <div className="px-4 py-3 flex items-center">
+            <span className="font-medium text-foreground">₹{denom.value}</span>
+          </div>
+          <div className="px-4 py-3">
+            {readOnly ? (
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground text-sm">×</span>
+                <span className="w-20 text-center text-muted-foreground">{denom.count}</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground text-sm">×</span>
+                <Input
+                  type="number"
+                  min="0"
+                  value={focusedCountIndex === index && denom.count === 0 ? "" : denom.count}
+                  onChange={(e) => onCountChange?.(index, e.target.value)}
+                  onFocus={() => setFocusedCountIndex(index)}
+                  onBlur={() => setFocusedCountIndex(null)}
+                  className="w-20 h-9 border-border focus:ring-2 focus:ring-primary/20 text-center"
+                  placeholder="0"
+                  disabled={isDayStateLoading}
+                />
+              </div>
+            )}
+          </div>
+          <div className="px-4 py-3 flex items-center">
+            <span className={`font-medium ${readOnly ? "text-muted-foreground" : "text-foreground"}`}>
+              ₹{denom.total.toFixed(2)}
+            </span>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader className="pb-4">
           <DialogTitle className="text-xl font-semibold text-center">
-            {shift === "opening" ? "Set Opening Balance" : "Set Closing Balance"}
+            {isViewingSavedOpening
+              ? "Opening Balance (saved)"
+              : shift === "opening"
+                ? "Set Opening Balance"
+                : "Set Closing Balance"}
           </DialogTitle>
           <p className="text-sm text-muted-foreground text-center mt-2">
-            {shift === "opening" 
-              ? "This will create a new cash registry entry for today. The closing balance can be set later."
-              : "This will update today's cash registry entry with closing balance and calculations."
-            }
+            {isViewingSavedOpening
+              ? "Review the opening balance already submitted for this date. Switch to Closing Shift to enter closing details."
+              : pendingClosing && shift === "closing"
+                ? "Opening balance is already saved for this date. Enter the closing shift details below."
+                : shift === "opening"
+                  ? "This will create a new cash registry entry for today. The closing balance can be set later."
+                  : "This will update today's cash registry entry with closing balance and calculations."}
           </p>
         </DialogHeader>
 
         <div className="space-y-6">
-          {/* Date and Shift Selection */}
           <div className="grid grid-cols-2 gap-6">
             <div className="space-y-2">
-              <Label htmlFor="date" className="text-sm font-medium text-foreground">Date</Label>
+              <Label htmlFor="date" className="text-sm font-medium text-foreground">
+                Date
+              </Label>
               <div className="relative">
                 <Input
                   id="date"
@@ -331,6 +476,7 @@ export function CashRegistryModal({ open, onOpenChange, onSaveSuccess, onlineSal
                   value={format(date, "yyyy-MM-dd")}
                   onChange={handleDateChange}
                   className="pr-10 h-10 border-border focus:ring-2 focus:ring-primary/20"
+                  disabled={isDayStateLoading}
                 />
                 <Calendar className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               </div>
@@ -339,59 +485,52 @@ export function CashRegistryModal({ open, onOpenChange, onSaveSuccess, onlineSal
               <Label className="text-sm font-medium text-foreground">Shift</Label>
               <RadioGroup
                 value={shift}
-                onValueChange={(value: "opening" | "closing") => setShift(value)}
+                onValueChange={(value: "opening" | "closing") => handleShiftChange(value)}
                 className="flex gap-4"
               >
                 <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="opening" id="opening" className="border-border" />
-                  <Label htmlFor="opening" className="text-sm font-normal cursor-pointer">Opening Shift</Label>
+                  <RadioGroupItem
+                    value="opening"
+                    id="opening"
+                    className="border-border"
+                    disabled={isDayStateLoading}
+                  />
+                  <Label htmlFor="opening" className="text-sm font-normal cursor-pointer">
+                    Opening Shift
+                  </Label>
                 </div>
                 <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="closing" id="closing" className="border-border" />
-                  <Label htmlFor="closing" className="text-sm font-normal cursor-pointer">Closing Shift</Label>
+                  <RadioGroupItem
+                    value="closing"
+                    id="closing"
+                    className="border-border"
+                    disabled={isDayStateLoading}
+                  />
+                  <Label htmlFor="closing" className="text-sm font-normal cursor-pointer">
+                    Closing Shift
+                  </Label>
                 </div>
               </RadioGroup>
             </div>
           </div>
 
-          {/* Currency Value Count Section */}
           <div className="space-y-3">
-            <Label className="text-base font-semibold text-foreground">Enter currency value count</Label>
-            <div className="border border-border rounded-lg overflow-hidden bg-card">
-              <div className="grid grid-cols-3 bg-muted/30 border-b">
-                <div className="px-4 py-3 font-semibold text-sm text-foreground">Currency Value (₹)</div>
-                <div className="px-4 py-3 font-semibold text-sm text-foreground">Count</div>
-                <div className="px-4 py-3 font-semibold text-sm text-foreground">Total (₹)</div>
-              </div>
-              {denominations.map((denom, index) => (
-                <div key={denom.value} className={`grid grid-cols-3 border-b last:border-b-0 ${index % 2 === 0 ? 'bg-background' : 'bg-muted/20'}`}>
-                  <div className="px-4 py-3 flex items-center">
-                    <span className="font-medium text-foreground">₹{denom.value}</span>
-                  </div>
-                  <div className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <span className="text-muted-foreground text-sm">×</span>
-                      <Input
-                        type="number"
-                        min="0"
-                        value={focusedCountIndex === index && denom.count === 0 ? "" : denom.count}
-                        onChange={(e) => handleCountChange(index, e.target.value)}
-                        onFocus={() => setFocusedCountIndex(index)}
-                        onBlur={() => setFocusedCountIndex(null)}
-                        className="w-20 h-9 border-border focus:ring-2 focus:ring-primary/20 text-center"
-                        placeholder="0"
-                      />
-                    </div>
-                  </div>
-                  <div className="px-4 py-3 flex items-center">
-                    <span className="font-medium text-foreground">₹{denom.total.toFixed(2)}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <Label className="text-base font-semibold text-foreground">
+              {isViewingSavedOpening
+                ? "Submitted opening currency count"
+                : shift === "closing" && pendingClosing
+                  ? "Enter closing currency value count"
+                  : "Enter currency value count"}
+            </Label>
+            {isViewingSavedOpening && savedOpeningDenominations ? (
+              renderDenominationGrid(savedOpeningDenominations, { readOnly: true })
+            ) : (
+              renderDenominationGrid(denominations, {
+                onCountChange: handleCountChange,
+              })
+            )}
           </div>
 
-          {/* Closing Shift Additional Fields */}
           {shift === "closing" && (
             <div className="space-y-3 border-t pt-4">
               <Label className="text-base font-semibold text-foreground">Additional Cash Sources</Label>
@@ -399,9 +538,7 @@ export function CashRegistryModal({ open, onOpenChange, onSaveSuccess, onlineSal
                 <div className="space-y-2">
                   <Label htmlFor="cashCollectedOnline" className="text-sm font-medium text-foreground">
                     Cash Collected Online
-                    {cashCollectedOnline > 0 && (
-                      <span className="text-blue-600 ml-1">⚠️</span>
-                    )}
+                    {cashCollectedOnline > 0 && <span className="text-blue-600 ml-1">⚠️</span>}
                   </Label>
                   <div className="relative">
                     <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">₹</span>
@@ -413,13 +550,9 @@ export function CashRegistryModal({ open, onOpenChange, onSaveSuccess, onlineSal
                       readOnly
                       disabled
                     />
-
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    {shift === "closing" 
-                      ? `Today's online sales: Card + Online payments (₹${cashCollectedOnline.toFixed(2)})`
-                      : "Will be 0 for opening shifts (no online payments yet)"
-                    }
+                    Today&apos;s online sales: Card + Online payments (₹{cashCollectedOnline.toFixed(2)})
                   </p>
                   {!isLoading && cashCollectedOnline > 0 && (
                     <div className="text-xs text-muted-foreground bg-blue-50 border border-blue-200 p-2 rounded">
@@ -434,9 +567,7 @@ export function CashRegistryModal({ open, onOpenChange, onSaveSuccess, onlineSal
                 <div className="space-y-2">
                   <Label htmlFor="cashInPosMachine" className="text-sm font-medium text-foreground">
                     Cash in POS Machine
-                    {cashCollectedOnline > 0 && (
-                      <span className="text-red-500 ml-1">*</span>
-                    )}
+                    {cashCollectedOnline > 0 && <span className="text-red-500 ml-1">*</span>}
                   </Label>
                   <div className="relative">
                     <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">₹</span>
@@ -449,29 +580,41 @@ export function CashRegistryModal({ open, onOpenChange, onSaveSuccess, onlineSal
                       onChange={(e) => handlePosCashChange(parseFloat(e.target.value) || 0)}
                       onFocus={() => setIsPosCashFocused(true)}
                       onBlur={() => setIsPosCashFocused(false)}
-                      className={`pl-8 h-10 border-border focus:ring-2 focus:ring-primary/20 ${errors.cashInPosMachine ? 'border-red-500 focus:ring-red-500/20' : ''}`}
+                      className={`pl-8 h-10 border-border focus:ring-2 focus:ring-primary/20 ${errors.cashInPosMachine ? "border-red-500 focus:ring-red-500/20" : ""}`}
                       placeholder="0.00"
                       required={cashCollectedOnline > 0}
+                      disabled={isDayStateLoading}
                     />
                   </div>
-                  {errors.cashInPosMachine && (
-                    <p className="text-xs text-red-500">{errors.cashInPosMachine}</p>
-                  )}
+                  {errors.cashInPosMachine && <p className="text-xs text-red-500">{errors.cashInPosMachine}</p>}
                   {cashCollectedOnline > 0 && !errors.cashInPosMachine && (
-                    <p className="text-xs text-muted-foreground">
-                      Required when Cash Collected Online has value
-                    </p>
+                    <p className="text-xs text-muted-foreground">Required when Cash Collected Online has value</p>
                   )}
                 </div>
               </div>
             </div>
           )}
 
-          {/* Total Balance and Action Buttons */}
           <div className="flex justify-between items-center border-t pt-4">
             <div className="space-y-1">
-              <Label className="text-lg font-semibold text-foreground">Total Balance</Label>
-              <div className="text-2xl font-bold text-primary">₹{displayTotal.toFixed(2)}</div>
+              <Label className="text-lg font-semibold text-foreground">
+                {isViewingSavedOpening
+                  ? "Opening Total"
+                  : shift === "closing" && pendingClosing
+                    ? "Closing Total"
+                    : "Total Balance"}
+              </Label>
+              <div className="text-2xl font-bold text-primary">₹{displayedTotal.toFixed(2)}</div>
+              {isViewingSavedOpening && (
+                <p className="text-xs text-muted-foreground">
+                  This opening balance is already saved and cannot be edited here.
+                </p>
+              )}
+              {shift === "closing" && pendingClosing && (
+                <p className="text-xs text-muted-foreground">
+                  Opening total (₹{savedOpeningTotal.toFixed(2)}) was recorded earlier. Select Opening Shift to review it.
+                </p>
+              )}
             </div>
             <div className="flex gap-3">
               <Button
@@ -485,10 +628,14 @@ export function CashRegistryModal({ open, onOpenChange, onSaveSuccess, onlineSal
                 onClick={handleSave}
                 loading={isLoading}
                 loadingText="Saving..."
-                disabled={shift === "closing" && cashCollectedOnline > 0 && cashInPosMachine === 0}
+                disabled={
+                  isDayStateLoading ||
+                  isViewingSavedOpening ||
+                  (shift === "closing" && cashCollectedOnline > 0 && cashInPosMachine === 0)
+                }
                 className="h-10 px-6 bg-primary hover:bg-primary/90"
               >
-                Save
+                {isViewingSavedOpening ? "Already Saved" : "Save"}
               </LoadingButton>
             </div>
             {shift === "closing" && cashCollectedOnline > 0 && cashInPosMachine === 0 && (

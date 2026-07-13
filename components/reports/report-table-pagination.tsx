@@ -2,6 +2,12 @@
 
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import {
+  REPORT_TABLE_FOOTER_CLASS,
+  REPORT_TABLE_HEADER_CLASS,
+  REPORT_TABLE_HEADER_META_CLASS,
+  REPORT_TABLE_HEADER_TITLE_CLASS,
+} from "@/lib/report-table-theme"
 
 type ReportTablePaginationProps = {
   title: string
@@ -28,10 +34,10 @@ export function ReportTablePaginationHeader({
   rowLabel = "records",
 }: Omit<ReportTablePaginationProps, "page" | "totalPages" | "onPageChange">) {
   return (
-    <div className="px-6 py-4 bg-gradient-to-r from-gray-50 to-slate-50 border-b border-gray-200">
+    <div className={REPORT_TABLE_HEADER_CLASS}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h3 className="text-lg font-semibold text-gray-800">{title}</h3>
-        <div className="flex flex-wrap items-center gap-4 text-sm text-gray-600">
+        <h3 className={REPORT_TABLE_HEADER_TITLE_CLASS}>{title}</h3>
+        <div className={`flex flex-wrap items-center gap-4 ${REPORT_TABLE_HEADER_META_CLASS}`}>
           <div>
             {loading
               ? "Loading…"
@@ -77,9 +83,9 @@ export function ReportTablePaginationFooter({
   if (totalRows === 0) return null
 
   return (
-    <div className="px-6 py-4 bg-gray-50/50 border-t border-gray-200">
+    <div className={REPORT_TABLE_FOOTER_CLASS}>
       <div className="flex items-center justify-between gap-3">
-        <p className="text-sm text-gray-600">
+        <p className={`text-sm ${REPORT_TABLE_HEADER_META_CLASS}`}>
           {totalRows.toLocaleString()} {rowLabel}
           {totalPages > 1 ? ` · Page ${page} of ${totalPages}` : ""}
         </p>
@@ -90,7 +96,7 @@ export function ReportTablePaginationFooter({
               size="sm"
               onClick={() => onPageChange(Math.max(1, page - 1))}
               disabled={page <= 1 || loading}
-              className="h-9 px-4 border-gray-200 hover:border-gray-300"
+              className="h-9 px-4 border-gray-200 hover:border-gray-300 dark:border-border dark:hover:border-border"
             >
               Previous
             </Button>
@@ -99,7 +105,7 @@ export function ReportTablePaginationFooter({
               size="sm"
               onClick={() => onPageChange(Math.min(totalPages, page + 1))}
               disabled={page >= totalPages || loading}
-              className="h-9 px-4 border-gray-200 hover:border-gray-300"
+              className="h-9 px-4 border-gray-200 hover:border-gray-300 dark:border-border dark:hover:border-border"
             >
               Next
             </Button>

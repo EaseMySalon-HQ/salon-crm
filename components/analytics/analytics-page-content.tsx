@@ -177,7 +177,7 @@ export function AnalyticsPageContent() {
           ) : null}
           <div className="text-sm text-muted-foreground lg:ml-auto">
             {dateFrom} → {dateTo}
-            {isFetchingAny ? <span className="ml-2 text-violet-600">Updating…</span> : null}
+            {isFetchingAny ? <span className="ml-2 text-violet-600 dark:text-violet-400">Updating…</span> : null}
           </div>
         </CardContent>
       </Card>
@@ -193,18 +193,18 @@ export function AnalyticsPageContent() {
 
         {activeTab === "revenue" ? (
           <div className="grid gap-4 sm:grid-cols-3 mt-4">
-            <Card className="bg-gradient-to-br from-violet-50/80 to-white border-violet-100/80">
+            <Card className="bg-gradient-to-br from-violet-50/80 to-white border-violet-100/80 dark:from-violet-950/45 dark:to-card dark:border-violet-500/30">
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium text-violet-900">Revenue</CardTitle>
-                <Wallet className="h-4 w-4 text-violet-600" />
+                <CardTitle className="text-sm font-medium text-violet-900 dark:text-violet-200">Revenue</CardTitle>
+                <Wallet className="h-4 w-4 text-violet-600 dark:text-violet-400" />
               </CardHeader>
               <CardContent>
                 {summaryLoading ? (
                   <div className="h-9 w-28 bg-muted animate-pulse rounded" />
                 ) : (
-                  <div className="text-2xl font-bold text-violet-950">{formatAmount(totals?.totalRevenue ?? 0)}</div>
+                  <div className="text-2xl font-bold text-violet-950 dark:text-violet-100">{formatAmount(totals?.totalRevenue ?? 0)}</div>
                 )}
-                <p className="text-xs text-violet-800/80 mt-1">Sales in range (excl. cancelled)</p>
+                <p className="text-xs text-violet-800/80 dark:text-violet-300/80 mt-1">Sales in range (excl. cancelled)</p>
                 {!summaryLoading ? (
                   <div className="mt-2">
                     <AnalyticsDelta pct={revenueData?.comparison?.revenuePct} />
@@ -212,16 +212,16 @@ export function AnalyticsPageContent() {
                 ) : null}
               </CardContent>
             </Card>
-            <Card className="bg-gradient-to-br from-slate-50/80 to-white border-slate-100/80">
+            <Card className="bg-gradient-to-br from-slate-50/80 to-white border-slate-100/80 dark:from-slate-900/50 dark:to-card dark:border-border">
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium text-slate-900">Expenses</CardTitle>
-                <TrendingUp className="h-4 w-4 text-slate-600 rotate-180" />
+                <CardTitle className="text-sm font-medium text-slate-900 dark:text-foreground">Expenses</CardTitle>
+                <TrendingUp className="h-4 w-4 text-slate-600 dark:text-muted-foreground rotate-180" />
               </CardHeader>
               <CardContent>
                 {summaryLoading ? (
                   <div className="h-9 w-28 bg-muted animate-pulse rounded" />
                 ) : (
-                  <div className="text-2xl font-bold text-slate-900">{formatAmount(totals?.totalExpenses ?? 0)}</div>
+                  <div className="text-2xl font-bold text-slate-900 dark:text-foreground">{formatAmount(totals?.totalExpenses ?? 0)}</div>
                 )}
                 <p className="text-xs text-muted-foreground mt-1">Approved + pending</p>
                 {!summaryLoading ? (
@@ -231,18 +231,18 @@ export function AnalyticsPageContent() {
                 ) : null}
               </CardContent>
             </Card>
-            <Card className="bg-gradient-to-br from-emerald-50/80 to-white border-emerald-100/80">
+            <Card className="bg-gradient-to-br from-emerald-50/80 to-white border-emerald-100/80 dark:from-emerald-950/45 dark:to-card dark:border-emerald-500/30">
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium text-emerald-900">Net</CardTitle>
-                <TrendingUp className="h-4 w-4 text-emerald-600" />
+                <CardTitle className="text-sm font-medium text-emerald-900 dark:text-emerald-200">Net</CardTitle>
+                <TrendingUp className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
               </CardHeader>
               <CardContent>
                 {summaryLoading ? (
                   <div className="h-9 w-28 bg-muted animate-pulse rounded" />
                 ) : (
-                  <div className="text-2xl font-bold text-emerald-950">{formatAmount(totals?.totalProfit ?? 0)}</div>
+                  <div className="text-2xl font-bold text-emerald-950 dark:text-emerald-100">{formatAmount(totals?.totalProfit ?? 0)}</div>
                 )}
-                <p className="text-xs text-emerald-800/80 mt-1">Revenue − expenses</p>
+                <p className="text-xs text-emerald-800/80 dark:text-emerald-300/80 mt-1">Revenue − expenses</p>
                 {!summaryLoading ? (
                   <div className="mt-2">
                     <AnalyticsDelta pct={revenueData?.comparison?.netPct} />

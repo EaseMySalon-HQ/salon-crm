@@ -191,7 +191,7 @@ export function BranchConfigPanel({
         <CardContent className="space-y-3">
           <p className="text-xs text-slate-500">
             For online booking and client-facing availability, each branch can also configure hours in Settings →
-            Appointment settings.
+            Salon website → Online Booking.
           </p>
           {DAYS.map(({ key, label }) => {
             const day = form.operatingHours[key]

@@ -474,7 +474,7 @@ export function ServiceListReport({ controlledFilters }: ServiceListReportProps)
                       : format(range.from, "dd MMM yyyy")) : period === "all" ? "All time" : period.replace(/([A-Z])/g, " $1").trim()}
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="start">
+                <PopoverContent className="!z-[120] w-auto p-0" align="start">
                   <Calendar mode="range" selected={{ from: range.from, to: range.to }} onSelect={(r) => (controlledFilters?.setDateRange ?? setDateRange)(r || {})} numberOfMonths={2} />
                   <div className="p-2 border-t flex gap-2">
                     <Button size="sm" variant="outline" onClick={() => { (controlledFilters?.setDatePeriod ?? setDatePeriod)("today"); (controlledFilters?.setDateRange ?? setDateRange)({}) }}>Today</Button>

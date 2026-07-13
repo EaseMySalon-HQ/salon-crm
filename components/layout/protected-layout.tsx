@@ -42,7 +42,7 @@ function ProtectedLayoutContent({
   const sidebar = useSidebar()
 
   return (
-    <div className="flex h-screen min-w-0 flex-col overflow-hidden">
+    <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-background">
       {user?.isImpersonation && (
         <div className="bg-amber-500 text-amber-950 px-4 py-2 flex items-center justify-between gap-4 shrink-0 sticky top-0 z-50">
           <span className="text-sm font-medium">
@@ -76,7 +76,7 @@ function ProtectedLayoutContent({
         >
           <NavigationProgress />
           <TopNav showQuickAdd={topNavQuickAdd} rightSlot={topNavRightSlot} />
-          <main className="flex-1 min-h-0 overflow-auto p-6 min-w-0">
+          <main className="flex-1 min-h-0 overflow-auto p-6 min-w-0 bg-background">
             {children}
           </main>
         </div>
@@ -116,10 +116,10 @@ export function ProtectedLayout({ children, requiredModule, requiredFeature = "v
   // Check permission-based access
   if (requiredModule && !hasPermission(requiredModule, requiredFeature)) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="text-center">
           <h1 className="text-2xl font-bold text-red-600 mb-4">Access Denied</h1>
-          <p className="text-gray-600 mb-4">
+          <p className="text-muted-foreground mb-4">
             You don&apos;t have permission to access this page.
           </p>
           <button

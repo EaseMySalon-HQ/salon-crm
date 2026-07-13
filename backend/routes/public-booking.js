@@ -83,6 +83,25 @@ router.get('/services', publicBookingReadLimiter, resolveTenant, async (req, res
   }
 });
 
+router.get('/packages/:packageId/bookable-services', publicBookingReadLimiter, resolveTenant, async (req, res) => {
+  try {
+    const parsed = objectIdHex.safeParse(req.params.packageId);
+    if (!parsed.success) {
+      return res.status(400).json({ success: false, error: 'Invalid package id.' });
+    }
+    const { bookableServiceIdsForPackage } = require('../lib/public-site-service');
+    const bookableServiceIds = await bookableServiceIdsForPackage(
+      req.businessModels,
+      req.branchId,
+      parsed.data
+    );
+    res.json({ success: true, data: { bookableServiceIds } });
+  } catch (error) {
+    logger.error('[public-booking] package bookable services', error);
+    res.status(500).json({ success: false, error: 'Could not load package services.' });
+  }
+});
+
 router.get('/staff', publicBookingReadLimiter, resolveTenant, async (req, res) => {
   try {
     const staff = await publicBookingService.listPublicBookingStaffForPicker(

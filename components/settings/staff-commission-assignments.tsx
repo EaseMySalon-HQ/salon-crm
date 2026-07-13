@@ -31,6 +31,12 @@ import type { CommissionProfile } from "@/lib/commission-profile-types"
 import { useAuth } from "@/lib/auth-context"
 import { hasStaffDirectoryTabPermission } from "@/lib/permission-mappings"
 import { cn } from "@/lib/utils"
+import {
+  SETTINGS_TABLE_BODY_ROW,
+  SETTINGS_TABLE_HEAD_CELL,
+  SETTINGS_TABLE_HEAD_ROW,
+  SETTINGS_TABLE_SHELL,
+} from "@/lib/settings-panel-theme"
 
 type DirectoryStaff = {
   _id: string
@@ -276,15 +282,15 @@ export function StaffCommissionAssignments() {
         </div>
       </div>
 
-      <div className="border rounded-lg overflow-hidden bg-white shadow-sm">
+      <div className={SETTINGS_TABLE_SHELL}>
         <div className="overflow-x-auto">
           <Table>
             <TableHeader>
-              <TableRow className="bg-slate-50">
-                <TableHead className="font-semibold text-slate-700 py-3 px-4">Staff</TableHead>
-                <TableHead className="font-semibold text-slate-700 py-3 px-4">Role</TableHead>
-                <TableHead className="font-semibold text-slate-700 py-3 px-4">Email</TableHead>
-                <TableHead className="font-semibold text-slate-700 py-3 px-4 min-w-[240px]">
+              <TableRow className={SETTINGS_TABLE_HEAD_ROW}>
+                <TableHead className={`${SETTINGS_TABLE_HEAD_CELL} py-3 px-4`}>Staff</TableHead>
+                <TableHead className={`${SETTINGS_TABLE_HEAD_CELL} py-3 px-4`}>Role</TableHead>
+                <TableHead className={`${SETTINGS_TABLE_HEAD_CELL} py-3 px-4`}>Email</TableHead>
+                <TableHead className={`${SETTINGS_TABLE_HEAD_CELL} py-3 px-4 min-w-[240px]`}>
                   Assigned commission profiles
                 </TableHead>
               </TableRow>
@@ -309,8 +315,8 @@ export function StaffCommissionAssignments() {
                     <TableRow
                       key={row._id}
                       className={cn(
-                        "border-b border-slate-100",
-                        canManage && "cursor-pointer hover:bg-slate-50/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                        SETTINGS_TABLE_BODY_ROW,
+                        canManage && "cursor-pointer hover:bg-slate-50/90 dark:hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                       )}
                       onClick={() => openEditor(row)}
                       onKeyDown={(e) => {
@@ -324,7 +330,7 @@ export function StaffCommissionAssignments() {
                       role={canManage ? "button" : undefined}
                       aria-label={canManage ? `Edit commission profiles for ${row.name}` : undefined}
                     >
-                      <TableCell className="py-3 px-4 font-medium text-slate-900">
+                      <TableCell className="py-3 px-4 font-medium text-slate-900 dark:text-foreground">
                         <div className="flex items-center gap-2">
                           <span>{row.name}</span>
                           {row.isOwner ? (
@@ -339,8 +345,8 @@ export function StaffCommissionAssignments() {
                           ) : null}
                         </div>
                       </TableCell>
-                      <TableCell className="py-3 px-4 text-slate-600 capitalize">{row.role || "—"}</TableCell>
-                      <TableCell className="py-3 px-4 text-slate-600 text-sm">{row.email || "—"}</TableCell>
+                      <TableCell className="py-3 px-4 text-slate-600 dark:text-muted-foreground capitalize">{row.role || "—"}</TableCell>
+                      <TableCell className="py-3 px-4 text-slate-600 dark:text-muted-foreground text-sm">{row.email || "—"}</TableCell>
                       <TableCell className="py-3 px-4">
                         {resolved.length === 0 && missing.length === 0 ? (
                           <span className="text-sm text-muted-foreground italic">None assigned</span>

@@ -24,6 +24,7 @@ export const PUBLIC_MARKETING_PREFIXES = [
   "/whatsapp-marketing",
   "/reports-analytics",
   "/demo",
+  "/salon",
 ] as const
 
 /** App / auth routes that must not appear in search results. */

@@ -813,6 +813,9 @@ export interface AppointmentSettingsData {
   bookingTagline?: string
   showcaseImages?: string[]
   bookingHeroTheme?: import("@/lib/booking-hero-themes").BookingHeroThemeId
+  websiteEnabled?: boolean
+  miniSiteSlug?: string
+  miniSiteBookPath?: string
 }
 
 export interface AppointmentSettingsUpdatePayload {
@@ -3304,6 +3307,16 @@ export class BusinessAPI {
 }
 
 export class SettingsAPI {
+  static async getGeneralSettings(): Promise<ApiResponse<any>> {
+    const response = await apiClient.get('/settings/general')
+    return response.data
+  }
+
+  static async updateGeneralSettings(data: { receiptPaperSize: string }): Promise<ApiResponse<any>> {
+    const response = await apiClient.put('/settings/general', data)
+    return response.data
+  }
+
   static async getBusinessSettings(): Promise<ApiResponse<any>> {
     const response = await apiClient.get('/settings/business')
     return response.data

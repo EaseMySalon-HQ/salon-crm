@@ -83,6 +83,14 @@ const productSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  imageAlt: { type: String, default: '' },
+  isPublic: { type: Boolean, default: false },
+  isFeatured: { type: Boolean, default: false },
+  displayOrder: { type: Number, default: 0 },
+  slug: { type: String, trim: true, lowercase: true, default: '' },
+  shortDescription: { type: String, default: '', maxlength: 500 },
+  seoTitle: { type: String, default: '', maxlength: 120 },
+  seoDescription: { type: String, default: '', maxlength: 320 },
   isActive: {
     type: Boolean,
     default: true
@@ -110,6 +118,8 @@ const productSchema = new mongoose.Schema({
 productSchema.index({ branchId: 1, isActive: 1, name: 1 });
 productSchema.index({ branchId: 1, category: 1 });
 productSchema.index({ branchId: 1, createdAt: -1 });
+productSchema.index({ branchId: 1, slug: 1 });
+productSchema.index({ branchId: 1, isPublic: 1 });
 
 // Export both schema and model for flexibility
 module.exports = {

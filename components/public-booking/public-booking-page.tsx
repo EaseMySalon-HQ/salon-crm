@@ -39,6 +39,12 @@ import {
 
 type PublicBookingPageProps = {
   code: string
+  /** Deep-link: preselect this service id after catalog loads */
+  initialServiceId?: string | null
+  /** Deep-link: expand package into bookable services */
+  initialPackageId?: string | null
+  /** Render inside /salon/[slug] mini-site shell (no standalone booking hero). */
+  embeddedInMiniSite?: boolean
 }
 
 type BookingPhase = "services" | "checkout"
@@ -59,7 +65,12 @@ function useIsMobileBookingLayout() {
   return isMobile
 }
 
-export function PublicBookingPage({ code }: PublicBookingPageProps) {
+export function PublicBookingPage({
+  code,
+  initialServiceId = null,
+  initialPackageId = null,
+  embeddedInMiniSite = false,
+}: PublicBookingPageProps) {
   const [profile, setProfile] = useState<PublicBookingProfile | null>(null)
   const [profileError, setProfileError] = useState<string | null>(null)
   const [profileErrorStatus, setProfileErrorStatus] = useState<number | null>(null)
@@ -91,6 +102,7 @@ export function PublicBookingPage({ code }: PublicBookingPageProps) {
   const [phase, setPhase] = useState<BookingPhase>("services")
   const [checkoutStep, setCheckoutStep] = useState(1)
   const isMobileCheckoutLayout = useIsMobileBookingLayout()
+  const deepLinkAppliedRef = useRef(false)
 
   useEffect(() => {
     let cancelled = false
@@ -144,6 +156,78 @@ export function PublicBookingPage({ code }: PublicBookingPageProps) {
       cancelled = true
     }
   }, [code, profile])
+
+  useEffect(() => {
+    if (servicesLoading || !services.length || deepLinkAppliedRef.current) return
+    if (!initialServiceId && !initialPackageId) return
+
+    deepLinkAppliedRef.current = true
+    let cancelled = false
+
+    ;(async () => {
+      const toAdd: PublicBookingService[] = []
+
+      if (initialServiceId) {
+        const match = services.find((s) => s.id === initialServiceId)
+        if (match) toAdd.push(match)
+        else {
+          toast({
+            title: "Service unavailable",
+            description: "That service is not available for online booking.",
+            variant: "destructive",
+          })
+        }
+      }
+
+      if (initialPackageId) {
+        try {
+          const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api").replace(
+            /\/$/,
+            ""
+          )
+          const res = await fetch(
+            `${API_BASE}/public/booking/${encodeURIComponent(code.toUpperCase())}/packages/${encodeURIComponent(initialPackageId)}/bookable-services`
+          )
+          const json = await res.json().catch(() => ({}))
+          const bookableIds: string[] = json?.data?.bookableServiceIds || []
+          for (const id of bookableIds) {
+            const svc = services.find((s) => s.id === id)
+            if (svc && !toAdd.some((t) => t.id === svc.id)) toAdd.push(svc)
+          }
+          if (!bookableIds.length) {
+            toast({
+              title: "Package not bookable online",
+              description: "Please enquire with the salon or pick services manually.",
+            })
+          }
+        } catch {
+          toast({
+            title: "Could not load package",
+            variant: "destructive",
+          })
+        }
+      }
+
+      if (cancelled || !toAdd.length) return
+
+      setCart((prev) => {
+        if (prev.length) return prev
+        return toAdd.map((service) => ({
+          ...service,
+          cartId: `${service.id}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          staffId: null,
+        }))
+      })
+      if (toAdd.length === 1) {
+        setPhase("checkout")
+        setCheckoutStep(1)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [services, servicesLoading, initialServiceId, initialPackageId, code])
 
   useEffect(() => {
     if (cart.length === 0) return
@@ -514,10 +598,13 @@ export function PublicBookingPage({ code }: PublicBookingPageProps) {
 
   if (profileLoading) {
     return (
-      <BookingThemeProvider themeId={themeId} className="flex min-h-screen w-full flex-col">
-        <div className={cn("flex min-h-[60vh] flex-col items-center justify-center gap-3", BT.textMuted)}>
-          <Loader2 className={cn("h-8 w-8 animate-spin", BT.textAccent)} />
-          <p className="text-sm">Loading booking page…</p>
+      <BookingThemeProvider
+        themeId={themeId}
+        className={cn('flex w-full flex-col', embeddedInMiniSite ? 'min-h-0' : 'min-h-screen')}
+      >
+        <div className={cn('flex min-h-[40vh] flex-col items-center justify-center gap-3', BT.textMuted)}>
+          <Loader2 className={cn('h-8 w-8 animate-spin', BT.textAccent)} />
+          <p className="text-sm">Loading booking…</p>
         </div>
       </BookingThemeProvider>
     )
@@ -526,7 +613,10 @@ export function PublicBookingPage({ code }: PublicBookingPageProps) {
   if (profileError || !profile) {
     const isRateLimited = profileErrorStatus === 429
     return (
-      <BookingThemeProvider themeId={themeId} className="flex min-h-screen w-full flex-col">
+      <BookingThemeProvider
+        themeId={themeId}
+        className={cn('flex w-full flex-col', embeddedInMiniSite ? 'min-h-0' : 'min-h-screen')}
+      >
         <div className="mx-auto max-w-md px-4 py-16 text-center">
           <h1 className={cn("text-lg font-semibold", BT.textPrimary)}>
             {isRateLimited ? "Please try again" : "Booking unavailable"}
@@ -570,8 +660,18 @@ export function PublicBookingPage({ code }: PublicBookingPageProps) {
   )
 
   return (
-    <BookingThemeProvider themeId={themeId} className="flex min-h-screen w-full flex-col">
-      {phase === "services" && <BookingHero profile={profile} />}
+    <BookingThemeProvider
+      themeId={themeId}
+      className={cn('flex w-full flex-col', embeddedInMiniSite ? 'min-h-0' : 'min-h-screen')}
+    >
+      {phase === 'services' && !embeddedInMiniSite ? <BookingHero profile={profile} /> : null}
+
+      {embeddedInMiniSite && phase === 'services' ? (
+        <div className={`${BOOKING_HERO_INNER_WIDTH_CLASS} border-b border-stone-200/80 px-4 py-6`}>
+          <h1 className={cn('text-2xl font-semibold tracking-tight', BT.textPrimary)}>Book appointment</h1>
+          <p className={cn('mt-1 text-sm', BT.textMuted)}>Choose services and pick a time at {profile.name}.</p>
+        </div>
+      ) : null}
 
       <div className={`${BOOKING_HERO_INNER_WIDTH_CLASS} flex flex-1 flex-col`}>
         <div className={BOOKING_PAGE_MAIN_GRID_CLASS}>

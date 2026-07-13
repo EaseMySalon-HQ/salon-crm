@@ -7,11 +7,11 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Printer, Download, Mail, Edit, Save, X, Thermometer, MessageCircle } from "lucide-react"
+import { Printer, Download, Mail, Edit, Save, X, MessageCircle } from "lucide-react"
 import type { Receipt } from "@/lib/data"
-import { ReceiptPreview } from "./receipt-preview"
+import { ReceiptTemplateView, printReceiptWithTemplate } from "./receipt-template-view"
+import { ReceiptPrintStyles } from "./receipt-print-styles"
 import { ReceiptGenerator } from "./receipt-generator"
-import { ThermalReceiptGenerator } from "./thermal-receipt-generator"
 import { useToast } from "@/hooks/use-toast"
 import { SettingsAPI } from "@/lib/api"
 import { useCurrency } from "@/hooks/use-currency"
@@ -74,15 +74,14 @@ export function ReceiptDialog({ receipt, open, onOpenChange, onReceiptUpdate }: 
   console.log('✅ ReceiptDialog: Receipt received, rendering dialog')
 
   // Only generate receipt functions when business settings are loaded
-  const { printReceipt, downloadReceipt } = ReceiptGenerator({ 
+  const { downloadReceipt } = ReceiptGenerator({ 
     receipt: editedReceipt || receipt,
     businessSettings 
   })
 
-  const { printThermalReceipt } = ThermalReceiptGenerator({ 
-    receipt: editedReceipt || receipt,
-    businessSettings 
-  })
+  const handlePrint = () => {
+    printReceiptWithTemplate(editedReceipt || receipt, businessSettings)
+  }
 
   const handleEdit = () => {
     setEditedReceipt({ ...receipt })
@@ -171,13 +170,9 @@ ${publicUrl}`
                     <Edit className="h-4 w-4 mr-2" />
                     Edit
                   </Button>
-                  <Button variant="outline" size="sm" onClick={printReceipt}>
+                  <Button variant="outline" size="sm" onClick={handlePrint}>
                     <Printer className="h-4 w-4 mr-2" />
                     Print
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={printThermalReceipt} className="bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100">
-                    <Thermometer className="h-4 w-4 mr-2" />
-                    Thermal
                   </Button>
                   {!isWalkInReceipt ? (
                     <>
@@ -233,7 +228,7 @@ ${publicUrl}`
                   <div className="text-sm text-muted-foreground">Fetching business settings</div>
                 </div>
               ) : (
-                <ReceiptPreview receipt={currentReceipt} businessSettings={businessSettings} />
+                <ReceiptTemplateView receipt={currentReceipt} businessSettings={businessSettings} />
               )}
             </div>
           </TabsContent>
@@ -344,6 +339,7 @@ ${publicUrl}`
             )}
           </TabsContent>
         </Tabs>
+        <ReceiptPrintStyles businessSettings={businessSettings} />
       </DialogContent>
     </Dialog>
   )

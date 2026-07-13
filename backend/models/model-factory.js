@@ -128,6 +128,10 @@ class ModelFactory {
       // LeadActivity model
       LeadActivity: this.getModel('LeadActivity', require('./LeadActivity').schema, connection),
 
+      WebsiteGallery: this.getModel('WebsiteGallery', require('./WebsiteGallery').schema, connection),
+      WebsiteOffer: this.getModel('WebsiteOffer', require('./WebsiteOffer').schema, connection),
+      WebsiteEnquiry: this.getModel('WebsiteEnquiry', require('./WebsiteEnquiry').schema, connection),
+
       // BlockTime model
       BlockTime: this.getModel('BlockTime', require('./BlockTime').schema, connection),
 

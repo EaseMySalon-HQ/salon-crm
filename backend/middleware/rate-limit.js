@@ -32,7 +32,14 @@ function envInt(name, defaultValue) {
 }
 
 function isEnabled() {
-  return process.env.RATE_LIMIT_ENABLED !== '0' && process.env.RATE_LIMIT_ENABLED !== 'false';
+  if (process.env.RATE_LIMIT_ENABLED === '0' || process.env.RATE_LIMIT_ENABLED === 'false') {
+    return false;
+  }
+  // Local dev: disabled unless explicitly enabled — avoids 429 storms from HMR / Strict Mode.
+  if (process.env.NODE_ENV !== 'production' && process.env.RATE_LIMIT_ENABLED !== '1') {
+    return false;
+  }
+  return true;
 }
 
 /** Configure Express trust proxy for correct req.ip behind load balancers. */
