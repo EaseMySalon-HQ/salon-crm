@@ -7,7 +7,6 @@ import { useRouter } from "next/navigation"
 import { MessageCircle, Shield, Sparkles, TrendingUp } from "lucide-react"
 
 import { LoginForm } from "@/components/auth/login-form"
-import { ThemeToggleButton } from "@/components/theme-toggle"
 import { Button } from "@/components/ui/button"
 import { useAuth } from "@/lib/auth-context"
 import { useToast } from "@/hooks/use-toast"
@@ -72,10 +71,6 @@ export default function LoginPage() {
       <div className="pointer-events-none absolute inset-0 opacity-30">
         <div className="absolute -top-16 -left-10 h-96 w-96 rounded-full bg-[#7C3AED]/40 blur-3xl" />
         <div className="absolute bottom-0 right-0 h-[32rem] w-[32rem] rounded-full bg-[#A855F7]/30 blur-3xl" />
-      </div>
-
-      <div className="absolute top-4 right-4 z-20">
-        <ThemeToggleButton className="text-white hover:bg-white/10 hover:text-white" />
       </div>
 
       <div className="container relative mx-auto px-4 sm:px-6 lg:px-8 py-16">

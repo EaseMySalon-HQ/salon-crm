@@ -3,7 +3,7 @@ import type { Metadata } from "next"
 import { Inter } from "next/font/google"
 import "./globals.css"
 import { Toaster } from "@/components/ui/toaster"
-import { ThemeProvider } from "@/components/theme-provider"
+import { AppThemeProvider } from "@/components/app-theme-provider"
 import { AuthProvider } from "@/lib/auth-context"
 import { AdminAuthProvider } from "@/lib/admin-auth-context"
 import { QueryProvider } from "@/components/providers/query-provider"
@@ -192,16 +192,16 @@ export default function RootLayout({
         ) : null}
       </head>
       <body className={inter.className}>
-        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
-          <AuthProvider>
-            <QueryProvider>
+        <AuthProvider>
+          <QueryProvider>
             <AdminAuthProvider>
-              {children}
-              <Toaster />
+              <AppThemeProvider>
+                {children}
+                <Toaster />
+              </AppThemeProvider>
             </AdminAuthProvider>
-            </QueryProvider>
-          </AuthProvider>
-        </ThemeProvider>
+          </QueryProvider>
+        </AuthProvider>
       </body>
     </html>
   )
