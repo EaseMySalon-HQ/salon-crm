@@ -19,6 +19,14 @@ function AppointmentsContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const selectedAppointmentId = searchParams?.get("appointment") || undefined
+  const appointmentPanel = searchParams?.get("panel") === "details" ? "details" : undefined
+
+  const clearAppointmentDeepLink = useCallback(() => {
+    const view = searchParams?.get("view")
+    router.replace(view === "calendar" || view === "list" ? `/appointments?view=${view}` : "/appointments", {
+      scroll: false,
+    })
+  }, [router, searchParams])
 
   const [formDrawerOpen, setFormDrawerOpen] = useState(false)
   const [formDrawerParams, setFormDrawerParams] = useState<{
@@ -115,6 +123,8 @@ function AppointmentsContent() {
             <AppointmentsCalendar
               ref={calendarRef}
               initialAppointmentId={selectedAppointmentId}
+              initialAppointmentPanel={appointmentPanel}
+              onAppointmentDeepLinkConsumed={clearAppointmentDeepLink}
               onOpenAppointmentForm={openAppointmentForm}
               view={view}
               onSwitchView={setView}
@@ -123,6 +133,8 @@ function AppointmentsContent() {
             <AppointmentsCalendarGrid
               ref={gridRef}
               initialAppointmentId={selectedAppointmentId}
+              initialAppointmentPanel={appointmentPanel}
+              onAppointmentDeepLinkConsumed={clearAppointmentDeepLink}
               onSwitchToList={() => setView("list")}
               onOpenAppointmentForm={openAppointmentForm}
               view={view}

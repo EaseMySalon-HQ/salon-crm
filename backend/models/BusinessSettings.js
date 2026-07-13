@@ -60,6 +60,13 @@ const businessSettingsSchema = new mongoose.Schema({
     showClientInfo: { type: Boolean, default: true },
     accentColor: { type: String, default: "" },
   },
+
+  /** Default receipt layout for public and in-app printing (57mm/80mm thermal, A5/A4). */
+  receiptPaperSize: {
+    type: String,
+    enum: ["57mm", "80mm", "A5", "A4"],
+    default: "A4",
+  },
   
   // Tax Information
   gstNumber: { type: String, default: "" },

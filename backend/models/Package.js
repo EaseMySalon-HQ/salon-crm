@@ -73,7 +73,15 @@ const packageSchema = new mongoose.Schema({
   },
   created_by: {
     type: mongoose.Schema.Types.ObjectId
-  }
+  },
+  isPublic: { type: Boolean, default: false },
+  isFeatured: { type: Boolean, default: false },
+  displayOrder: { type: Number, default: 0 },
+  slug: { type: String, trim: true, lowercase: true, default: '' },
+  shortDescription: { type: String, default: '', maxlength: 500 },
+  seoTitle: { type: String, default: '', maxlength: 120 },
+  seoDescription: { type: String, default: '', maxlength: 320 },
+  imageAlt: { type: String, default: '' },
 }, {
   timestamps: true
 });
@@ -81,6 +89,8 @@ const packageSchema = new mongoose.Schema({
 packageSchema.index({ branchId: 1, status: 1 });
 packageSchema.index({ branchId: 1, name: 1 });
 packageSchema.index({ branchId: 1, type: 1, status: 1 });
+packageSchema.index({ branchId: 1, slug: 1 });
+packageSchema.index({ branchId: 1, isPublic: 1 });
 
 module.exports = {
   schema: packageSchema,

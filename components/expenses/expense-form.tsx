@@ -13,25 +13,13 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import { ExpensesAPI } from "@/lib/api"
+import { EXPENSE_CATEGORIES } from "@/lib/expense-categories"
 
 interface ExpenseFormProps {
   onClose: () => void
   expense?: any // For edit mode
   isEditMode?: boolean
 }
-
-const expenseCategories = [
-  "Supplies",
-  "Equipment",
-  "Utilities",
-  "Marketing",
-  "Rent",
-  "Insurance",
-  "Maintenance",
-  "Professional Services",
-  "Travel",
-  "Other"
-]
 
 const paymentModes = [
   "Cash",
@@ -60,6 +48,14 @@ export function ExpenseForm({ onClose, expense, isEditMode = false }: ExpenseFor
     const d = formData.date
     return new Date(d.getFullYear(), d.getMonth(), d.getDate())
   }, [formData.date])
+
+  const categoryOptions = useMemo(() => {
+    const current = expense?.category
+    if (isEditMode && current && !EXPENSE_CATEGORIES.includes(current)) {
+      return [current, ...EXPENSE_CATEGORIES]
+    }
+    return [...EXPENSE_CATEGORIES]
+  }, [isEditMode, expense?.category])
 
   const showTransactionId = ["Card", "UPI", "Bank Transfer", "Cheque"].includes(formData.paymentMode)
 
@@ -189,7 +185,7 @@ export function ExpenseForm({ onClose, expense, isEditMode = false }: ExpenseFor
               <SelectValue placeholder="Choose expense name" />
             </SelectTrigger>
             <SelectContent>
-              {expenseCategories.map((category) => (
+              {categoryOptions.map((category) => (
                 <SelectItem key={category} value={category}>
                   {category}
                 </SelectItem>

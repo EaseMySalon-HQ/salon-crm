@@ -689,40 +689,55 @@ async function buildDashboardInitPayload({
 
   const today = todayAppointmentsDocs.map(mapAppointmentLean);
 
-  /** IST-aware appointment instant for sorting/filtering (no date-fns on backend). */
+  /** IST wall-clock instant for sorting/filtering; prefer date+time over startAt (can be stale after reschedule). */
   function appointmentInstant(a) {
-    if (a.startAt) return new Date(a.startAt).getTime();
-    if (!a.date || !a.time) return 0;
-    try {
-      const day = parseDateIST(a.date);
-      const mins = parseTimeToMinutes(a.time);
-      return day.getTime() + mins * 60 * 1000;
-    } catch {
-      return 0;
+    if (a?.date && a?.time) {
+      try {
+        const rawDate = String(a.date).trim();
+        const ymd =
+          /^\d{4}-\d{2}-\d{2}$/.test(rawDate.slice(0, 10)) ? rawDate.slice(0, 10) : toDateStringIST(rawDate);
+        const day = parseDateIST(ymd);
+        const mins = parseTimeToMinutes(a.time);
+        const t = day.getTime() + mins * 60 * 1000;
+        if (Number.isFinite(t) && t > 0) return t;
+      } catch {
+        // fall through to startAt
+      }
     }
+    if (a?.startAt) {
+      const t = new Date(a.startAt).getTime();
+      if (Number.isFinite(t) && t > 0) return t;
+    }
+    return 0;
   }
 
   const todayStartMs = getStartOfDayIST(todayStr).getTime();
+  const nowMs = Date.now();
   const end7Probe = parseDateIST(todayStr);
   end7Probe.setDate(end7Probe.getDate() + 6);
   const upcoming7EndStr = toDateStringIST(end7Probe);
 
   function appointmentDateYmd(doc) {
     const d = String(doc?.date || '').trim();
-    return d.length >= 10 ? d.slice(0, 10) : d;
+    if (!d) return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d.slice(0, 10))) return d.slice(0, 10);
+    return toDateStringIST(d);
   }
 
   const appointmentsRangeType = appointmentsRange === 'next7days' ? 'next7days' : 'today';
   const upcomingLimit = appointmentsRangeType === 'today' ? 12 : 24;
+  const terminalStatuses = new Set(['completed', 'cancelled', 'cancelled_at_billing', 'missed']);
 
   const upcomingSorted = upcomingCandidates
     .map((a) => ({ doc: a, t: appointmentInstant(a) }))
     .filter((x) => {
       const status = String(x.doc?.status || '').trim().toLowerCase();
-      if (x.t < todayStartMs || status === 'completed') return false;
+      if (!x.t || x.t <= 0 || terminalStatuses.has(status)) return false;
       const ymd = appointmentDateYmd(x.doc);
-      if (appointmentsRangeType === 'today') return ymd === todayStr;
-      return ymd >= todayStr && ymd <= upcoming7EndStr;
+      if (appointmentsRangeType === 'today') {
+        return ymd === todayStr && x.t >= nowMs;
+      }
+      return x.t >= nowMs && ymd >= todayStr && ymd <= upcoming7EndStr;
     })
     .sort((a, b) => a.t - b.t)
     .slice(0, upcomingLimit)

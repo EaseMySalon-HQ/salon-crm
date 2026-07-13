@@ -6,13 +6,9 @@ const expenseSchema = new mongoose.Schema({
     required: true,
     enum: [
       "Supplies",
-      "Equipment", 
-      "Utilities",
       "Marketing",
       "Rent",
-      "Insurance",
       "Maintenance",
-      "Professional Services",
       "Travel",
       "Other"
     ]

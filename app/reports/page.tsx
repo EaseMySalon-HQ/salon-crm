@@ -99,31 +99,31 @@ function ReportsTabsBody() {
   }
 
   return (
-    <div className="bg-white">
+    <div className="bg-background">
       <div className="mb-8">
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-          <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 px-8 py-6">
+        <div className="bg-card rounded-2xl shadow-sm border border-slate-100 dark:border-border overflow-hidden">
+          <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 dark:from-muted/80 dark:via-muted/60 dark:to-card px-8 py-6">
             <div className="flex items-center gap-4">
-              <div className="p-3 bg-white rounded-xl shadow-sm">
-                <BarChart3 className="h-7 w-7 text-blue-600" />
+              <div className="p-3 bg-white dark:bg-card rounded-xl shadow-sm border border-transparent dark:border-border">
+                <BarChart3 className="h-7 w-7 text-blue-600 dark:text-blue-400" />
               </div>
               <div>
-                <h1 className="text-3xl font-bold text-slate-800">Business Reports</h1>
+                <h1 className="text-3xl font-bold text-slate-800 dark:text-foreground">Business Reports</h1>
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+      <div className="bg-card rounded-2xl shadow-sm border border-slate-100 dark:border-border overflow-hidden">
         <div className="p-6">
           <Tabs value={activeTab} onValueChange={onTabChange} className="space-y-6">
-            <TabsList className={`grid w-full bg-slate-100 p-1 rounded-lg gap-1 ${tabGridClass}`}>
+            <TabsList className={`grid w-full bg-slate-100 dark:bg-muted p-1 rounded-lg gap-1 ${tabGridClass}`}>
               {canViewFinancialReports && (
                 <>
                   <TabsTrigger
                     value="sales"
-                    className="data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
+                    className="data-[state=active]:bg-white dark:data-[state=active]:bg-card data-[state=active]:text-blue-600 dark:data-[state=active]:text-blue-400 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
                   >
                     <TrendingUp className="h-4 w-4 mr-2 shrink-0" />
                     Sales
@@ -131,7 +131,7 @@ function ReportsTabsBody() {
                   {canViewMembershipReports ? (
                     <TabsTrigger
                       value="membership"
-                      className="data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
+                      className="data-[state=active]:bg-white dark:data-[state=active]:bg-card data-[state=active]:text-blue-600 dark:data-[state=active]:text-blue-400 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
                     >
                       <CreditCard className="h-4 w-4 mr-2 shrink-0" />
                       Membership
@@ -139,7 +139,7 @@ function ReportsTabsBody() {
                   ) : null}
                   <TabsTrigger
                     value="expense"
-                    className="data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
+                    className="data-[state=active]:bg-white dark:data-[state=active]:bg-card data-[state=active]:text-blue-600 dark:data-[state=active]:text-blue-400 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
                   >
                     <Receipt className="h-4 w-4 mr-2 shrink-0" />
                     Expense
@@ -149,7 +149,7 @@ function ReportsTabsBody() {
               {canViewStaffCommission && (
                 <TabsTrigger
                   value="staff"
-                  className="data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
+                  className="data-[state=active]:bg-white dark:data-[state=active]:bg-card data-[state=active]:text-blue-600 dark:data-[state=active]:text-blue-400 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
                 >
                   <Users className="h-4 w-4 mr-2 shrink-0" />
                   Staff Performance
@@ -158,7 +158,7 @@ function ReportsTabsBody() {
               {canViewPackageReports && (
                 <TabsTrigger
                   value="package"
-                  className="data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
+                  className="data-[state=active]:bg-white dark:data-[state=active]:bg-card data-[state=active]:text-blue-600 dark:data-[state=active]:text-blue-400 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
                 >
                   <Package className="h-4 w-4 mr-2 shrink-0" />
                   Package
@@ -167,7 +167,7 @@ function ReportsTabsBody() {
               {!whatsAppEntitlementsLoading && canWhatsAppIntegration ? (
               <TabsTrigger
                 value="messages"
-                className="data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
+                className="data-[state=active]:bg-white dark:data-[state=active]:bg-card data-[state=active]:text-blue-600 dark:data-[state=active]:text-blue-400 data-[state=active]:shadow-sm rounded-md transition-all duration-200"
               >
                 <MessageCircle className="h-4 w-4 mr-2 shrink-0" />
                 Messages
@@ -184,7 +184,7 @@ function ReportsTabsBody() {
               <>
                 <TabsContent value="sales" className="space-y-6">
                   {activeTab === "sales" && (
-                    <Card className="border-0 shadow-sm bg-slate-50/50">
+                    <Card className="border-0 dark:border dark:border-border shadow-sm bg-slate-50/50 dark:bg-muted/30">
                       <CardContent className="pt-6">
                         <SalesReport />
                       </CardContent>
@@ -194,7 +194,7 @@ function ReportsTabsBody() {
 
                 <TabsContent value="membership" className="space-y-6">
                   {activeTab === "membership" && canViewMembershipReports && (
-                    <Card className="border-0 shadow-sm bg-slate-50/50">
+                    <Card className="border-0 dark:border dark:border-border shadow-sm bg-slate-50/50 dark:bg-muted/30">
                       <CardContent className="pt-6">
                         <MembershipReport />
                       </CardContent>
@@ -204,7 +204,7 @@ function ReportsTabsBody() {
 
                 <TabsContent value="expense" className="space-y-6">
                   {activeTab === "expense" && (
-                    <Card className="border-0 shadow-sm bg-slate-50/50">
+                    <Card className="border-0 dark:border dark:border-border shadow-sm bg-slate-50/50 dark:bg-muted/30">
                       <CardContent className="pt-6">
                         <ExpenseReport />
                       </CardContent>
@@ -217,7 +217,7 @@ function ReportsTabsBody() {
             {canViewStaffCommission && (
               <TabsContent value="staff" className="space-y-6">
                 {activeTab === "staff" && (
-                  <Card className="border-0 shadow-sm bg-slate-50/50">
+                  <Card className="border-0 dark:border dark:border-border shadow-sm bg-slate-50/50 dark:bg-muted/30">
                     <CardContent className="pt-6">
                       <StaffPerformanceReport />
                     </CardContent>
@@ -228,7 +228,7 @@ function ReportsTabsBody() {
 
             {canViewPackageReports && (
               <TabsContent value="package" className="space-y-6">
-                <Card className="border-0 shadow-sm bg-slate-50/50">
+                <Card className="border-0 dark:border dark:border-border shadow-sm bg-slate-50/50 dark:bg-muted/30">
                   <CardContent className="pt-6">
                     <PackageReport embedded />
                   </CardContent>
@@ -238,7 +238,7 @@ function ReportsTabsBody() {
 
             {!whatsAppEntitlementsLoading && canWhatsAppIntegration ? (
             <TabsContent value="messages" className="space-y-6">
-              <Card className="border-0 shadow-sm bg-slate-50/50">
+              <Card className="border-0 dark:border dark:border-border shadow-sm bg-slate-50/50 dark:bg-muted/30">
                 <CardContent className="pt-6">
                   <WhatsAppMessagesReport />
                 </CardContent>

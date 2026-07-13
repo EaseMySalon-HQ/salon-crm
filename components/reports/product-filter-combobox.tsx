@@ -141,7 +141,7 @@ export function ProductFilterCombobox({
           </Button>
         </PopoverTrigger>
         <PopoverContent
-          className="min-w-[var(--radix-popover-trigger-width)] w-[var(--radix-popover-trigger-width)] max-w-[min(100vw-2rem,28rem)] p-0"
+          className="!z-[120] min-w-[var(--radix-popover-trigger-width)] w-[var(--radix-popover-trigger-width)] max-w-[min(100vw-2rem,28rem)] p-0"
           align="start"
         >
           <Command>

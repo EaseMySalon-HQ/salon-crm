@@ -33,10 +33,10 @@
  * /settings → settings (any subcategory uses SETTINGS_PERMISSION_MAP)
  *
  * === SETTINGS SECTION ID → MODULE ===
- * general → general_settings, business → business_settings, appointments → appointment_settings,
- * currency → currency_settings, tax → tax_settings, payments → payment_settings,
- * attendance-payroll → payroll_settings, staff-directory → staff, pos → pos_settings,
- * notifications → notification_settings, whatsapp-integration → notification_settings,
+ * general → general_settings, business → business_settings,
+ * website → business_settings (includes online booking; legacy ?section=appointments redirects here), currency → currency_settings, tax → tax_settings,
+ * payments → payment_settings, attendance-payroll → payroll_settings, staff-directory → staff,
+ * pos → pos_settings, notifications → notification_settings, whatsapp-integration → notification_settings,
  * plan-billing → plan_billing, feedback → feedback
  */
 
@@ -73,6 +73,7 @@ export const SETTINGS_PERMISSION_MAP: Record<string, string> = {
   general: "general_settings",
   business: "business_settings",
   appointments: "appointment_settings",
+  website: "business_settings",
   currency: "currency_settings",
   tax: "tax_settings",
   payments: "payment_settings",

@@ -25,12 +25,12 @@ export default function DashboardPage() {
   return (
     <ProtectedLayout requiredModule="dashboard">
       <DashboardGate>
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 p-6">
+      <div className="min-h-screen bg-background p-6">
         <div className="mb-8 animate-in slide-in-from-bottom-2" style={{ animationDelay: "400ms" }}>
           <div className="mb-6 flex items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <TrendingUp className="h-6 w-6 text-indigo-600" />
-              <h2 className="text-2xl font-semibold text-gray-800">Key Metrics</h2>
+              <h2 className="text-2xl font-semibold text-foreground">Key Metrics</h2>
             </div>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -54,7 +54,7 @@ export default function DashboardPage() {
 
         <div className="grid gap-8 mb-8 animate-in slide-in-from-bottom-2" style={{ animationDelay: "600ms" }}>
           <div className="grid items-stretch gap-6 md:grid-cols-2 lg:grid-cols-7">
-            <Card className="col-span-4 h-full shadow-lg border-0 bg-white/80 backdrop-blur-sm">
+            <Card className="col-span-4 h-full shadow-lg border-0 dark:border dark:border-border bg-white/80 backdrop-blur-sm">
               <CardHeader className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-t-lg border-b border-blue-100 space-y-3">
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -94,7 +94,7 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
 
-            <Card className="col-span-3 h-full shadow-lg border-0 bg-white/80 backdrop-blur-sm">
+            <Card className="col-span-3 h-full shadow-lg border-0 dark:border dark:border-border bg-white/80 backdrop-blur-sm">
               <CardHeader className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-t-lg border-b border-green-100 space-y-3">
                 <div className="flex items-start justify-between gap-3">
                   <div>

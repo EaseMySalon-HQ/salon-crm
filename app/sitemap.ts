@@ -17,7 +17,6 @@ const STATIC_ENTRIES: Array<{
   { path: "/faq", priority: 0.7, changeFrequency: "monthly" },
   { path: "/about", priority: 0.5, changeFrequency: "monthly" },
   { path: "/blog", priority: 0.75, changeFrequency: "weekly" },
-  // SEO-optimized top-level feature landing pages
   { path: "/salon-billing-software", priority: 0.85, changeFrequency: "weekly" },
   { path: "/salon-crm", priority: 0.85, changeFrequency: "weekly" },
   { path: "/appointment-management", priority: 0.85, changeFrequency: "weekly" },
@@ -26,18 +25,59 @@ const STATIC_ENTRIES: Array<{
   { path: "/payroll-management", priority: 0.85, changeFrequency: "weekly" },
   { path: "/whatsapp-marketing", priority: 0.85, changeFrequency: "weekly" },
   { path: "/reports-analytics", priority: 0.85, changeFrequency: "weekly" },
-  // Nested feature category pages (kept for internal linking)
   { path: "/features/billing", priority: 0.75, changeFrequency: "weekly" },
   { path: "/features/appointments", priority: 0.75, changeFrequency: "weekly" },
   { path: "/features/whatsapp-marketing", priority: 0.75, changeFrequency: "weekly" },
   { path: "/features/multi-branch", priority: 0.75, changeFrequency: "weekly" },
-  // Legal
   { path: "/privacy-policy", priority: 0.3, changeFrequency: "monthly" },
   { path: "/terms-and-conditions", priority: 0.3, changeFrequency: "monthly" },
   { path: "/refund-policy", priority: 0.3, changeFrequency: "monthly" },
 ]
 
-export default function sitemap(): MetadataRoute.Sitemap {
+const SALON_SUBPATHS = [
+  "",
+  "/services",
+  "/packages",
+  "/memberships",
+  "/products",
+  "/gallery",
+  "/team",
+  "/reviews",
+  "/contact",
+  "/offers",
+]
+
+async function fetchSalonEntries(baseUrl: string): Promise<MetadataRoute.Sitemap> {
+  try {
+    const apiBase = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api").replace(
+      /\/$/,
+      ""
+    )
+    const res = await fetch(`${apiBase}/public/sites/sitemap-entries`, {
+      next: { revalidate: 3600 },
+    })
+    if (!res.ok) return []
+    const json = await res.json()
+    const entries: Array<{ slug: string; lastModified?: string }> = json?.data?.entries || []
+    const out: MetadataRoute.Sitemap = []
+    for (const entry of entries) {
+      const lastModified = entry.lastModified ? new Date(entry.lastModified) : new Date()
+      for (const sub of SALON_SUBPATHS) {
+        out.push({
+          url: `${baseUrl}/salon/${entry.slug}${sub}`,
+          lastModified,
+          changeFrequency: "weekly",
+          priority: sub === "" ? 0.8 : 0.6,
+        })
+      }
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://www.easemysalon.in"
 
   const staticUrls = STATIC_ENTRIES.map(({ path, priority, changeFrequency }) => ({
@@ -54,5 +94,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     priority: 0.7,
   }))
 
-  return [...staticUrls, ...blogUrls]
+  const salonUrls = await fetchSalonEntries(baseUrl)
+
+  return [...staticUrls, ...blogUrls, ...salonUrls]
 }

@@ -12,6 +12,14 @@ const { logger } = require('../utils/logger');
 
 const SKIP_PATHS = new Set(['/health', '/api/health']);
 
+/** High-volume beacons — skip perf noise in dev logs. */
+const SKIP_PATH_SUFFIXES = ['/track'];
+
+function shouldSkipPerfLog(routePath) {
+  if (SKIP_PATHS.has(routePath)) return true;
+  return SKIP_PATH_SUFFIXES.some((suffix) => routePath.endsWith(suffix));
+}
+
 function isEnabled() {
   if (String(process.env.ENABLE_PERF_LOGS).toLowerCase() === 'true') return true;
   return process.env.NODE_ENV !== 'production';
@@ -64,7 +72,7 @@ function perfLogMiddleware(req, res, next) {
 
   // Only the canonical mount path — skip noisy health/probe routes.
   const routePath = req.path || req.originalUrl?.split('?')[0] || '';
-  if (SKIP_PATHS.has(routePath)) return next();
+  if (shouldSkipPerfLog(routePath)) return next();
 
   const start = process.hrtime.bigint();
   const getBodyBytes = instrumentResponse(res);

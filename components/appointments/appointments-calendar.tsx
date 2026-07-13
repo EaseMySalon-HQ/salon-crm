@@ -167,6 +167,8 @@ interface StaffMember {
 interface AppointmentsCalendarProps {
   onShowCancelled?: () => void
   initialAppointmentId?: string
+  initialAppointmentPanel?: "details"
+  onAppointmentDeepLinkConsumed?: () => void
   onOpenAppointmentForm?: (params?: {
     date?: string
     time?: string
@@ -181,7 +183,7 @@ interface AppointmentsCalendarProps {
 export const AppointmentsCalendar = forwardRef<
   { showCancelledModal: () => void; showUpcomingModal: () => void },
   AppointmentsCalendarProps
->(({ onShowCancelled, initialAppointmentId, onOpenAppointmentForm, view = "list", onSwitchView }, ref) => {
+>(({ onShowCancelled, initialAppointmentId, initialAppointmentPanel, onAppointmentDeepLinkConsumed, onOpenAppointmentForm, view = "list", onSwitchView }, ref) => {
   const { user, hasPermission } = useAuth()
   const canCreateAppointment = hasPermission("appointments", "create")
   const canQuickSale = hasPermission("sales", "create")
@@ -553,34 +555,68 @@ export const AppointmentsCalendar = forwardRef<
   }
 
   useEffect(() => {
-    if (!pendingAppointmentId || appointments.length === 0) return
-    const match = appointments.find((apt) => apt._id === pendingAppointmentId)
-    if (!match) return
+    if (!pendingAppointmentId) return
+    let cancelled = false
 
-    setSelectedAppointment(match)
-
-    if (match.date) {
-      const matchDate = new Date(match.date)
-      const year = matchDate.getFullYear()
-      const month = String(matchDate.getMonth() + 1).padStart(2, '0')
-      const day = String(matchDate.getDate()).padStart(2, '0')
-      setSelectedDate(`${year}-${month}-${day}`)
-      setCurrentDate(matchDate)
-    }
-
-    const intent = getAppointmentCalendarOpenIntent(match, partialPaymentAppointmentIds)
-    if (intent.type === "edit_form") {
-      if (onOpenAppointmentForm) {
-        onOpenAppointmentForm({ appointmentId: intent.appointmentId })
-      } else {
-        setShowDetails(true)
+    const openFromDeepLink = async () => {
+      let match = appointments.find((apt) => String(apt._id) === pendingAppointmentId) ?? null
+      if (!match && !loading) {
+        try {
+          const res = await AppointmentsAPI.getById(pendingAppointmentId)
+          if (cancelled) return
+          if (res?.success && res.data) match = res.data as Appointment
+        } catch {
+          return
+        }
       }
-    } else {
-      setShowDetails(true)
+      if (!match) {
+        if (loading) return
+        return
+      }
+
+      setSelectedAppointment(match)
+
+      if (match.date) {
+        const matchDate = new Date(match.date)
+        const year = matchDate.getFullYear()
+        const month = String(matchDate.getMonth() + 1).padStart(2, "0")
+        const day = String(matchDate.getDate()).padStart(2, "0")
+        setSelectedDate(`${year}-${month}-${day}`)
+        setCurrentDate(matchDate)
+      }
+
+      if (initialAppointmentPanel === "details") {
+        setShowDetails(true)
+      } else {
+        const intent = getAppointmentCalendarOpenIntent(match, partialPaymentAppointmentIds)
+        if (intent.type === "edit_form") {
+          if (onOpenAppointmentForm) {
+            onOpenAppointmentForm({ appointmentId: intent.appointmentId })
+          } else {
+            setShowDetails(true)
+          }
+        } else {
+          setShowDetails(true)
+        }
+      }
+
+      setPendingAppointmentId(null)
+      onAppointmentDeepLinkConsumed?.()
     }
 
-    setPendingAppointmentId(null)
-  }, [pendingAppointmentId, appointments, onOpenAppointmentForm, partialPaymentAppointmentIds])
+    void openFromDeepLink()
+    return () => {
+      cancelled = true
+    }
+  }, [
+    pendingAppointmentId,
+    appointments,
+    loading,
+    initialAppointmentPanel,
+    onOpenAppointmentForm,
+    onAppointmentDeepLinkConsumed,
+    partialPaymentAppointmentIds,
+  ])
 
   const isAppointmentOnSelectedDate = (apt: Appointment) => {
     const aptNorm = apt.date?.length >= 10 ? apt.date.slice(0, 10) : apt.date

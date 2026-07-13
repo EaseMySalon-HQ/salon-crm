@@ -3,6 +3,7 @@ import type { Metadata } from "next"
 import { Inter } from "next/font/google"
 import "./globals.css"
 import { Toaster } from "@/components/ui/toaster"
+import { AppThemeProvider } from "@/components/app-theme-provider"
 import { AuthProvider } from "@/lib/auth-context"
 import { AdminAuthProvider } from "@/lib/admin-auth-context"
 import { QueryProvider } from "@/components/providers/query-provider"
@@ -193,10 +194,12 @@ export default function RootLayout({
       <body className={inter.className}>
         <AuthProvider>
           <QueryProvider>
-          <AdminAuthProvider>
-            {children}
-            <Toaster />
-          </AdminAuthProvider>
+            <AdminAuthProvider>
+              <AppThemeProvider>
+                {children}
+                <Toaster />
+              </AppThemeProvider>
+            </AdminAuthProvider>
           </QueryProvider>
         </AuthProvider>
       </body>

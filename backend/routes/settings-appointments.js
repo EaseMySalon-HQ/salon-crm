@@ -39,6 +39,9 @@ function formatResponse(business) {
 
   const publicBookingService = require('../services/scheduling/public-booking-service');
   const planAllowsOnlineBooking = hasFeature(business, 'online_booking');
+  const planAllowsMiniWebsite = hasFeature(business, 'mini_website');
+  const publicSlug = (business.slug || String(business.code || '').toLowerCase()).toLowerCase();
+  const websiteEnabled = planAllowsMiniWebsite && Boolean(business.settings?.website?.enabled);
 
   return {
     code: business.code,
@@ -46,6 +49,9 @@ function formatResponse(business) {
     timezone: business.settings?.timezone || 'Asia/Kolkata',
     allowOnlineBooking: planAllowsOnlineBooking && appt.allowOnlineBooking === true,
     onlineBookingAvailable: planAllowsOnlineBooking,
+    websiteEnabled,
+    miniSiteSlug: publicSlug,
+    miniSiteBookPath: `/salon/${publicSlug}/book`,
     slotDuration,
     advanceBookingDays: Number(appt.advanceBookingDays) > 0 ? Number(appt.advanceBookingDays) : 30,
     bufferTime: Number(appt.bufferTime) >= 0 ? Number(appt.bufferTime) : 15,

@@ -14,6 +14,13 @@ const DEFAULT_PUBLIC_PRICING_MATRIX_CATEGORIES = [
         pro: 'yes',
       },
       {
+        feature: 'Salon mini website',
+        hint: 'SEO storefront with services, gallery, and Book Appointment CTAs',
+        starter: 'yes',
+        growth: 'yes',
+        pro: 'yes',
+      },
+      {
         feature: 'Booking via WhatsApp',
         hint: 'Clients book directly in chat',
         starter: 'yes',

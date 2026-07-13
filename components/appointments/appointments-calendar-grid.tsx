@@ -76,6 +76,11 @@ import {
   type AppointmentCardContextStatus,
 } from "@/lib/appointment-calendar-helpers"
 import {
+  APPOINTMENTS_CALENDAR_SURFACE_CLASS,
+  CAL_GRID_CLASSES,
+  CAL_GRID_COLORS,
+} from "@/lib/calendar-theme"
+import {
   RaiseSaleConfirmationModal,
   type RaiseSaleConfirmationResult,
 } from "@/components/appointments/raise-sale-confirmation-modal"
@@ -380,8 +385,8 @@ function fiveMinuteGridGuidesStyle(baseFill: string, cellHeightPx: number): CSSP
   const t1 = h / 3
   const t2 = (2 * h) / 3
   const guides = [
-    `linear-gradient(to bottom, transparent 0, transparent ${t1 - 0.5}px, rgb(203 213 225 / 0.22) ${t1 - 0.5}px, rgb(203 213 225 / 0.22) ${t1 + 0.5}px, transparent ${t1 + 0.5}px)`,
-    `linear-gradient(to bottom, transparent 0, transparent ${t2 - 0.5}px, rgb(226 232 240 / 0.38) ${t2 - 0.5}px, rgb(226 232 240 / 0.38) ${t2 + 0.5}px, transparent ${t2 + 0.5}px)`,
+    `linear-gradient(to bottom, transparent 0, transparent ${t1 - 0.5}px, ${CAL_GRID_COLORS.guide1} ${t1 - 0.5}px, ${CAL_GRID_COLORS.guide1} ${t1 + 0.5}px, transparent ${t1 + 0.5}px)`,
+    `linear-gradient(to bottom, transparent 0, transparent ${t2 - 0.5}px, ${CAL_GRID_COLORS.guide2} ${t2 - 0.5}px, ${CAL_GRID_COLORS.guide2} ${t2 + 0.5}px, transparent ${t2 + 0.5}px)`,
   ]
   return {
     backgroundColor: "transparent",
@@ -587,6 +592,8 @@ function getStatusText(status: string): string {
 
 interface AppointmentsCalendarGridProps {
   initialAppointmentId?: string
+  initialAppointmentPanel?: "details"
+  onAppointmentDeepLinkConsumed?: () => void
   onSwitchToList?: () => void
   onOpenAppointmentForm?: (params?: {
     date?: string
@@ -602,7 +609,7 @@ interface AppointmentsCalendarGridProps {
 export const AppointmentsCalendarGrid = forwardRef<
   { showCancelledModal: () => void; showUpcomingModal: () => void },
   AppointmentsCalendarGridProps
->(({ initialAppointmentId, onSwitchToList, onOpenAppointmentForm, view = "calendar", onSwitchView }, ref) => {
+>(({ initialAppointmentId, initialAppointmentPanel, onAppointmentDeepLinkConsumed, onSwitchToList, onOpenAppointmentForm, view = "calendar", onSwitchView }, ref) => {
   const { user, hasPermission } = useAuth()
   const canCreateAppointment = hasPermission("appointments", "create")
   const canQuickSale = hasPermission("sales", "create")
@@ -998,26 +1005,63 @@ export const AppointmentsCalendarGrid = forwardRef<
   )
 
   useEffect(() => {
-    if (!pendingAppointmentId || appointments.length === 0) return
-    const match = appointments.find((a) => a._id === pendingAppointmentId)
-    if (!match) return
-    setSelectedAppointment(match)
-    if (match.date) {
-      const d = new Date(match.date)
-      setSelectedDate(format(d, "yyyy-MM-dd"))
-    }
-    const intent = getAppointmentCalendarOpenIntent(match, partialPaymentAppointmentIds)
-    if (intent.type === "edit_form") {
-      if (onOpenAppointmentForm) {
-        onOpenAppointmentForm({ appointmentId: intent.appointmentId })
-      } else {
-        setShowDetails(true)
+    if (!pendingAppointmentId) return
+    let cancelled = false
+
+    const openFromDeepLink = async () => {
+      let match = appointments.find((a) => String(a._id) === pendingAppointmentId) ?? null
+      if (!match && !loading) {
+        try {
+          const res = await AppointmentsAPI.getById(pendingAppointmentId)
+          if (cancelled) return
+          if (res?.success && res.data) match = res.data as Appointment
+        } catch {
+          return
+        }
       }
-    } else {
-      setShowDetails(true)
+      if (!match) {
+        if (loading) return
+        return
+      }
+
+      setSelectedAppointment(match)
+      if (match.date) {
+        const d = new Date(match.date)
+        setSelectedDate(format(d, "yyyy-MM-dd"))
+      }
+
+      if (initialAppointmentPanel === "details") {
+        setShowDetails(true)
+      } else {
+        const intent = getAppointmentCalendarOpenIntent(match, partialPaymentAppointmentIds)
+        if (intent.type === "edit_form") {
+          if (onOpenAppointmentForm) {
+            onOpenAppointmentForm({ appointmentId: intent.appointmentId })
+          } else {
+            setShowDetails(true)
+          }
+        } else {
+          setShowDetails(true)
+        }
+      }
+
+      setPendingAppointmentId(null)
+      onAppointmentDeepLinkConsumed?.()
     }
-    setPendingAppointmentId(null)
-  }, [pendingAppointmentId, appointments, onOpenAppointmentForm, partialPaymentAppointmentIds])
+
+    void openFromDeepLink()
+    return () => {
+      cancelled = true
+    }
+  }, [
+    pendingAppointmentId,
+    appointments,
+    loading,
+    initialAppointmentPanel,
+    onOpenAppointmentForm,
+    onAppointmentDeepLinkConsumed,
+    partialPaymentAppointmentIds,
+  ])
 
   useEffect(() => {
     let cancelled = false
@@ -2439,7 +2483,9 @@ export const AppointmentsCalendarGrid = forwardRef<
   }
 
   return (
-    <div className="flex flex-col h-full min-h-0 space-y-5 calendar-fade-transition w-full">
+    <div
+      className={`flex flex-col h-full min-h-0 space-y-5 calendar-fade-transition w-full ${APPOINTMENTS_CALENDAR_SURFACE_CLASS}`}
+    >
       {/* Section 5: Top Control Bar - Premium hierarchy */}
       <div className="flex flex-wrap items-center gap-4 shrink-0">
         {/* Staff filter, Date selector, Density toggle */}
@@ -2534,11 +2580,8 @@ export const AppointmentsCalendarGrid = forwardRef<
       </div>
 
       {/* Section 1: Grid with soft gray bg, alternating hour shading. Section 6: key triggers fade on date change */}
-      <div key={selectedDate} className="flex flex-col flex-1 min-h-0 rounded-2xl overflow-hidden border border-slate-200/80 bg-slate-50/50 shadow-sm">
-        <div
-          ref={scrollContainerRef}
-          className="overflow-auto flex-1 min-h-0 bg-white/50"
-        >
+      <div key={selectedDate} className={`flex flex-col flex-1 min-h-0 ${CAL_GRID_CLASSES.shell}`}>
+        <div ref={scrollContainerRef} className={CAL_GRID_CLASSES.scroll}>
           <div
             className="grid w-full min-w-[600px] relative calendar-fade-transition"
             style={{
@@ -2550,7 +2593,7 @@ export const AppointmentsCalendarGrid = forwardRef<
             <button
               type="button"
               onClick={handleTimeHeaderClick}
-              className={`sticky top-0 ${CALENDAR_STICKY_HEADER_Z_CLASS} border-b border-r border-slate-200/80 bg-slate-50 px-3 py-3 font-medium text-slate-500 text-xs uppercase tracking-wider text-left w-full hover:bg-slate-100/80 transition-colors cursor-default`}
+              className={`sticky top-0 ${CALENDAR_STICKY_HEADER_Z_CLASS} ${CAL_GRID_CLASSES.timeHeader}`}
               title="Scroll to current time"
             >
               Time
@@ -2571,7 +2614,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                 return (
                   <div
                     key={col._id}
-                    className={`sticky top-0 ${CALENDAR_STICKY_HEADER_Z_CLASS} border-b border-r border-slate-200/80 bg-white/95 backdrop-blur-sm px-3 py-2 last:border-r-0 shadow-[0_1px_0_0_rgba(0,0,0,0.05)] flex items-center justify-center min-w-0`}
+                    className={`sticky top-0 ${CALENDAR_STICKY_HEADER_Z_CLASS} ${CAL_GRID_CLASSES.staffHeader}`}
                   >
                     <div className="flex items-center gap-2.5 min-w-0 max-w-full">
                       <Avatar className="h-11 w-11 shrink-0 border-2 border-violet-100 shadow-sm">
@@ -2614,13 +2657,13 @@ export const AppointmentsCalendarGrid = forwardRef<
               const isCurrentHourRow =
                 isToday && hourIndex === Math.floor(currentMinutes / 60)
 
-              let timeColFill = "rgb(255 255 255)"
+              let timeColFill = CAL_GRID_COLORS.cellBase
               if (columns.length > 0 && !slotInVisibleStaffWorkHours) {
-                timeColFill = "rgb(248 250 252)"
+                timeColFill = CAL_GRID_COLORS.cellMuted
               } else if (isCurrentHourRow) {
-                timeColFill = "rgba(255, 251, 235, 0.3)"
+                timeColFill = CAL_GRID_COLORS.cellCurrentHour
               } else if (isAlternateHour) {
-                timeColFill = "rgba(248, 250, 252, 0.4)"
+                timeColFill = CAL_GRID_COLORS.cellAltHour
               }
               const timeColStyle: CSSProperties = {
                 height: slotHeight,
@@ -2632,7 +2675,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                 parseTimeToMinutes(slotActionDialog.time) === slot.minutes &&
                 slotActionDialog.staffId === null
               let emptyGridFill = timeColFill
-              if (emptySlotMenuOpen) emptyGridFill = "rgba(245, 243, 255, 0.4)"
+              if (emptySlotMenuOpen) emptyGridFill = CAL_GRID_COLORS.slotMenu
               const emptyGridGuideStyle = fiveMinuteGridGuidesStyle(emptyGridFill, slotHeight)
               return (
                 <Fragment key={`row-${slot.minutes}`}>
@@ -2655,7 +2698,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                           clientY: e.clientY,
                         })
                       }}
-                      className={`w-full border-r border-slate-200/80 last:border-r-0 text-left ${rowBorderClass} transition-colors duration-150 bg-transparent hover:shadow-[inset_0_0_0_9999px_rgba(237,233,254,0.55)] hover:ring-1 hover:ring-violet-200/60 hover:ring-inset cursor-default ${
+                      className={`w-full border-r border-slate-200/80 last:border-r-0 text-left ${rowBorderClass} transition-colors duration-150 bg-transparent ${CAL_GRID_CLASSES.slotHover} cursor-default ${
                         emptySlotMenuOpen ? "ring-2 ring-violet-500 ring-inset z-[1] relative" : ""
                       }`}
                       style={{ height: slotHeight, minHeight: slotHeight, ...emptyGridGuideStyle }}
@@ -2719,19 +2762,21 @@ export const AppointmentsCalendarGrid = forwardRef<
                         slotActionDialog.date === selectedDate &&
                         parseTimeToMinutes(slotActionDialog.time) === slot.minutes &&
                         slotActionDialog.staffId === col._id
-                      let staffFill = "rgb(255 255 255)"
+                      let staffFill = CAL_GRID_COLORS.cellBase
                       if (isDragHighlightValid) {
-                        staffFill = "rgba(91, 33, 182, 0.5)"
+                        staffFill = CAL_GRID_COLORS.dragValid
                       } else if (isInDragHighlight && !isDragHighlightValid) {
-                        staffFill = "rgba(153, 27, 27, 0.48)"
+                        staffFill = CAL_GRID_COLORS.dragInvalid
                       } else if (!inWindow) {
-                        staffFill = slotInVisibleStaffWorkHours ? "rgb(226 232 240)" : "rgb(248 250 252)"
+                        staffFill = slotInVisibleStaffWorkHours
+                          ? CAL_GRID_COLORS.cellOutsideInBand
+                          : CAL_GRID_COLORS.cellMuted
                       } else if (slotMenuOpen) {
-                        staffFill = "rgba(245, 243, 255, 0.5)"
+                        staffFill = CAL_GRID_COLORS.slotMenuStaff
                       } else if (isCurrentHourRow) {
-                        staffFill = "rgba(255, 251, 235, 0.2)"
+                        staffFill = CAL_GRID_COLORS.cellCurrentHourStaff
                       } else if (isAlternateHour) {
-                        staffFill = "rgba(248, 250, 252, 0.4)"
+                        staffFill = CAL_GRID_COLORS.cellAltHour
                       }
                       const staffCellGuideStyle = fiveMinuteGridGuidesStyle(staffFill, slotHeight)
                       const staffSlotTip = inWindow
@@ -2765,7 +2810,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                             : isInDragHighlight && !isDragHighlightValid
                             ? "ring-2 ring-red-600/85 ring-inset"
                             : inWindow
-                            ? "hover:shadow-[inset_0_0_0_9999px_rgba(237,233,254,0.55)] hover:ring-1 hover:ring-violet-200/60 hover:ring-inset cursor-default"
+                            ? `${CAL_GRID_CLASSES.slotHover} cursor-default`
                             : "calendar-outside-hours cursor-not-allowed"
                         } ${
                           slotMenuOpen && !isInDragHighlight ? "ring-2 ring-violet-500 ring-inset z-[1] relative" : ""
@@ -3253,7 +3298,7 @@ export const AppointmentsCalendarGrid = forwardRef<
                               <div
                                 key={`${apt._id}-add-row-${slotM}`}
                                 data-appt-side-strip
-                                className="absolute z-[25] cursor-pointer border-l border-slate-200/50 rounded-sm transition-colors duration-150 hover:bg-violet-100/85 hover:shadow-[inset_0_0_0_9999px_rgba(237,233,254,0.45)] hover:ring-1 hover:ring-inset hover:ring-violet-200/60"
+                                className={`absolute z-[25] cursor-pointer border-l border-slate-200/50 rounded-sm transition-colors duration-150 ${CAL_GRID_CLASSES.gapHover}`}
                                 style={{ left: "90%", width: "10%", top: relTop, height }}
                                 onMouseEnter={(e) => showSlotHoverTip(label, e)}
                                 onMouseMove={moveSlotHoverTip}

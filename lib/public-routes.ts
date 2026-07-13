@@ -23,7 +23,7 @@ const PUBLIC_EXACT = new Set([
   '/grievance',
 ])
 
-const PUBLIC_PREFIXES = ['/receipt/public/', '/public/', '/book/']
+const PUBLIC_PREFIXES = ['/receipt/public/', '/public/', '/book/', '/salon/']
 
 export function isPublicClientRoute(pathname: string): boolean {
   if (PUBLIC_EXACT.has(pathname)) return true

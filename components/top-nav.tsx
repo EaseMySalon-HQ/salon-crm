@@ -6,6 +6,7 @@ import { useRouter, usePathname } from "next/navigation"
 import { Bell, Plus, User, Receipt, Settings, LogOut, Banknote, Clock, Search, Wallet, AlertTriangle, CreditCard, MessageCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { NotificationCountBadgeLabel } from "@/components/notifications/notification-count-badge"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,10 +23,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { useAuth } from "@/lib/auth-context"
-import { SettingsAPI, ClientsAPI, WalletAPI, WhatsAppInboxAPI, type NotificationFeedItem } from "@/lib/api"
-import { useAddon, useFeature } from "@/hooks/use-entitlements"
+import { SettingsAPI, ClientsAPI, WalletAPI, WhatsAppInboxAPI } from "@/lib/api"
+import { useAddon, useFeature, useEntitlements } from "@/hooks/use-entitlements"
 import { STALE_TIME } from "@/lib/queries/staleness"
-import { useNotificationsFeed } from "@/lib/queries/notifications"
 import { Input } from "@/components/ui/input"
 import { useTodayOnlineSales } from "@/hooks/use-today-online-sales"
 import { ExpenseForm } from "@/components/expenses/expense-form"
@@ -43,6 +43,13 @@ import {
 } from "@/components/top-nav/fathers-day-banner"
 import { useNavBannerActive, useNavBannerConfig } from "@/hooks/use-nav-banner-config"
 import { cn } from "@/lib/utils"
+import { ThemeToggleMenuItem } from "@/components/theme-toggle"
+import {
+  NotificationsSidebar,
+  useDismissedNotificationAlerts,
+  useDismissedNotificationReviews,
+  useNotificationCenterBadgeCount,
+} from "@/components/notifications/notifications-sidebar"
 
 function searchHitToClient(c: any): Client {
   const id = String(c._id || c.id || "")
@@ -64,97 +71,12 @@ interface TopNavProps {
   rightSlot?: React.ReactNode
 }
 
-/** v2 entries are `alertId::fingerprint` so the same logical alert can reappear when server counts update. */
-const DISMISSED_ALERTS_STORAGE_PREFIX = "salon-ems-alerts-dismissed-v2:"
-
-function notificationDismissStorageKey(item: NotificationFeedItem): string {
-  return `${item.id}::${item.fingerprint}`
-}
-
-function NotificationRowIcon({ type }: { type: NotificationFeedItem["type"] }) {
-  switch (type) {
-    case "low_stock":
-      return (
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-100">
-          <AlertTriangle className="h-4 w-4 text-amber-700" aria-hidden />
-        </div>
-      )
-    case "membership_expiry":
-      return (
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-sky-100">
-          <CreditCard className="h-4 w-4 text-sky-700" aria-hidden />
-        </div>
-      )
-    case "package_expiry":
-      return (
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-violet-100">
-          <Receipt className="h-4 w-4 text-violet-700" aria-hidden />
-        </div>
-      )
-    default:
-      return (
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100">
-          <Bell className="h-4 w-4 text-slate-600" aria-hidden />
-        </div>
-      )
-  }
-}
-
-/** Ref gate: Radix `DropdownMenuItem` still fires `onSelect` when a nested button is clicked; bypass navigation for "Mark as read". */
-function NotificationAlertMenuRow({
-  item,
-  router,
-  onMarkRead,
-}: {
-  item: NotificationFeedItem
-  router: ReturnType<typeof useRouter>
-  onMarkRead: (item: NotificationFeedItem) => void
-}) {
-  const skipNavigateOnSelectRef = useRef(false)
-
-  return (
-    <DropdownMenuItem
-      className="group/alert relative mx-2 my-1 flex cursor-pointer gap-3 rounded-lg px-3 py-2.5 items-start focus:bg-slate-50"
-      onSelect={(event) => {
-        if (skipNavigateOnSelectRef.current) {
-          skipNavigateOnSelectRef.current = false
-          event.preventDefault()
-          return
-        }
-        router.push(item.href)
-      }}
-    >
-      <NotificationRowIcon type={item.type} />
-      <div className="min-w-0 flex-1 space-y-0.5 text-left pr-1">
-        <p className="text-sm font-semibold text-slate-800 leading-tight">{item.title}</p>
-        <p className="text-xs text-slate-600 leading-snug">{item.body}</p>
-      </div>
-      <button
-        type="button"
-        aria-label={`Mark "${item.title}" as read`}
-        className="shrink-0 self-center whitespace-nowrap rounded px-1.5 py-1 text-xs font-medium text-slate-500 opacity-0 transition-opacity hover:text-slate-800 hover:underline group-hover/alert:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 pointer-events-auto"
-        onPointerDown={() => {
-          skipNavigateOnSelectRef.current = true
-        }}
-        onPointerDownCapture={() => {
-          skipNavigateOnSelectRef.current = true
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            skipNavigateOnSelectRef.current = true
-          }
-        }}
-        onClick={(e) => {
-          e.preventDefault()
-          e.stopPropagation()
-          onMarkRead(item)
-        }}
-      >
-        Mark as read
-      </button>
-    </DropdownMenuItem>
-  )
-}
+const QUICK_ADD_MENU_ITEM_CLASS =
+  "quick-add-menu-item group flex items-center gap-3 p-3 m-1 cursor-pointer rounded-lg"
+const QUICK_ADD_ICON_WRAP_CLASS =
+  "quick-add-menu-icon rounded-lg bg-blue-100 p-2 transition-colors duration-200 dark:bg-blue-950/60"
+const QUICK_ADD_ICON_CLASS = "quick-add-menu-icon-svg h-4 w-4 text-blue-600 dark:text-blue-400"
+const QUICK_ADD_LABEL_CLASS = "quick-add-menu-label font-medium text-gray-700 dark:text-foreground"
 
 function normalizePathname(value: unknown): string {
   return typeof value === "string" ? value : ""
@@ -176,76 +98,26 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
   const isInboxActive = pathname.startsWith("/whatsapp/inbox")
   const [showExpenseDialog, setShowExpenseDialog] = useState(false)
   const [showCashRegistryModal, setShowCashRegistryModal] = useState(false)
+  const [notificationsOpen, setNotificationsOpen] = useState(false)
   const { amount: todayOnlineSales } = useTodayOnlineSales(showCashRegistryModal)
   const queryClient = useQueryClient()
+  const { hasFeature, isLoading: entitlementsLoading } = useEntitlements()
 
-  const {
-    data: notificationItems = [],
-    isPending: notificationsPending,
-    isError: notificationsError,
-  } = useNotificationsFeed()
+  const canViewAppointments = hasPermission("appointments", "view")
+  const canViewReviews =
+    hasPermission("feedback", "view") && !entitlementsLoading && hasFeature("feedback_management")
 
-  const notificationBranchKey = user?.branchId ?? user?._id ?? "none"
-  const dismissedAlertsStorageKey = `${DISMISSED_ALERTS_STORAGE_PREFIX}${notificationBranchKey}`
-  const [dismissedAlertKeys, setDismissedAlertKeys] = useState<Set<string>>(() => new Set())
-
-  useEffect(() => {
-    if (typeof window === "undefined" || notificationBranchKey === "none") return
-    try {
-      const raw = sessionStorage.getItem(dismissedAlertsStorageKey)
-      if (!raw) {
-        setDismissedAlertKeys(new Set())
-        return
-      }
-      const ids = JSON.parse(raw) as unknown
-      if (Array.isArray(ids) && ids.every((x) => typeof x === "string")) {
-        /** Only persisted `id::fingerprint` keys; ignore stale v1 plain ids */
-        const v2 = ids.filter((k) => k.includes("::"))
-        setDismissedAlertKeys(new Set(v2))
-      }
-    } catch {
-      setDismissedAlertKeys(new Set())
-    }
-  }, [dismissedAlertsStorageKey, notificationBranchKey])
-
-  const persistDismissedAlertKeys = (next: Set<string>) => {
-    try {
-      if (next.size === 0) {
-        sessionStorage.removeItem(dismissedAlertsStorageKey)
-      } else {
-        sessionStorage.setItem(dismissedAlertsStorageKey, JSON.stringify([...next]))
-      }
-    } catch {
-      /* ignore quota / private mode */
-    }
-  }
-
-  const markAlertRead = (alert: NotificationFeedItem) => {
-    const key = notificationDismissStorageKey(alert)
-    setDismissedAlertKeys((prev) => {
-      if (prev.has(key)) return prev
-      const next = new Set(prev)
-      next.add(key)
-      persistDismissedAlertKeys(next)
-      return next
-    })
-  }
-
-  const markAllAlertsRead = () => {
-    setDismissedAlertKeys((prev) => {
-      const next = new Set(prev)
-      for (const item of notificationItems) {
-        next.add(notificationDismissStorageKey(item))
-      }
-      persistDismissedAlertKeys(next)
-      return next
-    })
-  }
-
-  const visibleNotificationItems = notificationItems.filter((item) => !dismissedAlertKeys.has(notificationDismissStorageKey(item)))
-  const notifCount = visibleNotificationItems.length
-  const badgeLabel =
-    notifCount > 9 ? "9+" : notifCount > 0 ? String(notifCount) : ""
+  const { visibleCount: alertCount, ...alertsRest } = useDismissedNotificationAlerts(true)
+  const { visibleCount: reviewCount, ...reviewsRest } = useDismissedNotificationReviews(
+    canViewReviews
+  )
+  const notificationBadgeLabel = useNotificationCenterBadgeCount({
+    canViewAppointments,
+    canViewReviews,
+    canViewMessages: canAccessWhatsAppInbox,
+    alertCount,
+    reviewCount,
+  })
 
   const { data: inboxUnreadTotal = 0 } = useQuery({
     queryKey: ["whatsapp", "inbox", "unread-total"],
@@ -390,7 +262,7 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
         "fathers-day-nav sticky top-0 z-30 w-full shrink-0 px-4 py-3 shadow-sm backdrop-blur-sm sm:px-6 sm:py-4 lg:px-8",
         fathersDayNav
           ? "relative border-b border-amber-400/25"
-          : "border-b border-gray-200/60 bg-gradient-to-r from-white via-slate-50 to-blue-50/30"
+          : "border-b border-gray-200/60 bg-gradient-to-r from-white via-slate-50 to-blue-50/30 dark:border-border dark:from-background dark:via-background dark:to-background"
       )}
     >
       {fathersDayNav && navBannerConfig ? (
@@ -413,7 +285,7 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
           <button
             type="button"
             onClick={() => router.push("/settings?section=recharge")}
-            className="group inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-slate-200/90 bg-white/95 px-2.5 text-left shadow-sm transition-all hover:border-emerald-300/60 hover:shadow-sm hover:bg-emerald-50/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/30 focus-visible:ring-offset-1"
+            className="group inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-left shadow-sm transition-all hover:border-emerald-300/60 hover:shadow-sm hover:bg-emerald-50/30 dark:hover:bg-emerald-950/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/30 focus-visible:ring-offset-1"
             aria-label="Messaging wallet balance, open recharge"
           >
             <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-emerald-100 bg-emerald-50 text-emerald-700 group-hover:bg-emerald-100/80">
@@ -423,7 +295,7 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
               {isLoadingWallet ? (
                 <span className="block h-3.5 w-[4.5rem] rounded bg-slate-200/80" aria-hidden />
               ) : (
-                <span className="text-sm font-semibold leading-none tabular-nums text-slate-900">
+                <span className="text-sm font-semibold leading-none tabular-nums text-foreground">
                   {walletDisplay ?? "—"}
                 </span>
               )}
@@ -558,40 +430,43 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
                   variant="outline" 
                   size="sm" 
                   aria-label="Quick add"
-                  className="bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 border-blue-200 text-blue-700 hover:text-blue-800 hover:border-blue-300 transition-all duration-300 transform hover:scale-105 hover:shadow-md px-3 py-2"
+                  className="bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 border-blue-200 text-blue-700 hover:text-blue-800 hover:border-blue-300 dark:from-blue-950/40 dark:to-indigo-950/30 dark:hover:from-blue-950/60 dark:hover:to-indigo-950/45 dark:border-blue-500/30 dark:text-blue-300 dark:hover:text-blue-200 transition-all duration-300 transform hover:scale-105 hover:shadow-md px-3 py-2"
                 >
                   <Plus className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56 border-0 shadow-xl bg-white/95 backdrop-blur-sm rounded-xl">
-                <DropdownMenuItem 
+              <DropdownMenuContent
+                align="end"
+                className="w-56 rounded-xl border border-border bg-white/95 shadow-xl backdrop-blur-sm dark:bg-card/95"
+              >
+                <DropdownMenuItem
                   onClick={() => setTimeout(() => setShowCashRegistryModal(true), 0)}
-                  className="flex items-center gap-3 p-3 hover:bg-gradient-to-r hover:from-blue-50 hover:to-indigo-50 transition-all duration-200 cursor-pointer rounded-lg m-1"
+                  className={QUICK_ADD_MENU_ITEM_CLASS}
                 >
-                  <div className="p-2 bg-blue-100 rounded-lg">
-                    <Banknote className="h-4 w-4 text-blue-600" />
+                  <div className={QUICK_ADD_ICON_WRAP_CLASS}>
+                    <Banknote className={QUICK_ADD_ICON_CLASS} />
                   </div>
-                  <span className="font-medium text-gray-700">Opening/Closing</span>
+                  <span className={QUICK_ADD_LABEL_CLASS}>Opening/Closing</span>
                 </DropdownMenuItem>
                 {(isManager() || isAdmin()) && (
                   <>
-                <DropdownMenuItem 
+                <DropdownMenuItem
                   onClick={() => router.push("/settings?section=staff-directory&tab=attendance")}
-                  className="flex items-center gap-3 p-3 hover:bg-gradient-to-r hover:from-blue-50 hover:to-indigo-50 transition-all duration-200 cursor-pointer rounded-lg m-1"
+                  className={QUICK_ADD_MENU_ITEM_CLASS}
                 >
-                  <div className="p-2 bg-blue-100 rounded-lg">
-                    <Clock className="h-4 w-4 text-blue-600" />
+                  <div className={QUICK_ADD_ICON_WRAP_CLASS}>
+                    <Clock className={QUICK_ADD_ICON_CLASS} />
                   </div>
-                  <span className="font-medium text-gray-700">Attendance</span>
+                  <span className={QUICK_ADD_LABEL_CLASS}>Attendance</span>
                 </DropdownMenuItem>
-                <DropdownMenuItem 
+                <DropdownMenuItem
                   onClick={() => handleQuickAdd("/expenses/new")}
-                  className="flex items-center gap-3 p-3 hover:bg-gradient-to-r hover:from-red-50 hover:to-rose-50 transition-all duration-200 cursor-pointer rounded-lg m-1"
+                  className={QUICK_ADD_MENU_ITEM_CLASS}
                 >
-                  <div className="p-2 bg-red-100 rounded-lg">
-                    <Receipt className="h-4 w-4 text-red-600" />
+                  <div className={QUICK_ADD_ICON_WRAP_CLASS}>
+                    <Receipt className={QUICK_ADD_ICON_CLASS} />
                   </div>
-                  <span className="font-medium text-gray-700">Expense</span>
+                  <span className={QUICK_ADD_LABEL_CLASS}>Expense</span>
                 </DropdownMenuItem>
                   </>
                 )}
@@ -621,101 +496,58 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
                 strokeWidth={2}
               />
               {inboxBadgeLabel ? (
-                <Badge
-                  variant="destructive"
-                  className="absolute -top-1 -right-1 min-h-5 min-w-5 px-0 flex items-center justify-center text-[10px] font-bold p-0 shadow-md group-hover:animate-none"
-                >
-                  {inboxBadgeLabel}
-                </Badge>
+                <NotificationCountBadgeLabel
+                  label={inboxBadgeLabel}
+                  size="md"
+                  className="absolute -top-1 -right-1 shadow-md group-hover:animate-none"
+                />
               ) : null}
             </Button>
           ) : null}
 
-          {/* Notifications — server-derived alerts (inventory & expiries) */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                aria-haspopup="menu"
-                aria-label="Alerts and notifications"
-                className="group relative rounded-lg border border-amber-200/80 bg-amber-50/95 p-2.5 transition-all duration-300 transform hover:scale-105 hover:bg-amber-100 hover:shadow-md"
-              >
-                <Bell className="h-4 w-4 text-amber-600 transition-colors duration-300 group-hover:text-amber-700" strokeWidth={2} />
-                {!notificationsPending && badgeLabel ? (
-                  <Badge
-                    variant="destructive"
-                    className="absolute -top-1 -right-1 min-h-5 min-w-5 px-0 flex items-center justify-center text-[10px] font-bold p-0 shadow-md group-hover:animate-none"
-                  >
-                    {badgeLabel}
-                  </Badge>
-                ) : null}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="end"
-              className="w-[min(22rem,calc(100vw-2rem))] border-0 shadow-xl bg-white/95 backdrop-blur-sm rounded-xl p-0"
-            >
-              <div className="px-4 py-3 border-b border-slate-100">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-sm font-semibold text-slate-800">Alerts</p>
-                  {!notificationsPending && !notificationsError && notifCount > 0 ? (
-                    <button
-                      type="button"
-                      className="shrink-0 text-xs font-medium text-slate-500 hover:text-slate-900 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded px-1 -mr-1"
-                      onClick={(e) => {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        markAllAlertsRead()
-                      }}
-                    >
-                      Mark all as read
-                    </button>
-                  ) : null}
-                </div>
-                <p className="text-xs text-slate-500 mt-0.5">Operational reminders from your salon data.</p>
-              </div>
-              <div className="max-h-80 overflow-y-auto py-2">
-                {notificationsPending ? (
-                  <div className="px-4 py-8 text-center text-sm text-slate-500">Loading alerts…</div>
-                ) : notificationsError ? (
-                  <div className="px-4 py-8 text-center text-sm text-red-600">Could not load alerts. Try again later.</div>
-                ) : notifCount === 0 ? (
-                  <div className="px-4 py-8 text-center text-sm text-slate-500">
-                    {notificationItems.length > 0 ? (
-                      <>
-                        <p>You marked all current alerts as read.</p>
-                        <p className="mt-2 text-xs text-slate-400">
-                          They will show again automatically when counts change for that alert type.
-                        </p>
-                      </>
-                    ) : (
-                      <p>You're all caught up — no actionable alerts right now.</p>
-                    )}
-                  </div>
-                ) : (
-                  visibleNotificationItems.map((item) => (
-                    <NotificationAlertMenuRow
-                      key={item.id}
-                      item={item}
-                      router={router}
-                      onMarkRead={markAlertRead}
-                    />
-                  ))
-                )}
-              </div>
-              <DropdownMenuSeparator className="my-0" />
-              <DropdownMenuItem
-                className="cursor-pointer mx-2 mb-2 justify-center text-xs font-medium text-slate-600 focus:text-slate-800"
-                onSelect={(e) => {
-                  e.preventDefault()
-                  queryClient.invalidateQueries({ queryKey: ["notifications", "feed"] })
-                }}
-              >
-                Refresh alerts
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {/* Notifications — tabbed sidebar */}
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-haspopup="dialog"
+            aria-label="Open notifications"
+            aria-expanded={notificationsOpen}
+            onClick={() => setNotificationsOpen(true)}
+            className="group relative rounded-lg border border-amber-200/80 bg-amber-50/95 dark:border-amber-500/30 dark:bg-amber-950/40 p-2.5 transition-all duration-300 transform hover:scale-105 hover:bg-amber-100 dark:hover:bg-amber-950/60 hover:shadow-md"
+          >
+            <Bell className="h-4 w-4 text-amber-600 dark:text-amber-400 transition-colors duration-300 group-hover:text-amber-700 dark:group-hover:text-amber-300" strokeWidth={2} />
+            {notificationBadgeLabel ? (
+              <NotificationCountBadgeLabel
+                label={notificationBadgeLabel}
+                size="md"
+                className="absolute -top-1 -right-1 shadow-md group-hover:animate-none"
+              />
+            ) : null}
+          </Button>
+
+          <NotificationsSidebar
+            open={notificationsOpen}
+            onOpenChange={setNotificationsOpen}
+            canViewAppointments={canViewAppointments}
+            canViewReviews={canViewReviews}
+            canViewMessages={canAccessWhatsAppInbox}
+            alerts={{
+              notificationItems: alertsRest.notificationItems,
+              visibleNotificationItems: alertsRest.visibleNotificationItems,
+              notificationsPending: alertsRest.notificationsPending,
+              notificationsError: alertsRest.notificationsError,
+              markAlertRead: alertsRest.markAlertRead,
+              markAllAlertsRead: alertsRest.markAllAlertsRead,
+            }}
+            reviews={{
+              reviewItems: reviewsRest.reviewItems,
+              visibleReviewItems: reviewsRest.visibleReviewItems,
+              reviewsPending: reviewsRest.reviewsPending,
+              reviewsError: reviewsRest.reviewsError,
+              markReviewRead: reviewsRest.markReviewRead,
+              markAllReviewsRead: reviewsRest.markAllReviewsRead,
+            }}
+          />
 
           {/* User Menu */}
           <DropdownMenu>
@@ -732,9 +564,9 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
                 </div>
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent className="w-64 border-0 shadow-xl bg-white/95 backdrop-blur-sm rounded-xl p-2" align="end" forceMount>
+            <DropdownMenuContent className="w-64 border shadow-xl bg-popover/95 backdrop-blur-sm rounded-xl p-2" align="end" forceMount>
               <DropdownMenuLabel className="font-normal p-3">
-                <div className="flex items-center gap-3 p-3 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg">
+                <div className="flex items-center gap-3 p-3 bg-muted/60 rounded-lg">
                   <div className="w-12 h-12 bg-gradient-to-br from-green-500 to-emerald-600 rounded-full flex items-center justify-center flex-shrink-0 shadow-md text-white text-base font-bold">
                     {(() => {
                       const userName = user?.name || (user as any)?.firstName || user?.email || ''
@@ -742,31 +574,32 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
                     })()}
                   </div>
                   <div className="flex flex-col space-y-1">
-                    <p className="text-sm font-semibold leading-none text-gray-800">{user?.name || user?.email}</p>
-                    <p className="text-xs leading-none text-gray-600 capitalize">{user?.role || 'User'}</p>
-                    <p className="text-xs leading-none text-gray-500">{user?.email}</p>
+                    <p className="text-sm font-semibold leading-none text-foreground">{user?.name || user?.email}</p>
+                    <p className="text-xs leading-none text-muted-foreground capitalize">{user?.role || 'User'}</p>
+                    <p className="text-xs leading-none text-muted-foreground">{user?.email}</p>
                   </div>
                 </div>
               </DropdownMenuLabel>
               <DropdownMenuSeparator className="my-2" />
               <DropdownMenuItem 
                 onClick={() => router.push("/profile")}
-                className="flex items-center gap-3 p-3 hover:bg-gradient-to-r hover:from-blue-50 hover:to-indigo-50 transition-all duration-200 cursor-pointer rounded-lg m-1"
+                className="flex items-center gap-3 p-3 hover:bg-accent transition-all duration-200 cursor-pointer rounded-lg m-1"
               >
-                <div className="p-2 bg-blue-100 rounded-lg">
-                  <User className="h-4 w-4 text-blue-600" />
+                <div className="p-2 bg-blue-100 dark:bg-blue-950 rounded-lg">
+                  <User className="h-4 w-4 text-blue-600 dark:text-blue-300" />
                 </div>
-                <span className="font-medium text-gray-700">Profile</span>
+                <span className="font-medium text-foreground">Profile</span>
               </DropdownMenuItem>
               <DropdownMenuItem 
                 onClick={() => router.push("/settings")}
-                className="flex items-center gap-3 p-3 hover:bg-gradient-to-r hover:from-emerald-50 hover:to-green-50 transition-all duration-200 cursor-pointer rounded-lg m-1"
+                className="flex items-center gap-3 p-3 hover:bg-accent transition-all duration-200 cursor-pointer rounded-lg m-1"
               >
-                <div className="p-2 bg-emerald-100 rounded-lg">
-                  <Settings className="h-4 w-4 text-emerald-600" />
+                <div className="p-2 bg-emerald-100 dark:bg-emerald-950 rounded-lg">
+                  <Settings className="h-4 w-4 text-emerald-600 dark:text-emerald-300" />
                 </div>
-                <span className="font-medium text-gray-700">Settings</span>
+                <span className="font-medium text-foreground">Settings</span>
               </DropdownMenuItem>
+              <ThemeToggleMenuItem />
               <DropdownMenuSeparator className="my-2" />
               <DropdownMenuItem 
                 onClick={handleLogout}
