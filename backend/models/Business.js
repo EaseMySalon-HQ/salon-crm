@@ -5,6 +5,17 @@ const businessSchema = new mongoose.Schema({
   // Basic Information
   name: { type: String, required: true },
   code: { type: String, unique: true }, // Generated unique code
+  /** Vanity public storefront slug; falls back to code.toLowerCase() when unset */
+  slug: {
+    type: String,
+    trim: true,
+    lowercase: true,
+    unique: true,
+    sparse: true,
+    index: true,
+  },
+  /** Previous slugs that 301 to the current slug */
+  slugAliases: { type: [String], default: [] },
   businessType: { 
     type: String, 
     enum: ['salon', 'spa', 'barbershop', 'beauty_clinic'], 
@@ -213,7 +224,79 @@ const businessSchema = new mongoose.Schema({
       primaryColor: { type: String, default: '#3B82F6' },
       secondaryColor: { type: String, default: '#1E40AF' },
       fontFamily: { type: String, default: 'Inter' }
-    }
+    },
+
+    /** Public mini website / storefront settings */
+    website: {
+      enabled: { type: Boolean, default: false },
+      coverImage: { type: String, default: '' },
+      coverImages: { type: [String], default: [] },
+      tagline: { type: String, default: '' },
+      description: { type: String, default: '', maxlength: 2000 },
+      themeColor: { type: String, default: '#111827' },
+      businessCategory: { type: String, default: '' },
+      seo: {
+        title: { type: String, default: '' },
+        metaDescription: { type: String, default: '' },
+        ogImage: { type: String, default: '' },
+      },
+      social: {
+        instagram: { type: String, default: '' },
+        facebook: { type: String, default: '' },
+        googleMapsUrl: { type: String, default: '' },
+        googleProfileUrl: { type: String, default: '' },
+      },
+      contact: {
+        whatsappNumber: { type: String, default: '' },
+        callNumber: { type: String, default: '' },
+      },
+      visibility: {
+        showPrices: { type: Boolean, default: true },
+        showServices: { type: Boolean, default: true },
+        showStaff: { type: Boolean, default: true },
+        showProducts: { type: Boolean, default: true },
+        retailProductsOnly: { type: Boolean, default: false },
+        showProductPrices: { type: Boolean, default: true },
+        showProductImages: { type: Boolean, default: true },
+        showPackages: { type: Boolean, default: true },
+        showMemberships: { type: Boolean, default: false },
+        showPrepaidWallets: { type: Boolean, default: false },
+        showOffers: { type: Boolean, default: true },
+        showGallery: { type: Boolean, default: true },
+        showReviews: { type: Boolean, default: true },
+      },
+      featured: {
+        serviceIds: [{ type: mongoose.Schema.Types.ObjectId }],
+        packageIds: [{ type: mongoose.Schema.Types.ObjectId }],
+        productIds: [{ type: mongoose.Schema.Types.ObjectId }],
+        membershipIds: [{ type: mongoose.Schema.Types.ObjectId }],
+      },
+      externalAnalytics: {
+        gaMeasurementId: { type: String, default: '' },
+        metaPixelId: { type: String, default: '' },
+        plausibleDomain: { type: String, default: '' },
+      },
+      enquiryForm: {
+        customFields: {
+          type: [
+            {
+              key: { type: String, default: '' },
+              label: { type: String, default: '' },
+              type: {
+                type: String,
+                enum: ['text', 'textarea', 'email', 'phone', 'number', 'date', 'select'],
+                default: 'text',
+              },
+              required: { type: Boolean, default: false },
+              placeholder: { type: String, default: '' },
+              options: [{ type: String }],
+              order: { type: Number, default: 0 },
+            },
+          ],
+          default: [],
+        },
+      },
+    },
   },
   
   

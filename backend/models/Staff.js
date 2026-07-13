@@ -51,6 +51,12 @@ const staffSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  isPublic: { type: Boolean, default: false },
+  isFeatured: { type: Boolean, default: false },
+  displayOrder: { type: Number, default: 0 },
+  slug: { type: String, trim: true, lowercase: true, default: '' },
+  shortDescription: { type: String, default: '', maxlength: 500 },
+  title: { type: String, default: '' },
   isActive: {
     type: Boolean,
     default: true
@@ -148,6 +154,8 @@ const staffSchema = new mongoose.Schema({
 staffSchema.index({ branchId: 1, isActive: 1 });
 staffSchema.index({ branchId: 1, role: 1 });
 staffSchema.index({ branchId: 1, createdAt: -1 });
+staffSchema.index({ branchId: 1, isPublic: 1 });
+staffSchema.index({ branchId: 1, slug: 1 });
 
 // Export both schema and model for flexibility
 module.exports = {

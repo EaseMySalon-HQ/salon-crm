@@ -813,6 +813,9 @@ export interface AppointmentSettingsData {
   bookingTagline?: string
   showcaseImages?: string[]
   bookingHeroTheme?: import("@/lib/booking-hero-themes").BookingHeroThemeId
+  websiteEnabled?: boolean
+  miniSiteSlug?: string
+  miniSiteBookPath?: string
 }
 
 export interface AppointmentSettingsUpdatePayload {

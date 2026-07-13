@@ -10,7 +10,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Settings,
   Building2,
-  Calendar,
   CreditCard,
   ChevronRight,
   Receipt,
@@ -41,7 +40,7 @@ import { buildLoginRedirectHref } from "@/lib/auth-utils"
 import { useRouter } from "next/navigation"
 import { GeneralSettings } from "./general-settings"
 import { BusinessSettings } from "./business-settings"
-import { AppointmentSettings } from "./appointment-settings"
+import { WebsiteSettings } from "./website-settings"
 import { PaymentSettings } from "./payment-settings"
 import { CurrencySettings } from "./currency-settings"
 import { TaxSettings } from "./tax-settings"
@@ -71,7 +70,7 @@ import type { LucideIcon } from "lucide-react"
 const SETTINGS_SECTION_IDS = [
   "general",
   "business",
-  "appointments",
+  "website",
   "currency",
   "tax",
   "payments",
@@ -158,13 +157,26 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     description: "Day-to-day salon workflows, catalog, memberships, and sellable offers.",
     items: [
       {
-        id: "appointments",
-        title: "Appointment settings",
-        description: "Online booking, time slots, working hours, and scheduling rules.",
-        icon: Calendar,
+        id: "website",
+        title: "Salon website",
+        description: "Public mini website, online booking, SEO, visibility, and storefront CTAs.",
+        icon: Globe,
         iconColors:
-          "bg-violet-50 text-violet-600 border-violet-100 group-hover:bg-violet-100/80 group-hover:border-violet-200",
-        searchTerms: ["booking", "schedule", "calendar", "online booking", "public link"],
+          "bg-teal-50 text-teal-600 border-teal-100 group-hover:bg-teal-100/80 group-hover:border-teal-200",
+        searchTerms: [
+          "mini site",
+          "storefront",
+          "seo",
+          "slug",
+          "public website",
+          "booking",
+          "schedule",
+          "calendar",
+          "online booking",
+          "public link",
+          "time slots",
+          "working hours",
+        ],
       },
       {
         id: "services",
@@ -330,6 +342,8 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
         title: "Google Business Profile",
         description: "Connect Google, sync reviews, auto-reply, and local SEO tools.",
         icon: Globe,
+        iconColors:
+          "bg-indigo-50 text-indigo-600 border-indigo-100 group-hover:bg-indigo-100/80 group-hover:border-indigo-200",
         searchTerms: ["gmb", "google", "reviews", "seo", "maps"],
       },
       {
@@ -373,7 +387,8 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
 const ALL_SETTING_ITEMS: SettingsItem[] = SETTINGS_SECTIONS.flatMap((s) => s.items)
 
 /** Plan features required to open a settings module (beyond RBAC). */
-const SETTINGS_PLAN_FEATURES: Partial<Record<SettingsSectionId, string>> = {
+const SETTINGS_PLAN_FEATURES: Partial<Record<SettingsItemId, string>> = {
+  // website: always listed; WebsiteSettings shows upgrade CTA if mini_website missing
   feedback: "feedback_management",
   membership: "membership",
   packages: "packages",
@@ -423,7 +438,7 @@ export function SettingsPage() {
       router.replace("/settings")
       return
     }
-    const requiredFeature = SETTINGS_PLAN_FEATURES[activeSection as SettingsSectionId]
+    const requiredFeature = SETTINGS_PLAN_FEATURES[activeSection as SettingsItemId]
     if (requiredFeature && !hasFeature(requiredFeature)) {
       router.replace("/settings")
     }
@@ -431,12 +446,16 @@ export function SettingsPage() {
 
   // Keep UI in sync with ?section= (refresh, back/forward, external links)
   useEffect(() => {
+    if (sectionParam === 'appointments') {
+      router.replace('/settings?section=website&tab=online-booking')
+      return
+    }
     if (isSettingsSectionId(sectionParam)) {
       setActiveSection(sectionParam)
     } else {
       setActiveSection(null)
     }
-  }, [sectionParam])
+  }, [sectionParam, router])
 
   // Basic authentication check
   useEffect(() => {
@@ -454,7 +473,7 @@ export function SettingsPage() {
       if (!permissionModule) return false
       if (!hasPermission(permissionModule, "view")) return false
     }
-    const requiredFeature = SETTINGS_PLAN_FEATURES[categoryId as SettingsSectionId]
+    const requiredFeature = SETTINGS_PLAN_FEATURES[categoryId as SettingsItemId]
     if (requiredFeature && !hasFeature(requiredFeature)) return false
     return true
   }
@@ -490,8 +509,8 @@ export function SettingsPage() {
         return <GeneralSettings />
       case "business":
         return <BusinessSettings />
-      case "appointments":
-        return <AppointmentSettings />
+      case "website":
+        return <WebsiteSettings />
       case "currency":
         return <CurrencySettings />
       case "tax":

@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { websiteCatalogFields } = require('../lib/website-catalog-fields');
 
 const prepaidPlanSchema = new mongoose.Schema(
   {
@@ -26,6 +27,7 @@ const prepaidPlanSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       default: null,
     },
+    ...websiteCatalogFields(mongoose),
   },
   { timestamps: true }
 );

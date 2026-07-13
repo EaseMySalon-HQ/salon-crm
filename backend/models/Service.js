@@ -53,6 +53,15 @@ const serviceSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  isPublic: { type: Boolean, default: true },
+  isFeatured: { type: Boolean, default: false },
+  displayOrder: { type: Number, default: 0 },
+  slug: { type: String, trim: true, lowercase: true, default: '' },
+  shortDescription: { type: String, default: '', maxlength: 500 },
+  seoTitle: { type: String, default: '', maxlength: 120 },
+  seoDescription: { type: String, default: '', maxlength: 320 },
+  imageUrl: { type: String, default: '' },
+  imageAlt: { type: String, default: '' },
   serviceKind: {
     type: String,
     enum: ['simple', 'bundle'],
@@ -97,6 +106,8 @@ const serviceSchema = new mongoose.Schema({
 
 serviceSchema.index({ branchId: 1, isActive: 1, name: 1 });
 serviceSchema.index({ branchId: 1, category: 1 });
+serviceSchema.index({ branchId: 1, slug: 1 });
+serviceSchema.index({ branchId: 1, isPublic: 1, isFeatured: 1 });
 
 // Export both schema and model for flexibility
 module.exports = {

@@ -24,6 +24,7 @@ const PLANS = {
       'staff_management',
       'basic_reports',
       'online_booking',
+      'mini_website',
       'gmb',
     ],
     limits: {
@@ -63,6 +64,7 @@ const PLANS = {
       'reward_points',
       'feedback_management',
       'online_booking',
+      'mini_website',
       'gmb',
       'attendance',
     ],
@@ -113,6 +115,7 @@ const PLANS = {
       'approval_workflows',
       'whatsapp_integration',
       'online_booking',
+      'mini_website',
       'gmb',
       'attendance',
       'payroll',
@@ -271,6 +274,12 @@ const FEATURES = {
     id: 'online_booking',
     name: 'Online Booking',
     description: 'Public booking page and shareable link for client self-scheduling',
+    category: 'growth',
+  },
+  mini_website: {
+    id: 'mini_website',
+    name: 'Salon Mini Website',
+    description: 'SEO-friendly public storefront with services, gallery, and booking CTAs',
     category: 'growth',
   },
   custom_receipt_templates: {
