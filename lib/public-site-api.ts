@@ -2,10 +2,14 @@
  * Public salon mini-website API (unauthenticated).
  */
 
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api').replace(/\/$/, '')
+import { resolveApiBaseUrl } from '@/lib/resolve-api-base-url'
+
+function apiBase() {
+  return resolveApiBaseUrl()
+}
 
 function siteBase(slug: string) {
-  return `${API_BASE}/public/site/${encodeURIComponent(String(slug).trim().toLowerCase())}`
+  return `${apiBase()}/public/site/${encodeURIComponent(String(slug).trim().toLowerCase())}`
 }
 
 async function siteFetch<T>(slug: string, path: string, init?: RequestInit): Promise<T> {

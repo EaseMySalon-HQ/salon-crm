@@ -1,6 +1,7 @@
 import { MetadataRoute } from "next"
 
 import { BLOG_POSTS } from "@/lib/blog/posts"
+import { resolveApiBaseUrl } from "@/lib/resolve-api-base-url"
 
 const STATIC_ENTRIES: Array<{
   path: string
@@ -49,11 +50,7 @@ const SALON_SUBPATHS = [
 
 async function fetchSalonEntries(baseUrl: string): Promise<MetadataRoute.Sitemap> {
   try {
-    const apiBase = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api").replace(
-      /\/$/,
-      ""
-    )
-    const res = await fetch(`${apiBase}/public/sites/sitemap-entries`, {
+    const res = await fetch(`${resolveApiBaseUrl()}/public/sites/sitemap-entries`, {
       next: { revalidate: 3600 },
     })
     if (!res.ok) return []
