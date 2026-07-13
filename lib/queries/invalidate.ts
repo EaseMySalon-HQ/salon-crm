@@ -11,6 +11,7 @@ import type { QueryClient } from "@tanstack/react-query"
 export function invalidateDashboard(qc: QueryClient) {
   qc.invalidateQueries({ queryKey: ["dashboard", "init"] })
   qc.invalidateQueries({ queryKey: ["notifications", "feed"] })
+  qc.invalidateQueries({ queryKey: ["notifications", "appointments-upcoming"] })
 }
 
 /** Calendar/list appointment ranges share a `["appointments"]` key prefix. */

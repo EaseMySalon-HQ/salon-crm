@@ -261,13 +261,9 @@ const verifyAdminPasswordBodySchema = z
 
 const expenseCategorySchema = z.enum([
   'Supplies',
-  'Equipment',
-  'Utilities',
   'Marketing',
   'Rent',
-  'Insurance',
   'Maintenance',
-  'Professional Services',
   'Travel',
   'Other',
 ]);

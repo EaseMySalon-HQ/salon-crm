@@ -14,6 +14,12 @@ import { EditCommissionProfileModal } from "./edit-commission-profile-modal"
 import { CommissionProfileAPI } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
 import { hasStaffDirectoryTabPermission } from "@/lib/permission-mappings"
+import {
+  SETTINGS_TABLE_BODY_ROW,
+  SETTINGS_TABLE_HEAD_CELL,
+  SETTINGS_TABLE_HEAD_ROW,
+  SETTINGS_TABLE_SHELL,
+} from "@/lib/settings-panel-theme"
 
 export function CommissionProfileList() {
   const { toast } = useToast()
@@ -206,22 +212,22 @@ export function CommissionProfileList() {
       </div>
 
       {/* Profiles Table */}
-      <div className="border rounded-lg overflow-hidden">
+      <div className={SETTINGS_TABLE_SHELL}>
         <Table>
           <TableHeader>
-            <TableRow className="bg-slate-50 border-b border-slate-200">
-              <TableHead className="font-semibold text-slate-700 py-4 px-6">Profile Name</TableHead>
-              <TableHead className="font-semibold text-slate-700 py-4 px-6">Profile Type</TableHead>
-              <TableHead className="font-semibold text-slate-700 py-4 px-6">Description</TableHead>
-              <TableHead className="font-semibold text-slate-700 py-4 px-6">Status</TableHead>
-              <TableHead className="font-semibold text-slate-700 py-4 px-6">Created</TableHead>
-              <TableHead className="text-right font-semibold text-slate-700 py-4 px-6">Actions</TableHead>
+            <TableRow className={SETTINGS_TABLE_HEAD_ROW}>
+              <TableHead className={`${SETTINGS_TABLE_HEAD_CELL} py-4 px-6`}>Profile Name</TableHead>
+              <TableHead className={`${SETTINGS_TABLE_HEAD_CELL} py-4 px-6`}>Profile Type</TableHead>
+              <TableHead className={`${SETTINGS_TABLE_HEAD_CELL} py-4 px-6`}>Description</TableHead>
+              <TableHead className={`${SETTINGS_TABLE_HEAD_CELL} py-4 px-6`}>Status</TableHead>
+              <TableHead className={`${SETTINGS_TABLE_HEAD_CELL} py-4 px-6`}>Created</TableHead>
+              <TableHead className={`text-right ${SETTINGS_TABLE_HEAD_CELL} py-4 px-6`}>Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={6} className="text-center py-12 text-slate-500">
+                <TableCell colSpan={6} className="text-center py-12 text-slate-500 dark:text-muted-foreground">
                   Loading commission profiles...
                 </TableCell>
               </TableRow>
@@ -229,22 +235,22 @@ export function CommissionProfileList() {
               <TableRow>
                 <TableCell colSpan={6} className="text-center py-12">
                   <div className="flex flex-col items-center gap-3">
-                    <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center">
-                      <Award className="h-8 w-8 text-slate-400" />
+                    <div className="w-16 h-16 bg-slate-100 dark:bg-muted rounded-full flex items-center justify-center">
+                      <Award className="h-8 w-8 text-slate-400 dark:text-muted-foreground" />
                     </div>
-                    <p className="text-slate-600 font-medium">No commission profiles yet</p>
-                    <p className="text-slate-500 text-sm">Create one to start tracking commissions.</p>
+                    <p className="text-slate-600 dark:text-foreground font-medium">No commission profiles yet</p>
+                    <p className="text-slate-500 dark:text-muted-foreground text-sm">Create one to start tracking commissions.</p>
                   </div>
                 </TableCell>
               </TableRow>
             ) : (
               profiles.map((profile) => (
-                <TableRow key={profile.id} className="hover:bg-slate-50/50 border-b border-slate-100 transition-colors duration-200">
-                  <TableCell className="py-4 px-6 font-medium text-slate-800">{profile.name}</TableCell>
+                <TableRow key={profile.id} className={SETTINGS_TABLE_BODY_ROW}>
+                  <TableCell className="py-4 px-6 font-medium text-slate-800 dark:text-foreground">{profile.name}</TableCell>
                   <TableCell className="py-4 px-6">
                     {getProfileTypeBadge(profile.type)}
                   </TableCell>
-                  <TableCell className="py-4 px-6 text-slate-600">
+                  <TableCell className="py-4 px-6 text-slate-600 dark:text-muted-foreground">
                     {profile.description || "No description"}
                   </TableCell>
                   <TableCell className="py-4 px-6">
@@ -252,14 +258,14 @@ export function CommissionProfileList() {
                       {profile.isActive ? "Active" : "Inactive"}
                     </Badge>
                   </TableCell>
-                  <TableCell className="py-4 px-6 text-slate-600">
+                  <TableCell className="py-4 px-6 text-slate-600 dark:text-muted-foreground">
                     {profile.createdAt ? new Date(profile.createdAt).toLocaleDateString() : "—"}
                   </TableCell>
                   <TableCell className="text-right py-4 px-6">
                     {(canEdit || canDelete) ? (
                     <DropdownMenu modal={false}>
                       <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" className="h-9 w-9 p-0 hover:bg-slate-100 rounded-lg transition-all duration-200">
+                        <Button variant="ghost" className="h-9 w-9 p-0 hover:bg-slate-100 dark:hover:bg-muted rounded-lg transition-all duration-200">
                           <MoreHorizontal className="h-4 w-4" />
                         </Button>
                       </DropdownMenuTrigger>

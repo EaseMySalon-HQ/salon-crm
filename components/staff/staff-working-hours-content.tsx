@@ -47,6 +47,11 @@ import {
   type TimesheetExportBlock,
 } from "@/lib/staff-timesheet-export"
 import { useToast } from "@/hooks/use-toast"
+import {
+  SETTINGS_INNER_CARD,
+  SETTINGS_TABLE_HEAD_ROW,
+  SETTINGS_TOOLBAR,
+} from "@/lib/settings-panel-theme"
 
 type TimesheetExportPeriod = TimesheetPeriod | "visible_week"
 
@@ -970,32 +975,32 @@ export function StaffWorkingHoursContent() {
     <>
       <div className="space-y-6">
           {/* Toolbar: outside the table card */}
-          <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+          <div className={SETTINGS_TOOLBAR}>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
               <div className="flex flex-wrap items-center gap-2">
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="h-10 rounded-xl border border-slate-200 bg-white shadow-sm text-slate-700 gap-1.5 hover:bg-slate-50 shrink-0 px-3 text-sm font-medium"
+                  className="h-10 rounded-xl border border-slate-200 dark:border-border bg-white dark:bg-card shadow-sm text-slate-700 dark:text-foreground gap-1.5 hover:bg-slate-50 dark:hover:bg-muted shrink-0 px-3 text-sm font-medium"
                   onClick={() => setBlockTimeModalOpen(true)}
                 >
                   <Plus className="h-4 w-4" />
                   Add block time
                 </Button>
-                <div className="flex items-center gap-0.5 h-10 border border-slate-200 rounded-xl bg-white shadow-sm px-1.5 w-full max-w-[220px] sm:w-[220px]">
+                <div className="flex items-center gap-0.5 h-10 border border-slate-200 dark:border-border rounded-xl bg-white dark:bg-card shadow-sm px-1.5 w-full max-w-[220px] sm:w-[220px]">
                   <Button
                     type="button"
                     variant="ghost"
                     size="icon"
-                    className="h-8 w-8 rounded-lg shrink-0 text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                    className="h-8 w-8 rounded-lg shrink-0 text-slate-600 dark:text-muted-foreground hover:bg-slate-100 dark:hover:bg-muted hover:text-slate-900 dark:hover:text-foreground"
                     onClick={() => setSelectedDate(format(subDays(selectedDateObj, 7), "yyyy-MM-dd"))}
                     aria-label="Previous week"
                   >
                     <ChevronLeft className="h-4 w-4" />
                   </Button>
                   <div
-                    className="relative flex-1 min-w-0 h-8 flex items-center justify-center cursor-pointer rounded-md hover:bg-slate-50 transition-colors text-sm font-medium text-slate-800"
+                    className="relative flex-1 min-w-0 h-8 flex items-center justify-center cursor-pointer rounded-md hover:bg-slate-50 dark:hover:bg-muted transition-colors text-sm font-medium text-slate-800 dark:text-foreground"
                     onClick={() => {
                       const el = dateInputRef.current
                       if (el) {
@@ -1030,7 +1035,7 @@ export function StaffWorkingHoursContent() {
                     type="button"
                     variant="ghost"
                     size="icon"
-                    className="h-8 w-8 rounded-lg shrink-0 text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                    className="h-8 w-8 rounded-lg shrink-0 text-slate-600 dark:text-muted-foreground hover:bg-slate-100 dark:hover:bg-muted hover:text-slate-900 dark:hover:text-foreground"
                     onClick={() => setSelectedDate(format(addDays(selectedDateObj, 7), "yyyy-MM-dd"))}
                     aria-label="Next week"
                   >
@@ -1042,7 +1047,7 @@ export function StaffWorkingHoursContent() {
                 <div className="space-y-1">
                   <Label className="text-xs text-muted-foreground">Staff</Label>
                   <Select value={staffFilter} onValueChange={setStaffFilter}>
-                    <SelectTrigger className="w-[148px] bg-white">
+                    <SelectTrigger className="w-[148px] bg-white dark:bg-card">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -1061,7 +1066,7 @@ export function StaffWorkingHoursContent() {
                     value={exportPeriod}
                     onValueChange={(v) => setExportPeriod(v as TimesheetExportPeriod)}
                   >
-                    <SelectTrigger className="w-[168px] bg-white">
+                    <SelectTrigger className="w-[168px] bg-white dark:bg-card">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -1079,13 +1084,13 @@ export function StaffWorkingHoursContent() {
                       type="date"
                       value={exportCustomFrom}
                       onChange={(e) => setExportCustomFrom(e.target.value)}
-                      className="w-[140px] bg-white"
+                      className="w-[140px] bg-white dark:bg-card"
                     />
                     <Input
                       type="date"
                       value={exportCustomTo}
                       onChange={(e) => setExportCustomTo(e.target.value)}
-                      className="w-[140px] bg-white"
+                      className="w-[140px] bg-white dark:bg-card"
                     />
                   </>
                 ) : null}
@@ -1115,7 +1120,7 @@ export function StaffWorkingHoursContent() {
             </div>
           </div>
 
-          <div className="bg-white rounded-lg shadow-sm border border-slate-100 overflow-hidden">
+          <div className={SETTINGS_INNER_CARD}>
             <Card className="border-0 rounded-2xl">
               <CardContent className="p-0">
                 {loading ? (
@@ -1123,13 +1128,13 @@ export function StaffWorkingHoursContent() {
                     <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
                   </div>
                 ) : filteredRows.length === 0 ? (
-                  <div className="py-10 text-center text-slate-500 text-sm">No staff found.</div>
+                  <div className="py-10 text-center text-slate-500 dark:text-muted-foreground text-sm">No staff found.</div>
                 ) : (
                   <div className="overflow-x-auto">
                     <table className="min-w-full text-sm">
                       <thead>
-                        <tr className="bg-slate-50 border-b border-slate-200">
-                          <th className="text-left px-4 py-3 font-semibold text-slate-700 w-56">Staff</th>
+                        <tr className={SETTINGS_TABLE_HEAD_ROW}>
+                          <th className="text-left px-4 py-3 font-semibold text-slate-700 dark:text-foreground w-56">Staff</th>
                           {weekDates.map((d, dayIndex) => {
                             const isToday = dayIndex === todayColumnIndex
                             return (
@@ -1137,12 +1142,12 @@ export function StaffWorkingHoursContent() {
                                 key={d.toISOString()}
                                 className={`text-center px-3 py-3 font-semibold whitespace-nowrap ${
                                   isToday
-                                    ? "bg-indigo-100 text-indigo-800 border-x border-indigo-200"
-                                    : "text-slate-700"
+                                    ? "bg-indigo-100 dark:bg-indigo-950/40 text-indigo-800 dark:text-indigo-200 border-x border-indigo-200 dark:border-indigo-500/30"
+                                    : "text-slate-700 dark:text-foreground"
                                 }`}
                               >
                                 <div className="flex flex-col items-center leading-tight gap-0.5">
-                                  <span className={isToday ? "text-indigo-600 font-medium" : "text-slate-500 font-normal"}>
+                                  <span className={isToday ? "text-indigo-600 dark:text-indigo-300 font-medium" : "text-slate-500 dark:text-muted-foreground font-normal"}>
                                     {format(d, "dd MMM")}
                                   </span>
                                   <span>{format(d, "EEE")}{isToday ? " (Today)" : ""}</span>
@@ -1156,13 +1161,13 @@ export function StaffWorkingHoursContent() {
                         {filteredRows.map((s) => (
                             <tr
                               key={s._id}
-                              className="border-b border-slate-100 last:border-b-0 hover:bg-slate-50/60"
+                              className="border-b border-slate-100 dark:border-border last:border-b-0 hover:bg-slate-50/60 dark:hover:bg-muted/50"
                             >
                               <td className="px-4 py-3 align-top">
                                 <div className="flex flex-col gap-1">
-                                  <div className="font-medium text-slate-800 text-sm">{s.name}</div>
+                                  <div className="font-medium text-slate-800 dark:text-foreground text-sm">{s.name}</div>
                                   {s.role ? (
-                                    <div className="flex items-center gap-2 text-xs text-slate-500">
+                                    <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-muted-foreground">
                                       <Badge
                                         variant={s.role === "admin" ? "default" : s.role === "manager" ? "secondary" : "outline"}
                                         className="text-[11px] px-2 py-0.5"
@@ -1201,7 +1206,7 @@ export function StaffWorkingHoursContent() {
                                       ) : (
                                         <div className="flex flex-col gap-1 text-[10px] leading-snug">
                                           <div className="flex items-stretch gap-1">
-                                            <div className="flex min-w-0 flex-1 items-center justify-between gap-1 rounded-md border border-slate-100 bg-slate-50/80 px-2 py-1">
+                                            <div className="flex min-w-0 flex-1 items-center justify-between gap-1 rounded-md border border-slate-100 dark:border-border bg-slate-50/80 dark:bg-muted/50 px-2 py-1">
                                               <span className="text-slate-400 shrink-0">In</span>
                                               <span
                                                 className={`font-medium tabular-nums truncate ${
@@ -1217,7 +1222,7 @@ export function StaffWorkingHoursContent() {
                                                   : "—"}
                                               </span>
                                             </div>
-                                            <div className="flex min-w-0 flex-1 items-center justify-between gap-1 rounded-md border border-slate-100 bg-slate-50/80 px-2 py-1">
+                                            <div className="flex min-w-0 flex-1 items-center justify-between gap-1 rounded-md border border-slate-100 dark:border-border bg-slate-50/80 dark:bg-muted/50 px-2 py-1">
                                               <span className="text-slate-400 shrink-0">Out</span>
                                               <span
                                                 className={`font-medium tabular-nums truncate ${
@@ -1236,7 +1241,7 @@ export function StaffWorkingHoursContent() {
                                               </span>
                                             </div>
                                           </div>
-                                          <div className="flex items-center justify-between gap-2 rounded-md border border-slate-100 bg-slate-50/80 px-2 py-1">
+                                          <div className="flex items-center justify-between gap-2 rounded-md border border-slate-100 dark:border-border bg-slate-50/80 dark:bg-muted/50 px-2 py-1">
                                             <span className="text-slate-400 shrink-0">Duration</span>
                                             <span
                                               className={`font-medium tabular-nums ${

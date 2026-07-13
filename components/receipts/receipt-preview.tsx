@@ -12,6 +12,8 @@ import { formatReceiptItemStaffNames } from "@/lib/receipt-staff-format"
 import { receiptWalkInSaleLabel } from "@/lib/receipt-line-source"
 import { receiptTipDisplayLines } from "@/lib/receipt-tip-lines"
 import { ReceiptTotalsSection, ReceiptGrandTotalRow } from "@/components/receipts/receipt-totals-section"
+import { getReceiptPreviewClassName, resolveReceiptPaperSize } from "@/lib/receipt-paper-size"
+import { cn } from "@/lib/utils"
 import { Card, CardContent } from "@/components/ui/card"
 import { useCurrency } from "@/hooks/use-currency"
 
@@ -94,9 +96,10 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
   const tpl = businessSettings?.receiptTemplate || {}
   const showLogo = tpl.showLogo !== false
   const showGst = tpl.showGstNumber !== false
+  const paperSize = resolveReceiptPaperSize(businessSettings)
 
   return (
-    <Card className="max-w-2xl w-full mx-auto bg-white relative">
+    <Card className={cn("bg-white relative", getReceiptPreviewClassName(paperSize))}>
       <CardContent className="p-6 font-mono text-sm">
         {/* Header */}
         <div className="text-center border-b-2 border-black pb-3 mb-4">

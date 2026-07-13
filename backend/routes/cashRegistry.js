@@ -152,19 +152,47 @@ router.post('/', auth, async (req, res) => {
       shiftType: shiftType
     });
     
-    let existingRecord = await CashRegistry.findOne({
+    const dayQuery = {
       date: {
         $gte: startOfDay,
         $lt: endOfDay
       }
+    };
+    if (req.user.branchId) {
+      dayQuery.branchId = req.user.branchId;
+    }
+
+    const openingRecord = await CashRegistry.findOne({
+      ...dayQuery,
+      shiftType: 'opening'
     });
+    const closingRecord = await CashRegistry.findOne({
+      ...dayQuery,
+      shiftType: 'closing'
+    });
+    const existingRecord = shiftType === 'opening' ? openingRecord : closingRecord;
+
+    if (shiftType === 'opening' && openingRecord?.openingBalance > 0) {
+      const closingDone = closingRecord?.closingBalance > 0;
+      if (!closingDone) {
+        return res.status(400).json({
+          success: false,
+          message: 'Opening shift is already recorded for this date. Complete the closing shift before recording opening again.'
+        });
+      }
+    }
     
-    logger.debug('Existing record found:', existingRecord ? {
-      id: existingRecord._id,
-      shiftType: existingRecord.shiftType,
-      openingBalance: existingRecord.openingBalance,
-      closingBalance: existingRecord.closingBalance
-    } : 'None');
+    logger.debug('Existing records found:', {
+      opening: openingRecord ? {
+        id: openingRecord._id,
+        openingBalance: openingRecord.openingBalance
+      } : null,
+      closing: closingRecord ? {
+        id: closingRecord._id,
+        closingBalance: closingRecord.closingBalance
+      } : null,
+      updating: existingRecord ? existingRecord._id : null
+    });
     
     let cashCollected = 0;
     let expenseValue = 0;
@@ -245,7 +273,7 @@ router.post('/', auth, async (req, res) => {
       expenseValue = expenses.reduce((sum, expense) => sum + expense.amount, 0);
       
       // Calculate cash balance and differences
-      const existingOpeningBalance = existingRecord ? existingRecord.openingBalance : 0;
+      const existingOpeningBalance = openingRecord ? openingRecord.openingBalance : 0;
       cashBalance = existingOpeningBalance + cashCollected - expenseValue;
       balanceDifference = totalBalance - cashBalance;
       onlinePosDifference = onlineCash - posCash;

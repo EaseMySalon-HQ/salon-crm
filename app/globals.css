@@ -1,3 +1,5 @@
+@import "../styles/dark-mode-compat.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -446,11 +448,52 @@
   }
 }
 
+/* Appointments calendar grid — theme tokens for inline slot fills & guides */
+.appointments-calendar-surface {
+  --cal-cell-base: 255 255 255;
+  --cal-cell-muted: 248 250 252;
+  --cal-cell-outside-in: 226 232 240;
+  --cal-cell-alt: 248 250 252;
+  --cal-cell-current-hour: 255 251 235;
+  --cal-slot-menu: 245 243 255;
+  --cal-drag-valid: 91 33 182;
+  --cal-drag-invalid: 153 27 27;
+  --cal-guide-1: 203 213 225;
+  --cal-guide-2: 226 232 240;
+  --cal-hover-slot: 237 233 254;
+  --cal-header-shadow: 0 0 0;
+}
+
+.dark .appointments-calendar-surface {
+  --cal-cell-base: 15 23 42;
+  --cal-cell-muted: 30 41 59;
+  --cal-cell-outside-in: 51 65 85;
+  --cal-cell-alt: 30 41 59;
+  --cal-cell-current-hour: 69 26 3;
+  --cal-slot-menu: 46 16 101;
+  --cal-drag-valid: 124 58 237;
+  --cal-drag-invalid: 220 38 38;
+  --cal-guide-1: 71 85 105;
+  --cal-guide-2: 51 65 85;
+  --cal-hover-slot: 76 29 149;
+  --cal-header-shadow: 255 255 255;
+}
+
+.calendar-staff-header-shadow {
+  box-shadow: 0 1px 0 0 rgb(var(--cal-header-shadow) / 0.05);
+}
+
 /* Outside working hours (per staff) — tint comes from inline layered backgrounds with 5-min guides */
 .calendar-outside-hours {
   color: rgb(148 163 184) !important;
-  border-right-color: rgb(203 213 225) !important; /* slate-300 - light column lines */
-  border-bottom-color: rgb(203 213 225) !important; /* slate-300 - light row lines */
+  border-right-color: rgb(203 213 225) !important;
+  border-bottom-color: rgb(203 213 225) !important;
+}
+
+.dark .calendar-outside-hours {
+  color: rgb(100 116 139) !important;
+  border-right-color: rgb(51 65 85) !important;
+  border-bottom-color: rgb(51 65 85) !important;
 }
 
 @layer base {
@@ -533,4 +576,49 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* Quick-add nav shortcuts — custom hover (Tailwind from-blue-50 + bg-gradient is stripped in dark-mode-compat). */
+.quick-add-menu-item {
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.quick-add-menu-item:hover,
+.quick-add-menu-item:focus,
+.quick-add-menu-item[data-highlighted] {
+  background-image: linear-gradient(to right, rgb(239 246 255), rgb(238 242 255)) !important;
+  background-color: transparent !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+html.dark .quick-add-menu-item:hover,
+html.dark .quick-add-menu-item:focus,
+html.dark .quick-add-menu-item[data-highlighted] {
+  background-image: none !important;
+  background-color: hsl(217 91% 60% / 0.3) !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+.quick-add-menu-item:hover .quick-add-menu-icon,
+.quick-add-menu-item:focus .quick-add-menu-icon,
+.quick-add-menu-item[data-highlighted] .quick-add-menu-icon {
+  background-color: rgb(191 219 254) !important;
+}
+
+html.dark .quick-add-menu-item:hover .quick-add-menu-icon,
+html.dark .quick-add-menu-item:focus .quick-add-menu-icon,
+html.dark .quick-add-menu-item[data-highlighted] .quick-add-menu-icon {
+  background-color: hsl(217 91% 60% / 0.38) !important;
+}
+
+.quick-add-menu-item:hover .quick-add-menu-icon-svg,
+.quick-add-menu-item:focus .quick-add-menu-icon-svg,
+.quick-add-menu-item[data-highlighted] .quick-add-menu-icon-svg {
+  color: rgb(29 78 216) !important;
+}
+
+html.dark .quick-add-menu-item:hover .quick-add-menu-icon-svg,
+html.dark .quick-add-menu-item:focus .quick-add-menu-icon-svg,
+html.dark .quick-add-menu-item[data-highlighted] .quick-add-menu-icon-svg {
+  color: rgb(147 197 253) !important;
 }

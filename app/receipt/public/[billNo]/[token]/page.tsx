@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react"
 import { useParams } from "next/navigation"
-import { ReceiptPreview } from "@/components/receipts/receipt-preview"
+import { ReceiptTemplateView, printReceiptWithTemplate } from "@/components/receipts/receipt-template-view"
+import { ReceiptPrintStyles } from "@/components/receipts/receipt-print-styles"
 import { Button } from "@/components/ui/button"
 import { Download } from "lucide-react"
 import { SalesAPI } from "@/lib/api"
@@ -201,13 +202,23 @@ export default function PublicReceiptPage() {
   }, [params.billNo, params.token, applyPublicReceiptResponse])
 
   const handleDownloadPDF = () => {
-    // Simply trigger browser's print dialog (user can save as PDF)
-    window.print()
+    if (!receipt) return
+    printReceiptWithTemplate(
+      receiptPreviewFromBillPageData({
+        ...receipt,
+        payments: receipt.payments.map((payment) => ({
+          mode: payment.type,
+          amount: payment.amount,
+          recordedAt: payment.recordedAt,
+        })),
+      }),
+      businessSettings
+    )
   }
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
           <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
           <p className="text-gray-600">Loading receipt...</p>
@@ -218,7 +229,7 @@ export default function PublicReceiptPage() {
 
   if (error || !receipt) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
           <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
             <span className="text-2xl">❌</span>
@@ -232,7 +243,7 @@ export default function PublicReceiptPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
+    <div className="min-h-screen bg-background p-6">
       {/* Receipt Content - Clean view without action buttons */}
       <div className="max-w-4xl mx-auto">
         <div className="mb-4 flex flex-wrap justify-end gap-2 items-start no-print">
@@ -246,8 +257,8 @@ export default function PublicReceiptPage() {
             Download PDF
           </Button>
         </div>
-        <div className="bg-white rounded-lg shadow-sm overflow-hidden">
-          <ReceiptPreview
+        <div className="bg-white rounded-lg shadow-sm overflow-hidden overflow-x-hidden flex justify-center">
+          <ReceiptTemplateView
             receipt={receiptPreviewFromBillPageData({
               ...receipt,
               payments: receipt.payments.map((payment) => ({
@@ -261,13 +272,7 @@ export default function PublicReceiptPage() {
         </div>
       </div>
 
-      {/* Print styles - hide button when printing */}
-      <style jsx global>{`
-        @media print {
-          body { margin: 0; }
-          .no-print { display: none !important; }
-        }
-      `}</style>
+      <ReceiptPrintStyles businessSettings={businessSettings} />
     </div>
   )
 }

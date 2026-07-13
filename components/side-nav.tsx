@@ -157,7 +157,7 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
 
   return (
     <aside className={cn(
-      "hidden border-r bg-gradient-to-b from-slate-50 to-gray-100 md:block shadow-xl transition-all duration-300 fixed left-0 z-50 shrink-0",
+      "hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:block shadow-xl transition-all duration-300 fixed left-0 z-50 shrink-0",
       isImpersonation ? "top-10 h-[calc(100vh-2.5rem)]" : "top-0 h-screen",
       isCollapsed ? "w-24" : "w-72"
     )}>
@@ -165,7 +165,7 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
         <Button
           variant="ghost"
           size="icon"
-          className="absolute -right-3 top-20 z-10 h-6 w-6 rounded-full bg-white border-2 border-gray-200 shadow-md hover:shadow-lg transition-all"
+          className="absolute -right-3 top-20 z-10 h-6 w-6 rounded-full bg-background border-2 border-border shadow-md hover:shadow-lg transition-all"
           onClick={toggleCollapsed}
         >
           {isCollapsed ? (
@@ -176,7 +176,7 @@ export function SideNav({ isImpersonation = false }: { isImpersonation?: boolean
         </Button>
 
         <div className={cn(
-          "flex h-16 items-center border-b border-gray-200 mb-2 pb-4 transition-all",
+          "flex h-16 items-center border-b border-gray-200 dark:border-border mb-2 pb-4 transition-all",
           isCollapsed ? "justify-center px-2" : "px-2"
         )}>
           <Link prefetch={false} href="/dashboard" className={cn(

@@ -15540,6 +15540,65 @@ app.delete(
   }
 });
 
+const RECEIPT_PAPER_SIZES = ["57mm", "80mm", "A5", "A4"];
+
+app.get("/api/settings/general", authenticateToken, setupBusinessDatabase, async (req, res) => {
+  try {
+    const { BusinessSettings } = req.businessModels;
+    let settings = await BusinessSettings.findOne();
+
+    if (!settings) {
+      settings = new BusinessSettings({ branchId: req.user.branchId });
+      await settings.save();
+    }
+
+    res.json({
+      success: true,
+      data: {
+        receiptPaperSize: settings.receiptPaperSize || "A4",
+        timezone: "Asia/Kolkata",
+      },
+    });
+  } catch (error) {
+    logger.error("Get general settings error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
+app.put("/api/settings/general", authenticateToken, setupBusinessDatabase, requirePermission('general_settings', 'edit'), async (req, res) => {
+  try {
+    const { receiptPaperSize } = req.body || {};
+    const { BusinessSettings } = req.businessModels;
+
+    if (!RECEIPT_PAPER_SIZES.includes(receiptPaperSize)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid receipt template. Choose 57mm, 80mm, A5, or A4.",
+      });
+    }
+
+    let settings = await BusinessSettings.findOne();
+    if (!settings) {
+      settings = new BusinessSettings({ branchId: req.user.branchId });
+    }
+
+    settings.receiptPaperSize = receiptPaperSize;
+    await settings.save();
+
+    res.json({
+      success: true,
+      data: {
+        receiptPaperSize: settings.receiptPaperSize,
+        timezone: "Asia/Kolkata",
+      },
+      message: "General settings updated successfully",
+    });
+  } catch (error) {
+    logger.error("Update general settings error:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
 // --- BUSINESS SETTINGS API ---
 app.get("/api/settings/business", authenticateToken, setupBusinessDatabase, async (req, res) => {
   try {

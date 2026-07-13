@@ -64,6 +64,7 @@ import { ProductsSettingsTabs } from "@/components/settings/products-settings-ta
 import { CategoryManagement } from "@/components/categories/category-management"
 
 import { SETTINGS_PERMISSION_MAP, canAccessStaffDirectory } from "@/lib/permission-mappings"
+import { SETTINGS_PANEL_SHELL } from "@/lib/settings-panel-theme"
 import { useEntitlements } from "@/hooks/use-entitlements"
 import type { LucideIcon } from "lucide-react"
 
@@ -590,18 +591,18 @@ export function SettingsPage() {
     <div
       className={
         activeSection
-          ? "min-h-screen w-full max-w-none bg-slate-50/80 px-0 py-4 sm:py-6 md:py-8"
-          : "min-h-screen bg-slate-50/80 p-4 sm:p-6 md:p-8"
+          ? "min-h-screen w-full max-w-none bg-slate-50/80 dark:bg-background px-0 py-4 sm:py-6 md:py-8"
+          : "min-h-screen bg-slate-50/80 dark:bg-background p-4 sm:p-6 md:p-8"
       }
     >
       {!activeSection ? (
         <div className="mx-auto max-w-6xl space-y-8">
           {/* Header + search */}
           <header className="space-y-1">
-            <h1 className="text-lg font-semibold tracking-tight text-slate-900 sm:text-xl">
+            <h1 className="text-lg font-semibold tracking-tight text-foreground sm:text-xl">
               Settings
             </h1>
-            <p className="text-sm text-slate-500 max-w-2xl">
+            <p className="text-sm text-muted-foreground max-w-2xl">
               Configure your business, operations, and billing. Use search to jump to a module quickly.
             </p>
           </header>
@@ -625,13 +626,13 @@ export function SettingsPage() {
               placeholder="Search settings…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="h-10 pl-9 pr-3 border-slate-200 bg-white text-sm shadow-sm placeholder:text-slate-400 focus-visible:ring-1 focus-visible:ring-slate-400/30"
+              className="h-10 pl-9 pr-3 border-border bg-background text-sm shadow-sm placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring/30"
             />
           </div>
 
           {/* Sections */}
           {filteredSections.length === 0 ? (
-            <p className="text-sm text-slate-500 py-6 text-center border border-dashed border-slate-200 rounded-xl bg-white">
+            <p className="text-sm text-muted-foreground py-6 text-center border border-dashed border-border rounded-xl bg-card">
               No settings match your search. Try a different term.
             </p>
           ) : (
@@ -644,7 +645,7 @@ export function SettingsPage() {
                 <div>
                   <h2
                     id={`section-${section.id}`}
-                    className="text-base font-semibold text-slate-900 tracking-tight"
+                    className="text-base font-semibold text-foreground tracking-tight"
                   >
                     {section.title}
                   </h2>
@@ -661,7 +662,7 @@ export function SettingsPage() {
                         <button
                           type="button"
                           onClick={() => navigateToSection(item.id)}
-                          className="group w-full text-left rounded-xl border border-slate-200/90 bg-white p-3.5 min-h-[88px] shadow-sm transition-all hover:border-slate-300 hover:shadow-md active:scale-[0.99] focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50"
+                          className="group w-full text-left rounded-xl border border-border bg-card p-3.5 min-h-[88px] shadow-sm transition-all hover:border-border hover:shadow-md active:scale-[0.99] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                           aria-label={`Open ${item.title}`}
                         >
                           <div className="flex items-start gap-3">
@@ -713,7 +714,7 @@ export function SettingsPage() {
             <ChevronRight className="h-4 w-4 rotate-180" aria-hidden />
             Back to settings
           </button>
-          <Card className="w-full max-w-none border-slate-200/90 bg-white shadow-sm">
+          <Card className={`w-full max-w-none shadow-sm ${SETTINGS_PANEL_SHELL}`}>
             <CardContent className="p-4 sm:p-6 lg:p-8">
               {activeSection && (isLoading || entitlementsLoading) ? (
                 <div className="flex items-center justify-center py-12">

@@ -21,7 +21,7 @@ export function AnalyticsDelta({ pct, className }: AnalyticsDeltaProps) {
     <span
       className={cn(
         "text-xs font-medium tabular-nums",
-        up ? "text-emerald-700" : "text-rose-700",
+        up ? "text-emerald-700 dark:text-emerald-400" : "text-rose-700 dark:text-rose-400",
         className
       )}
     >

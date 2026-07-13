@@ -435,7 +435,7 @@ export function ProductListReport({ controlledFilters }: ProductListReportProps)
                         : period.replace(/([A-Z])/g, " $1").trim()}
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="start">
+                <PopoverContent className="!z-[120] w-auto p-0" align="start">
                   <Calendar
                     mode="range"
                     selected={{ from: range.from, to: range.to }}

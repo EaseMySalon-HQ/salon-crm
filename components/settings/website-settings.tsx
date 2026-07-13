@@ -402,16 +402,6 @@ export function WebsiteSettings() {
                 </p>
               </div>
               <div>
-                <Label htmlFor="category">Business category</Label>
-                <Input
-                  id="category"
-                  className="mt-1"
-                  value={data.businessCategory}
-                  onChange={(e) => setData({ ...data, businessCategory: e.target.value })}
-                  placeholder="Salon · Spa · Barber"
-                />
-              </div>
-              <div className="md:col-span-2">
                 <Label htmlFor="tagline">Tagline</Label>
                 <Input
                   id="tagline"
@@ -453,12 +443,6 @@ export function WebsiteSettings() {
         </TabsContent>
 
         <TabsContent value="online-booking" className="mt-0">
-          <p className="mb-4 text-sm text-slate-600">
-            Configure your public booking page, slot rules, and working hours. To control which services accept
-            online bookings, edit each service under Settings → Services and enable{' '}
-            <span className="font-medium">Show in online booking</span>. Use the Service Catalogue tab here to
-            choose what appears on your mini-site.
-          </p>
           <AppointmentSettings embedded />
         </TabsContent>
 

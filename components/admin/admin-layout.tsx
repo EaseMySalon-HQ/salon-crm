@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { useAdminAuth } from "@/lib/admin-auth-context"
 import { cn } from "@/lib/utils"
 import { AdminSidebarNav, AdminSidebarNavSkeleton } from "@/components/admin/admin-sidebar-nav"
+import { ThemeToggleButton } from "@/components/theme-toggle"
 
 interface AdminLayoutProps {
   children: React.ReactNode
@@ -27,7 +28,7 @@ export function AdminLayout({ children }: AdminLayoutProps) {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#fafafa]">
+      <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="text-center">
           <div className="animate-spin rounded-full h-10 w-10 border-2 border-[#0f172a] border-t-transparent mx-auto mb-4" />
           <p className="text-sm text-slate-500">Loading...</p>
@@ -41,7 +42,7 @@ export function AdminLayout({ children }: AdminLayoutProps) {
   }
 
   return (
-    <div className="flex h-screen bg-[#fafafa]">
+    <div className="flex h-screen bg-background">
       {/* Mobile overlay */}
       {sidebarOpen && (
         <div
@@ -54,13 +55,13 @@ export function AdminLayout({ children }: AdminLayoutProps) {
       {/* Sidebar - modern SaaS style */}
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-50 w-[260px] flex flex-col bg-white border-r border-slate-200/80 transition-transform duration-200 ease-out lg:static lg:translate-x-0",
+          "fixed inset-y-0 left-0 z-50 w-[260px] flex flex-col bg-card border-r border-border transition-transform duration-200 ease-out lg:static lg:translate-x-0",
           "shadow-sm lg:shadow-none",
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         )}
       >
         {/* Logo / Brand */}
-        <div className="flex items-center justify-between h-14 px-4 border-b border-slate-200/80 shrink-0">
+        <div className="flex items-center justify-between h-14 px-4 border-b border-border shrink-0">
           <button
             onClick={() => { router.push("/admin"); setSidebarOpen(false) }}
             className="flex items-center gap-2 outline-none focus:ring-2 focus:ring-slate-400/50 rounded-lg"
@@ -68,7 +69,7 @@ export function AdminLayout({ children }: AdminLayoutProps) {
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-900 text-white">
               <Building2 className="h-4 w-4" />
             </div>
-            <span className="font-semibold text-slate-900 tracking-tight">EaseMySalon</span>
+            <span className="font-semibold text-foreground tracking-tight">EaseMySalon</span>
           </button>
           <Button
             variant="ghost"
@@ -88,7 +89,7 @@ export function AdminLayout({ children }: AdminLayoutProps) {
         </div>
 
         {/* Bottom: CTA + User */}
-        <div className="shrink-0 border-t border-slate-200/80 p-3 space-y-2">
+        <div className="shrink-0 border-t border-border p-3 space-y-2">
           <Button
             onClick={() => { router.push("/admin/businesses/new"); setSidebarOpen(false) }}
             className="w-full bg-slate-900 hover:bg-slate-800 text-white h-9 text-sm font-medium"
@@ -96,19 +97,19 @@ export function AdminLayout({ children }: AdminLayoutProps) {
             <Plus className="h-4 w-4 mr-2" />
             Create Business
           </Button>
-          <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-slate-50/80">
-            <div className="h-8 w-8 rounded-full bg-slate-200 flex items-center justify-center text-slate-600 text-xs font-medium shrink-0">
+          <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-muted/80">
+            <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center text-muted-foreground text-xs font-medium shrink-0">
               {(admin.name || "A").charAt(0).toUpperCase()}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-slate-900 truncate">{admin.name || "Admin"}</p>
-              <p className="text-xs text-slate-500 truncate">Platform admin</p>
+              <p className="text-sm font-medium text-foreground truncate">{admin.name || "Admin"}</p>
+              <p className="text-xs text-muted-foreground truncate">Platform admin</p>
             </div>
           </div>
           <Button
             variant="ghost"
             size="sm"
-            className="w-full justify-start text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+            className="w-full justify-start text-muted-foreground hover:text-foreground hover:bg-accent"
             onClick={logout}
           >
             <LogOut className="h-4 w-4 mr-2" />
@@ -119,7 +120,7 @@ export function AdminLayout({ children }: AdminLayoutProps) {
 
       {/* Main area */}
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="h-14 shrink-0 flex items-center gap-4 px-4 lg:px-8 border-b border-slate-200/80 bg-white/80 backdrop-blur-sm">
+        <header className="h-14 shrink-0 flex items-center gap-4 px-4 lg:px-8 border-b border-border bg-background/80 backdrop-blur-sm">
           <Button
             variant="ghost"
             size="icon"
@@ -130,7 +131,8 @@ export function AdminLayout({ children }: AdminLayoutProps) {
             <Menu className="h-5 w-5" />
           </Button>
           <div className="flex-1 min-w-0" />
-          <span className="text-sm text-slate-500 hidden sm:inline">Platform control center</span>
+          <ThemeToggleButton />
+          <span className="text-sm text-muted-foreground hidden sm:inline">Platform control center</span>
         </header>
 
         <main className="flex-1 overflow-auto">

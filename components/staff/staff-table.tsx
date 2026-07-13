@@ -58,6 +58,12 @@ import { PasswordSetupForm } from "./password-setup-form"
 import { StaffEmailPreferencesModal } from "@/components/settings/staff-email-preferences-modal"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useAuth } from "@/lib/auth-context"
+import {
+  SETTINGS_TABLE_BODY_ROW,
+  SETTINGS_TABLE_HEAD_CELL,
+  SETTINGS_TABLE_HEAD_ROW,
+  SETTINGS_TABLE_SHELL,
+} from "@/lib/settings-panel-theme"
 
 interface Staff {
   _id: string
@@ -570,17 +576,17 @@ export function StaffTable() {
       </div>
 
       {/* Staff Table */}
-      <div className="border rounded-lg overflow-hidden">
+      <div className={SETTINGS_TABLE_SHELL}>
         <Table>
           <TableHeader>
-            <TableRow className="bg-slate-50 border-b border-slate-200">
-              <TableHead className="font-semibold text-slate-700 py-4 px-6">Staff Name</TableHead>
-              <TableHead className="font-semibold text-slate-700 py-4 px-6">Mobile</TableHead>
-              <TableHead className="font-semibold text-slate-700 py-4 px-6">Email</TableHead>
-              <TableHead className="font-semibold text-slate-700 py-4 px-6">Appointment</TableHead>
-              <TableHead className="font-semibold text-slate-700 py-4 px-6">Login Access</TableHead>
-              <TableHead className="font-semibold text-slate-700 py-4 px-6">Email Notifications</TableHead>
-              <TableHead className="font-semibold text-slate-700 py-4 px-6">
+            <TableRow className={SETTINGS_TABLE_HEAD_ROW}>
+              <TableHead className={`${SETTINGS_TABLE_HEAD_CELL} py-4 px-6`}>Staff Name</TableHead>
+              <TableHead className={`${SETTINGS_TABLE_HEAD_CELL} py-4 px-6`}>Mobile</TableHead>
+              <TableHead className={`${SETTINGS_TABLE_HEAD_CELL} py-4 px-6`}>Email</TableHead>
+              <TableHead className={`${SETTINGS_TABLE_HEAD_CELL} py-4 px-6`}>Appointment</TableHead>
+              <TableHead className={`${SETTINGS_TABLE_HEAD_CELL} py-4 px-6`}>Login Access</TableHead>
+              <TableHead className={`${SETTINGS_TABLE_HEAD_CELL} py-4 px-6`}>Email Notifications</TableHead>
+              <TableHead className={`${SETTINGS_TABLE_HEAD_CELL} py-4 px-6`}>
                 <TooltipProvider delayDuration={200}>
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -595,7 +601,7 @@ export function StaffTable() {
                   </Tooltip>
                 </TooltipProvider>
               </TableHead>
-              <TableHead className="text-right font-semibold text-slate-700 py-4 px-6">Actions</TableHead>
+              <TableHead className={`text-right ${SETTINGS_TABLE_HEAD_CELL} py-4 px-6`}>Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -603,17 +609,17 @@ export function StaffTable() {
               <TableRow>
                 <TableCell colSpan={8} className="text-center py-12">
                   <div className="flex flex-col items-center gap-3">
-                    <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center">
-                      <Users className="h-8 w-8 text-slate-400" />
+                    <div className="w-16 h-16 bg-slate-100 dark:bg-muted rounded-full flex items-center justify-center">
+                      <Users className="h-8 w-8 text-slate-400 dark:text-muted-foreground" />
                     </div>
-                    <p className="text-slate-600 font-medium">No staff members found</p>
-                    <p className="text-slate-500 text-sm">Try adjusting your search criteria</p>
+                    <p className="text-slate-600 dark:text-foreground font-medium">No staff members found</p>
+                    <p className="text-slate-500 dark:text-muted-foreground text-sm">Try adjusting your search criteria</p>
                   </div>
                 </TableCell>
               </TableRow>
             ) : (
               staff.map((member) => (
-                <TableRow key={member._id} className={`hover:bg-slate-50/50 border-b border-slate-100 transition-colors duration-200 ${member.isOwner ? "bg-purple-50" : ""}`}>
+                <TableRow key={member._id} className={`${SETTINGS_TABLE_BODY_ROW} ${member.isOwner ? "bg-purple-50 dark:bg-purple-950/25" : ""}`}>
                   <TableCell className="py-4 px-6">
                     <div className="flex items-center gap-3">
                       <div className={`w-10 h-10 rounded-full flex items-center justify-center shadow-sm ${
@@ -622,7 +628,7 @@ export function StaffTable() {
                         <User className={`h-5 w-5 ${member.isOwner ? "text-purple-600" : "text-blue-600"}`} />
                       </div>
                       <div>
-                        <div className="font-semibold text-slate-800 flex items-center gap-2">
+                        <div className="font-semibold text-slate-800 dark:text-foreground flex items-center gap-2">
                           {member.name}
                           {member.isOwner && (
                             <Badge variant="outline" className="text-xs bg-amber-100 text-amber-700 border-amber-200">
@@ -639,8 +645,8 @@ export function StaffTable() {
                       </div>
                     </div>
                   </TableCell>
-                  <TableCell className="py-4 px-6 text-slate-700 font-medium">{member.phone || "-"}</TableCell>
-                  <TableCell className="py-4 px-6 text-slate-700">{member.email}</TableCell>
+                  <TableCell className="py-4 px-6 text-slate-700 dark:text-muted-foreground font-medium">{member.phone || "-"}</TableCell>
+                  <TableCell className="py-4 px-6 text-slate-700 dark:text-muted-foreground">{member.email}</TableCell>
                   <TableCell className="py-4 px-6">
                     <div className="flex items-center gap-3">
                       {isAdminOrManager ? (
