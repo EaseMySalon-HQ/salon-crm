@@ -110,6 +110,11 @@ export function WebsiteSettings() {
   const [analyticsLoading, setAnalyticsLoading] = useState(false)
   const [activeTab, setActiveTab] = useState('general')
   const [savingEnquiryForm, setSavingEnquiryForm] = useState(false)
+  const [appointmentSaveHandler, setAppointmentSaveHandler] = useState<{
+    save: () => Promise<void>
+    canSave: boolean
+    isSaving: boolean
+  } | null>(null)
 
   useEffect(() => {
     const tab = searchParams.get('tab')
@@ -443,7 +448,7 @@ export function WebsiteSettings() {
         </TabsContent>
 
         <TabsContent value="online-booking" className="mt-0">
-          <AppointmentSettings embedded />
+          <AppointmentSettings embedded onSaveHandlerChange={setAppointmentSaveHandler} />
         </TabsContent>
 
         <TabsContent value="services" className="mt-0">
@@ -687,15 +692,38 @@ export function WebsiteSettings() {
         </TabsContent>
       </Tabs>
 
-      <Button onClick={save} disabled={saving}>
-        {saving ? (
-          <>
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving…
-          </>
-        ) : (
-          'Save website settings'
-        )}
-      </Button>
+      {activeTab !== 'enquiries' ? (
+        <Button
+          onClick={() => {
+            if (activeTab === 'online-booking') {
+              void appointmentSaveHandler?.save()
+              return
+            }
+            void save()
+          }}
+          disabled={
+            activeTab === 'online-booking'
+              ? !appointmentSaveHandler?.canSave || appointmentSaveHandler.isSaving
+              : saving
+          }
+        >
+          {activeTab === 'online-booking' ? (
+            appointmentSaveHandler?.isSaving ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving…
+              </>
+            ) : (
+              'Save changes'
+            )
+          ) : saving ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving…
+            </>
+          ) : (
+            'Save website settings'
+          )}
+        </Button>
+      ) : null}
     </div>
   )
 }
