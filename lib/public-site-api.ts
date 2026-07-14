@@ -3,6 +3,7 @@
  */
 
 import { resolveApiBaseUrl } from '@/lib/resolve-api-base-url'
+import { miniSiteBasePath } from '@/lib/mini-site-path'
 
 function apiBase() {
   return resolveApiBaseUrl()
@@ -312,8 +313,7 @@ export function formatInr(n: number | null | undefined) {
 }
 
 export function bookAppointmentHref(slug: string, opts?: { serviceId?: string; packageId?: string }) {
-  const normalized = encodeURIComponent(String(slug).trim().toLowerCase())
-  const base = `/salon/${normalized}/book`
+  const base = miniSiteBasePath(slug, 'book')
   const params = new URLSearchParams()
   if (opts?.serviceId) params.set('service', opts.serviceId)
   if (opts?.packageId) params.set('package', opts.packageId)

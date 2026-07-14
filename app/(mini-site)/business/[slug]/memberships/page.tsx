@@ -3,6 +3,7 @@ import type { Metadata } from 'next'
 import { fetchSiteMemberships, formatInr } from '@/lib/public-site-api'
 import { loadSiteProfile, siteMetadata } from '@/lib/mini-site-server'
 import { ST } from '@/lib/mini-site-theme'
+import { miniSiteBasePath } from '@/lib/mini-site-path'
 
 export async function generateMetadata({
   params,
@@ -38,7 +39,7 @@ export default async function MembershipsPage({ params }: { params: Promise<{ sl
               <p className="mt-3 font-semibold">{formatInr(m.price)}</p>
             ) : null}
             <Link
-              href={`/salon/${profile.slug}/enquiry/membership?id=${encodeURIComponent(m.id)}`}
+              href={miniSiteBasePath(profile.slug, `enquiry/membership?id=${encodeURIComponent(m.id)}`)}
               className={`mt-4 inline-block text-sm ${ST.link}`}
             >
               Enquire

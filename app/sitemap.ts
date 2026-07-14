@@ -2,6 +2,7 @@ import { MetadataRoute } from "next"
 
 import { BLOG_POSTS } from "@/lib/blog/posts"
 import { resolveApiBaseUrl } from "@/lib/resolve-api-base-url"
+import { miniSiteBasePath } from "@/lib/mini-site-path"
 
 const STATIC_ENTRIES: Array<{
   path: string
@@ -61,7 +62,7 @@ async function fetchSalonEntries(baseUrl: string): Promise<MetadataRoute.Sitemap
       const lastModified = entry.lastModified ? new Date(entry.lastModified) : new Date()
       for (const sub of SALON_SUBPATHS) {
         out.push({
-          url: `${baseUrl}/salon/${entry.slug}${sub}`,
+          url: `${baseUrl}${miniSiteBasePath(entry.slug)}${sub}`,
           lastModified,
           changeFrequency: "weekly",
           priority: sub === "" ? 0.8 : 0.6,

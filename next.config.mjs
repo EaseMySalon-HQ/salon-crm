@@ -23,6 +23,15 @@ const nextConfig = {
    * backend origin **without** `/api` (e.g. https://your-api.up.railway.app) and
    * NEXT_PUBLIC_API_URL=/api on the frontend service.
    */
+  async redirects() {
+    return [
+      {
+        source: '/salon/:slug*',
+        destination: '/business/:slug*',
+        permanent: true,
+      },
+    ]
+  },
   async rewrites() {
     if (!backendProxy) return []
     return [

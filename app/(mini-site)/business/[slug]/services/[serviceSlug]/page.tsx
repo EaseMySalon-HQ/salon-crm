@@ -9,6 +9,7 @@ import {
 } from '@/lib/public-site-api'
 import { loadSiteProfile, siteMetadata } from '@/lib/mini-site-server'
 import { ST } from '@/lib/mini-site-theme'
+import { miniSiteBasePath } from '@/lib/mini-site-path'
 
 export async function generateMetadata({
   params,
@@ -61,7 +62,7 @@ export default async function ServiceDetailPage({
         }}
       />
       <p className="text-sm text-stone-500">
-        <Link href={`/salon/${profile.slug}/services`} className={ST.link}>
+        <Link href={miniSiteBasePath(profile.slug, 'services')} className={ST.link}>
           Services
         </Link>{' '}
         / {service.category}
@@ -92,7 +93,7 @@ export default async function ServiceDetailPage({
           </Link>
         ) : (
           <Link
-            href={`/salon/${profile.slug}/contact`}
+            href={miniSiteBasePath(profile.slug, 'contact')}
             className={ST.btnSecondaryMd}
           >
             Enquire

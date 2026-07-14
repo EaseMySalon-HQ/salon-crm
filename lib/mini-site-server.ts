@@ -2,6 +2,7 @@ import { cache } from 'react'
 import { notFound } from 'next/navigation'
 import type { Metadata } from 'next'
 import { fetchSiteProfile, type SiteProfile } from '@/lib/public-site-api'
+import { miniSiteBasePath } from '@/lib/mini-site-path'
 
 export const loadSiteProfile = cache(async function loadSiteProfile(slug: string): Promise<SiteProfile> {
   try {
@@ -18,7 +19,7 @@ export function siteMetadata(profile: SiteProfile, path = ''): Metadata {
     process.env.FRONTEND_URL ||
     'https://easemysalon.in'
   const origin = base.replace(/\/$/, '')
-  const canonical = `${origin}/salon/${profile.slug}${path}`
+  const canonical = `${origin}${miniSiteBasePath(profile.slug)}${path}`
   const title = profile.seo.title || profile.name
   const description = profile.seo.metaDescription || profile.description || `Visit ${profile.name}`
   const ogImage = profile.seo.ogImage || profile.coverImage || profile.logoUrl || undefined

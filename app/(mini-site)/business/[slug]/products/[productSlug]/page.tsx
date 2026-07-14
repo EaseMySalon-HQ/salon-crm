@@ -5,6 +5,7 @@ import { JsonLd } from '@/components/mini-site/json-ld'
 import { fetchSiteProduct, formatInr } from '@/lib/public-site-api'
 import { loadSiteProfile, siteMetadata } from '@/lib/mini-site-server'
 import { ST } from '@/lib/mini-site-theme'
+import { miniSiteBasePath } from '@/lib/mini-site-path'
 
 export async function generateMetadata({
   params,
@@ -58,7 +59,7 @@ export default async function ProductDetailPage({
         }}
       />
       <p className="text-sm text-stone-500">
-        <Link href={`/salon/${profile.slug}/products`} className={ST.link}>
+        <Link href={miniSiteBasePath(profile.slug, 'products')} className={ST.link}>
           Products
         </Link>
       </p>
@@ -76,7 +77,7 @@ export default async function ProductDetailPage({
         {product.description || product.shortDescription}
       </p>
       <Link
-        href={`/salon/${profile.slug}/enquiry/product?id=${encodeURIComponent(product.id)}`}
+        href={miniSiteBasePath(profile.slug, `enquiry/product?id=${encodeURIComponent(product.id)}`)}
         className={`mt-8 inline-flex ${ST.btnPrimary}`}
       >
         Enquire about this product

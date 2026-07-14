@@ -28,6 +28,7 @@ export function WebsiteGalleryTab({
   const [items, setItems] = useState<GalleryItem[]>([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async () => {
@@ -46,25 +47,67 @@ export function WebsiteGalleryTab({
     void load()
   }, [load])
 
-  async function addImage(file: File | undefined) {
-    if (!file || !file.type.startsWith('image/')) {
-      toast({ title: 'Please upload an image file', variant: 'destructive' })
+  async function addImages(files: FileList | null) {
+    if (!files?.length) return
+
+    const imageFiles = Array.from(files).filter((file) => file.type.startsWith('image/'))
+    const skipped = files.length - imageFiles.length
+    if (!imageFiles.length) {
+      toast({ title: 'Please upload image files', variant: 'destructive' })
       return
     }
+
     setUploading(true)
+    setUploadProgress({ current: 0, total: imageFiles.length })
+
+    let added = 0
+    const failures: string[] = []
+
     try {
-      const imageUrl = await compressImageFile(file)
-      await apiClient.post('/settings/website/gallery', { imageUrl, title: file.name.replace(/\.[^.]+$/, '') })
-      await load()
-      toast({ title: 'Image added to gallery' })
-    } catch (e: unknown) {
-      toast({
-        title: 'Upload failed',
-        description: e instanceof Error ? e.message : undefined,
-        variant: 'destructive',
-      })
+      for (let i = 0; i < imageFiles.length; i += 1) {
+        const file = imageFiles[i]
+        setUploadProgress({ current: i + 1, total: imageFiles.length })
+        try {
+          const imageUrl = await compressImageFile(file)
+          await apiClient.post('/settings/website/gallery', {
+            imageUrl,
+            title: file.name.replace(/\.[^.]+$/, ''),
+          })
+          added += 1
+        } catch (e: unknown) {
+          failures.push(file.name)
+        }
+      }
+
+      if (added > 0) await load()
+
+      if (added === imageFiles.length && skipped === 0) {
+        toast({
+          title: added === 1 ? 'Image added to gallery' : `${added} images added to gallery`,
+        })
+      } else if (added > 0) {
+        toast({
+          title: `${added} of ${imageFiles.length} images added`,
+          description:
+            [
+              skipped > 0 ? `${skipped} non-image file${skipped === 1 ? '' : 's'} skipped.` : null,
+              failures.length > 0 ? `Failed: ${failures.join(', ')}` : null,
+            ]
+              .filter(Boolean)
+              .join(' ') || undefined,
+        })
+      } else {
+        toast({
+          title: 'Upload failed',
+          description: failures.length
+            ? `Could not upload: ${failures.join(', ')}`
+            : 'No images could be uploaded.',
+          variant: 'destructive',
+        })
+      }
     } finally {
       setUploading(false)
+      setUploadProgress(null)
       if (inputRef.current) inputRef.current.value = ''
     }
   }
@@ -109,8 +152,9 @@ export function WebsiteGalleryTab({
               ref={inputRef}
               type="file"
               accept="image/jpeg,image/png,image/webp,image/jpg"
+              multiple
               className="sr-only"
-              onChange={(e) => void addImage(e.target.files?.[0])}
+              onChange={(e) => void addImages(e.target.files)}
             />
             <Button
               type="button"
@@ -120,11 +164,14 @@ export function WebsiteGalleryTab({
             >
               {uploading ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Uploading…
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  {uploadProgress
+                    ? `Uploading ${uploadProgress.current} of ${uploadProgress.total}…`
+                    : 'Uploading…'}
                 </>
               ) : (
                 <>
-                  <ImagePlus className="mr-2 h-4 w-4" /> Upload image
+                  <ImagePlus className="mr-2 h-4 w-4" /> Upload images
                 </>
               )}
             </Button>
@@ -137,26 +184,28 @@ export function WebsiteGalleryTab({
           ) : !items.length ? (
             <p className="text-sm text-slate-500">No gallery images yet.</p>
           ) : (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
               {items.map((item) => (
                 <div key={item.id} className="overflow-hidden rounded-lg border border-slate-100">
-                  <div className="aspect-[4/3] bg-slate-100">
+                  <div className="aspect-square bg-slate-100">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={item.imageUrl} alt={item.alt || item.title} className="h-full w-full object-cover" />
                   </div>
-                  <div className="space-y-2 p-3">
+                  <div className="space-y-1.5 p-2">
                     <Input
                       value={item.title}
                       placeholder="Caption"
+                      className="h-8 text-xs"
                       onChange={(e) => setItems((prev) =>
                         prev.map((row) => (row.id === item.id ? { ...row, title: e.target.value } : row))
                       )}
                       onBlur={() => void updateItem(item.id, { title: item.title })}
                     />
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <Label className="text-xs text-slate-500">Public</Label>
+                    <div className="flex items-center justify-between gap-1">
+                      <div className="flex items-center gap-1.5">
+                        <Label className="text-[11px] text-slate-500">Public</Label>
                         <Switch
+                          className="scale-90"
                           checked={item.isPublic}
                           onCheckedChange={(v) => void updateItem(item.id, { isPublic: v })}
                         />
@@ -165,10 +214,11 @@ export function WebsiteGalleryTab({
                         type="button"
                         variant="ghost"
                         size="icon"
+                        className="h-7 w-7"
                         onClick={() => void removeItem(item.id)}
                         aria-label="Remove image"
                       >
-                        <Trash2 className="h-4 w-4" />
+                        <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     </div>
                   </div>

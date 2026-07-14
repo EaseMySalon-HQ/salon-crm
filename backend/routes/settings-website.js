@@ -11,6 +11,7 @@ const databaseManager = require('../config/database-manager');
 const { logger } = require('../utils/logger');
 const { hasFeature } = require('../lib/entitlements');
 const { isValidTenantSlug, isReservedSlug } = require('../lib/slug-helper');
+const { miniSiteBasePath } = require('../lib/mini-site-path');
 const { defaultWebsiteSettings } = require('../lib/site-serializers');
 const { normalizeCustomFieldList } = require('../lib/website-enquiry-fields');
 const {
@@ -42,7 +43,7 @@ function formatResponse(business) {
     code: business.code,
     name: business.name,
     slug: business.slug || '',
-    publicPath: `/salon/${(business.slug || String(business.code).toLowerCase()).toLowerCase()}`,
+    publicPath: miniSiteBasePath(business.slug || String(business.code).toLowerCase()),
     available: planAllows,
     enabled: planAllows && Boolean(business.settings?.website?.enabled),
     coverImage: website.coverImage,
