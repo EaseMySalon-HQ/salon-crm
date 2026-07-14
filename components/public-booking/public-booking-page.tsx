@@ -43,7 +43,7 @@ type PublicBookingPageProps = {
   initialServiceId?: string | null
   /** Deep-link: expand package into bookable services */
   initialPackageId?: string | null
-  /** Render inside /salon/[slug] mini-site shell (no standalone booking hero). */
+  /** Render inside /business/[slug] mini-site shell (no standalone booking hero). */
   embeddedInMiniSite?: boolean
 }
 

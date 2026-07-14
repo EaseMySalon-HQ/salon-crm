@@ -25,6 +25,7 @@ import {
 import { loadSiteProfile, siteMetadata } from '@/lib/mini-site-server'
 import { JsonLd } from '@/components/mini-site/json-ld'
 import { ST } from '@/lib/mini-site-theme'
+import { miniSiteBasePath } from '@/lib/mini-site-path'
 
 export async function generateMetadata({
   params,
@@ -111,7 +112,7 @@ export default async function SalonHomePage({ params }: { params: Promise<{ slug
               <h2 className="text-2xl font-semibold">Popular services</h2>
               <p className="mt-1 text-stone-600">Book your next visit in a few taps.</p>
             </div>
-            <Link href={`/salon/${slug}/services`} className={ST.linkNav}>
+            <Link href={miniSiteBasePath(slug, 'services')} className={ST.linkNav}>
               View all
             </Link>
           </div>
@@ -136,7 +137,7 @@ export default async function SalonHomePage({ params }: { params: Promise<{ slug
               <h2 className="text-2xl font-semibold">Featured packages</h2>
               <p className="mt-1 text-stone-600">Save more with curated packages.</p>
             </div>
-            <Link href={`/salon/${slug}/packages`} className={ST.linkNav}>
+            <Link href={miniSiteBasePath(slug, 'packages')} className={ST.linkNav}>
               View all
             </Link>
           </div>
@@ -166,7 +167,7 @@ export default async function SalonHomePage({ params }: { params: Promise<{ slug
                   <p className="mt-3 font-semibold">{formatInr(m.price)}</p>
                 ) : null}
                 <Link
-                  href={`/salon/${slug}/contact`}
+                  href={miniSiteBasePath(slug, 'contact')}
                   className={`mt-4 inline-block text-sm font-medium ${ST.link}`}
                 >
                   Enquire
@@ -198,7 +199,7 @@ export default async function SalonHomePage({ params }: { params: Promise<{ slug
                   <p className="mt-3 text-sm text-stone-600">{w.validityDays} days validity</p>
                 ) : null}
                 <Link
-                  href={`/salon/${slug}/contact`}
+                  href={miniSiteBasePath(slug, 'contact')}
                   className={`mt-4 inline-block text-sm font-medium ${ST.link}`}
                 >
                   Enquire
@@ -222,7 +223,7 @@ export default async function SalonHomePage({ params }: { params: Promise<{ slug
         <section className="mx-auto max-w-6xl px-4 py-12">
           <div className="flex items-end justify-between">
             <h2 className="text-2xl font-semibold">Featured products</h2>
-            <Link href={`/salon/${slug}/products`} className={ST.linkNav}>
+            <Link href={miniSiteBasePath(slug, 'products')} className={ST.linkNav}>
               View all
             </Link>
           </div>
@@ -250,7 +251,7 @@ export default async function SalonHomePage({ params }: { params: Promise<{ slug
           <div className="flex items-end justify-between">
             <h2 className="text-2xl font-semibold">Gallery</h2>
             {gallery.length > 5 ? (
-              <Link href={`/salon/${slug}/gallery`} className={ST.linkNav}>
+              <Link href={miniSiteBasePath(slug, 'gallery')} className={ST.linkNav}>
                 View all
               </Link>
             ) : null}
@@ -265,7 +266,7 @@ export default async function SalonHomePage({ params }: { params: Promise<{ slug
         <section className="mx-auto max-w-6xl px-4 py-12">
           <div className="flex items-end justify-between">
             <h2 className="text-2xl font-semibold">Our team</h2>
-            <Link href={`/salon/${slug}/team`} className={ST.linkNav}>
+            <Link href={miniSiteBasePath(slug, 'team')} className={ST.linkNav}>
               View all
             </Link>
           </div>
@@ -282,7 +283,7 @@ export default async function SalonHomePage({ params }: { params: Promise<{ slug
           <div className="flex items-end justify-between">
             <h2 className="text-2xl font-semibold">Reviews</h2>
             {reviews.length > 5 ? (
-              <Link href={`/salon/${slug}/reviews`} className={ST.linkNav}>
+              <Link href={miniSiteBasePath(slug, 'reviews')} className={ST.linkNav}>
                 View all
               </Link>
             ) : null}

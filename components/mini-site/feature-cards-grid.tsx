@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import type { SiteProfile } from '@/lib/public-site-api'
 import { ST } from '@/lib/mini-site-theme'
+import { miniSiteBasePath } from '@/lib/mini-site-path'
 import { cn } from '@/lib/utils'
 
 const ICONS = {
@@ -53,7 +54,7 @@ export function FeatureCardsGrid({
     viewInitialized.current = true
     setView(defaultExploreView())
   }, [])
-  const base = `/salon/${slug}`
+  const base = miniSiteBasePath(slug)
   const v = profile.visibility
   const c = profile.counts || {}
   const cards = [

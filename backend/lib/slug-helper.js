@@ -7,6 +7,7 @@ const RESERVED_SLUGS = new Set([
   'admin',
   'book',
   'salon',
+  'business',
   'login',
   'dashboard',
   'settings',

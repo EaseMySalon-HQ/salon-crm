@@ -13,6 +13,7 @@ const databaseManager = require('../config/database-manager');
 const { logger } = require('../utils/logger');
 const { sanitizeBookingHeroTheme } = require('../lib/booking-hero-themes');
 const { hasFeature } = require('../lib/entitlements');
+const { miniSiteBasePath } = require('../lib/mini-site-path');
 
 const router = express.Router();
 
@@ -51,7 +52,7 @@ function formatResponse(business) {
     onlineBookingAvailable: planAllowsOnlineBooking,
     websiteEnabled,
     miniSiteSlug: publicSlug,
-    miniSiteBookPath: `/salon/${publicSlug}/book`,
+    miniSiteBookPath: miniSiteBasePath(publicSlug, 'book'),
     slotDuration,
     advanceBookingDays: Number(appt.advanceBookingDays) > 0 ? Number(appt.advanceBookingDays) : 30,
     bufferTime: Number(appt.bufferTime) >= 0 ? Number(appt.bufferTime) : 15,

@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { SitePackage, bookAppointmentHref, formatInr } from '@/lib/public-site-api'
 import { useSiteTrack } from '@/components/mini-site/mini-site-shell'
 import { ST } from '@/lib/mini-site-theme'
+import { miniSiteBasePath } from '@/lib/mini-site-path'
 
 export function PackageCard({
   slug,
@@ -17,7 +18,7 @@ export function PackageCard({
   showPrices: boolean
 }) {
   const { track } = useSiteTrack(slug)
-  const detailHref = `/salon/${slug}/packages`
+  const detailHref = miniSiteBasePath(slug, 'packages')
   const canBook = onlineBookingEnabled && pkg.bookableOnline
   const bookHref = bookAppointmentHref(slug, { packageId: pkg.id })
   const price = showPrices ? formatInr(pkg.price) : null
@@ -41,7 +42,7 @@ export function PackageCard({
           </Link>
         ) : (
           <Link
-            href={`/salon/${slug}/enquiry/package?id=${encodeURIComponent(pkg.id)}`}
+            href={miniSiteBasePath(slug, `enquiry/package?id=${encodeURIComponent(pkg.id)}`)}
             onClick={() => track('package_enquiry', pkg.id)}
             className={ST.btnSecondary}
           >

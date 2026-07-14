@@ -11,6 +11,7 @@ describe('slug-helper', () => {
   test('isValidTenantSlug rejects reserved and invalid', () => {
     expect(isValidTenantSlug('glamour-andheri')).toBe(true);
     expect(isValidTenantSlug('admin')).toBe(false);
+    expect(isValidTenantSlug('business')).toBe(false);
     expect(isValidTenantSlug('-bad')).toBe(false);
     expect(isReservedSlug('www')).toBe(true);
   });
