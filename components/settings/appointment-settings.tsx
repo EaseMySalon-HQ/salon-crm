@@ -17,7 +17,6 @@ import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/lib/auth-context"
 import { useEntitlements } from "@/hooks/use-entitlements"
 import { SettingsAPI, type AppointmentSettingsData, type WeekDay, type DayHours } from "@/lib/api"
-import { PublicBookingLink } from "@/components/settings/public-booking-link"
 
 const DAYS: { key: WeekDay; label: string }[] = [
   { key: "monday", label: "Monday" },
@@ -39,7 +38,17 @@ const defaultHours = (): Record<WeekDay, DayHours> => ({
   sunday: { open: "09:00", close: "18:00", closed: true },
 })
 
-export function AppointmentSettings({ embedded = false }: { embedded?: boolean }) {
+export function AppointmentSettings({
+  embedded = false,
+  onSaveHandlerChange,
+}: {
+  embedded?: boolean
+  onSaveHandlerChange?: (handler: {
+    save: () => Promise<void>
+    canSave: boolean
+    isSaving: boolean
+  } | null) => void
+}) {
   const { hasPermission } = useAuth()
   const { hasFeature } = useEntitlements()
   const canEdit = hasPermission("appointment_settings", "edit")
@@ -137,6 +146,20 @@ export function AppointmentSettings({ embedded = false }: { embedded?: boolean }
     }
   }
 
+  useEffect(() => {
+    if (!embedded || !onSaveHandlerChange) return
+    if (!settings) {
+      onSaveHandlerChange(null)
+      return
+    }
+    onSaveHandlerChange({
+      save: handleSave,
+      canSave: canEdit,
+      isSaving,
+    })
+    return () => onSaveHandlerChange(null)
+  }, [embedded, onSaveHandlerChange, settings, canEdit, isSaving])
+
   if (isLoading || !settings) {
     return (
       <div className="space-y-6">
@@ -197,16 +220,8 @@ export function AppointmentSettings({ embedded = false }: { embedded?: boolean }
 
             {!onlineBookingOnPlan && (
               <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                Online Booking is not included in your current plan. Contact support or upgrade to unlock the shareable booking link.
+                Online Booking is not included in your current plan. Contact support or upgrade to unlock the public booking page.
               </p>
-            )}
-
-            {settings.allowOnlineBooking && settings.code && onlineBookingOnPlan && (
-              <PublicBookingLink
-                code={settings.code}
-                websiteEnabled={settings.websiteEnabled}
-                miniSiteBookPath={settings.miniSiteBookPath}
-              />
             )}
           </div>
         </div>
@@ -355,20 +370,22 @@ export function AppointmentSettings({ embedded = false }: { embedded?: boolean }
         </div>
       </div>
 
-      <div className="flex items-center justify-end gap-3">
-        {!canEdit && (
-          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-            <Lock className="h-3 w-3" /> You don&apos;t have permission to edit appointment settings
-          </span>
-        )}
-        <Button
-          onClick={handleSave}
-          disabled={isSaving || !canEdit}
-          className="rounded-lg bg-violet-600 px-8 font-medium text-white hover:bg-violet-700 disabled:opacity-60"
-        >
-          {isSaving ? "Saving…" : "Save changes"}
-        </Button>
-      </div>
+      {!embedded ? (
+        <div className="flex items-center justify-end gap-3">
+          {!canEdit && (
+            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+              <Lock className="h-3 w-3" /> You don&apos;t have permission to edit appointment settings
+            </span>
+          )}
+          <Button
+            onClick={handleSave}
+            disabled={isSaving || !canEdit}
+            className="rounded-lg bg-violet-600 px-8 font-medium text-white hover:bg-violet-700 disabled:opacity-60"
+          >
+            {isSaving ? "Saving…" : "Save changes"}
+          </Button>
+        </div>
+      ) : null}
     </div>
   )
 }

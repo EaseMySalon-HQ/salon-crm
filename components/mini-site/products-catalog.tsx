@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/select'
 import { formatInr, type SiteProduct } from '@/lib/public-site-api'
 import { ST } from '@/lib/mini-site-theme'
+import { miniSiteBasePath } from '@/lib/mini-site-path'
 import { Search } from 'lucide-react'
 
 function uncategorized(category: string | undefined) {
@@ -137,7 +138,7 @@ export function ProductsCatalog({
                     <div className="p-4">
                       <h3 className="font-medium">
                         <Link
-                          href={`/salon/${slug}/products/${p.slug}`}
+                          href={miniSiteBasePath(slug, `products/${p.slug}`)}
                           className={ST.hoverLinkTitle}
                         >
                           {p.name}
@@ -150,7 +151,7 @@ export function ProductsCatalog({
                         <p className="mt-2 font-semibold">{formatInr(p.price)}</p>
                       ) : null}
                       <Link
-                        href={`/salon/${slug}/enquiry/product?id=${encodeURIComponent(p.id)}`}
+                        href={miniSiteBasePath(slug, `enquiry/product?id=${encodeURIComponent(p.id)}`)}
                         className={`mt-3 inline-block text-sm ${ST.link}`}
                       >
                         Enquire

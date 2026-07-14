@@ -23,7 +23,15 @@ const PUBLIC_EXACT = new Set([
   '/grievance',
 ])
 
-const PUBLIC_PREFIXES = ['/receipt/public/', '/public/', '/book/', '/salon/']
+import { MINI_SITE_BASE_PATH } from '@/lib/mini-site-path'
+
+const PUBLIC_PREFIXES = [
+  '/receipt/public/',
+  '/public/',
+  '/book/',
+  `${MINI_SITE_BASE_PATH}/`,
+  '/salon/', // legacy; next.config redirects to /business/
+]
 
 export function isPublicClientRoute(pathname: string): boolean {
   if (PUBLIC_EXACT.has(pathname)) return true

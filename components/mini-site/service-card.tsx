@@ -8,6 +8,7 @@ import {
 } from '@/lib/public-site-api'
 import { useSiteTrack } from '@/components/mini-site/mini-site-shell'
 import { ST } from '@/lib/mini-site-theme'
+import { miniSiteBasePath } from '@/lib/mini-site-path'
 
 export function ServiceCard({
   slug,
@@ -21,7 +22,7 @@ export function ServiceCard({
   showPrices: boolean
 }) {
   const { track } = useSiteTrack(slug)
-  const detailHref = `/salon/${slug}/services/${service.slug}`
+  const detailHref = miniSiteBasePath(slug, `services/${service.slug}`)
   const bookHref = bookAppointmentHref(slug, { serviceId: service.id })
   const price = showPrices ? formatInr(service.price) : null
 
@@ -52,7 +53,7 @@ export function ServiceCard({
             </Link>
           ) : (
             <Link
-              href={`/salon/${slug}/contact`}
+              href={miniSiteBasePath(slug, 'contact')}
               className={ST.btnSecondary}
             >
               Enquire

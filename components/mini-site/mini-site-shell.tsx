@@ -14,6 +14,7 @@ import {
 } from '@/lib/public-site-api'
 import { CalendarDays, ChevronLeft, MapPin, MessageCircle, Phone } from 'lucide-react'
 import { resolveMiniSitePageTheme, ST } from '@/lib/mini-site-theme'
+import { miniSiteBasePath } from '@/lib/mini-site-path'
 import { cn } from '@/lib/utils'
 
 function sessionId() {
@@ -56,7 +57,7 @@ export function MiniSiteShell({
   const router = useRouter()
   const { track } = useSiteTrack(slug)
   const lastPageViewRef = useRef<string | null>(null)
-  const base = `/salon/${slug}`
+  const base = miniSiteBasePath(slug)
   const isHomePage = pathname === base
   const isBookPage = pathname === `${base}/book`
   const bookHref = bookAppointmentHref(slug)

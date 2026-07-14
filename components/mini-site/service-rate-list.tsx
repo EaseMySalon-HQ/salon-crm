@@ -8,6 +8,7 @@ import {
 } from '@/lib/public-site-api'
 import { useSiteTrack } from '@/components/mini-site/mini-site-shell'
 import { ST } from '@/lib/mini-site-theme'
+import { miniSiteBasePath } from '@/lib/mini-site-path'
 
 export function ServiceRateList({
   slug,
@@ -33,7 +34,7 @@ export function ServiceRateList({
       <ul className="divide-y divide-stone-100">
         {services.map((service) => {
           const price = showPrices ? formatInr(service.price) : null
-          const detailHref = `/salon/${slug}/services/${service.slug}`
+          const detailHref = miniSiteBasePath(slug, `services/${service.slug}`)
           const bookHref = bookAppointmentHref(slug, { serviceId: service.id })
           const canBook = onlineBookingEnabled && service.bookableOnline
 
@@ -77,7 +78,7 @@ export function ServiceRateList({
                   </Link>
                 ) : (
                   <Link
-                    href={`/salon/${slug}/contact`}
+                    href={miniSiteBasePath(slug, 'contact')}
                     className={`inline-flex ${ST.btnSecondary}`}
                   >
                     Enquire
