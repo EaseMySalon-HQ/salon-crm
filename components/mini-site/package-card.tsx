@@ -5,6 +5,7 @@ import { SitePackage, bookAppointmentHref, formatInr } from '@/lib/public-site-a
 import { useSiteTrack } from '@/components/mini-site/mini-site-shell'
 import { ST } from '@/lib/mini-site-theme'
 import { miniSiteBasePath } from '@/lib/mini-site-path'
+import { cn } from '@/lib/utils'
 
 export function PackageCard({
   slug,
@@ -24,14 +25,14 @@ export function PackageCard({
   const price = showPrices ? formatInr(pkg.price) : null
 
   return (
-    <article className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
-      <p className="text-xs uppercase tracking-wide text-stone-500">{pkg.type}</p>
-      <h3 className="mt-1 text-lg font-medium">{pkg.name}</h3>
-      <p className="mt-2 line-clamp-3 text-sm text-stone-600">
+    <article className={cn('p-5 transition hover:shadow-md', ST.card)}>
+      <p className={cn('text-xs uppercase tracking-wide', ST.textMuted)}>{pkg.type}</p>
+      <h3 className={cn('mt-1 text-lg font-medium', ST.textPrimary)}>{pkg.name}</h3>
+      <p className={cn('mt-2 line-clamp-3 text-sm', ST.textMuted)}>
         {pkg.shortDescription || pkg.description || 'Package'}
       </p>
       <div className="mt-4 flex items-center justify-between gap-2">
-        {price ? <span className="font-semibold">{price}</span> : <span />}
+        {price ? <span className={cn('font-semibold', ST.textPrimary)}>{price}</span> : <span />}
         {canBook ? (
           <Link
             href={bookHref}

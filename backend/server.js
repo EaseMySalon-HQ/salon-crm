@@ -1,6 +1,7 @@
 const { logger } = require('./utils/logger');
 logger.info('Starting EaseMySalon Backend Server...');
 const express = require('express');
+const path = require('path');
 const cors = require('cors');
 const compression = require('compression');
 const helmet = require('helmet');
@@ -286,20 +287,16 @@ app.use(compression({
   },
 }));
 
-/**
- * Provider webhooks (Meta WhatsApp, etc.) authenticate via HMAC over the
- * exact bytes Meta sent — `X-Hub-Signature-256`. They MUST receive the raw
- * body, so the raw parser is mounted BEFORE express.json(); otherwise the
- * global JSON parser turns req.body into a parsed Object and the HMAC
- * verification crashes on `Hmac.update(<Object>)`.
- */
 app.use(
-  '/api/webhooks/whatsapp/meta',
-  express.raw({ type: 'application/json', limit: '2mb' })
+  '/uploads',
+  express.static(path.join(__dirname, 'uploads'), {
+    maxAge: '7d',
+    fallthrough: true,
+  })
 );
 
 // Body + cookies before rate limiters so auth routes can key off JSON (email, etc.)
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '20mb' }));
 app.use(cookieParser());
 
 // /api/v1/* is an alias for /api/* (same handlers; no duplicated route tables)
@@ -545,16 +542,13 @@ app.use('/api/admin/logs', require('./routes/admin-logs'));
 app.use('/api/admin/leads', require('./routes/admin-leads'));
 app.use('/api/email-notifications', require('./routes/email-notifications'));
 app.use('/api/whatsapp', require('./routes/whatsapp'));
-app.use('/api/whatsapp/meta', require('./routes/whatsapp-meta'));
+app.use('/api/whatsapp/gupshup', require('./routes/whatsapp-gupshup'));
 app.use('/api/whatsapp/v2/templates', require('./routes/whatsapp-templates'));
 app.use('/api/whatsapp/v2/campaigns', require('./routes/whatsapp-campaigns'));
 app.use('/api/whatsapp/v2/messages', require('./routes/whatsapp-messages'));
 app.use('/api/whatsapp/v2/inbox', require('./routes/whatsapp-inbox'));
-app.use('/api/webhooks/whatsapp/meta', require('./routes/whatsapp-webhook'));
-app.use(
-  '/api/admin/whatsapp-meta-config',
-  require('./routes/admin-whatsapp-meta-config')
-);
+app.use('/api/webhooks/whatsapp/gupshup', require('./routes/gupshup-webhook'));
+app.use('/api/admin/gupshup', require('./routes/admin-gupshup'));
 app.use('/api/channel-usage', require('./routes/channel-usage'));
 app.use('/api/wallet', require('./routes/wallet'));
 app.use('/api/platform', require('./routes/platform-ui'));
@@ -11181,6 +11175,7 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
                   
                   const result = await whatsappService.sendReceipt({
                     to: client.phone,
+                    businessId: business._id,
                     clientName: client.name,
                     receiptNumber: savedReceipt.receiptNumber,
                     receiptData: {
@@ -13447,6 +13442,7 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
                   
                   const result = await whatsappService.sendReceipt({
                     to: customerPhone,
+                    businessId: business?._id,
                     clientName: sale.customerName || 'Customer',
                     receiptNumber: sale.billNo,
                     receiptData: {
@@ -18722,13 +18718,13 @@ const server = app.listen(PORT, '0.0.0.0', async () => {
   const { setupAppointmentReminderJob } = require('./jobs/appointment-reminder');
   setupAppointmentReminderJob();
 
-  // WhatsApp Business module: token rotation + metadata refresh (24h)
+  // Gupshup: partner-token warm-up + per-app health refresh (12h).
   try {
-    const { start: startWaTokenRotation } = require('./jobs/whatsapp-token-rotation');
-    startWaTokenRotation();
-    logger.debug('⏰ WhatsApp token rotation job scheduled');
+    const { start: startGupshupTokenRefresh } = require('./jobs/gupshup-token-refresh');
+    startGupshupTokenRefresh();
+    logger.debug('⏰ Gupshup token refresh job scheduled');
   } catch (err) {
-    logger.warn('⚠️  WhatsApp token rotation could not be scheduled:', err?.message || err);
+    logger.warn('⚠️  Gupshup token refresh could not be scheduled:', err?.message || err);
   }
 
   // WhatsApp campaign scheduler: polls every minute for due campaigns.

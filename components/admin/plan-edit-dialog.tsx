@@ -423,11 +423,11 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
 
                   <div className="flex items-center justify-between p-4 border rounded">
                     <div>
-                      <Label className="text-base font-semibold">WABA Integration (Meta Cloud API)</Label>
+                      <Label className="text-base font-semibold">WABA Integration (Gupshup)</Label>
                       <p className="text-sm text-gray-500">
-                        Native Meta WhatsApp pipeline — templates, campaigns, inbox, opt-out,
-                        webhook-driven status. Required to use Settings → WhatsApp Integration
-                        and the new Templates / Campaigns / Inbox screens.
+                        Gupshup WhatsApp pipeline — templates, campaigns, inbox, opt-out,
+                        webhook-driven status. Uses the shared platform number until the business
+                        connects their own app in Settings → WhatsApp Integration.
                       </p>
                     </div>
                     <Switch
@@ -443,16 +443,15 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
                   </div>
                   {formData.addons.waba.enabled && (
                     <div className="rounded-md border border-emerald-100 bg-emerald-50/70 p-3 text-xs text-emerald-900">
-                      WABA add-on enabled. The new Meta module routes will return
-                      <code className="ml-1 mr-1 px-1 rounded bg-white/60">200</code>
-                      instead of 403, and the router will pick provider:&apos;meta&apos; once
-                      the WABA itself is connected.
+                      WABA add-on enabled. Templates, Campaigns, Inbox, and Settings → WhatsApp
+                      Integration are unlocked. Sends route via Gupshup (own app when connected,
+                      otherwise the shared platform number).
                     </div>
                   )}
                   {formData.addons.waba.enabled && formData.addons.whatsapp.enabled && (
                     <div className="rounded-md border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-900">
-                      Both WABA and legacy WhatsApp add-ons are ON. Router will prefer
-                      Meta when connected and fall back to MSG91 otherwise.
+                      Both WABA and legacy WhatsApp add-ons are ON. Gupshup is primary;
+                      MSG91 is fallback only when Gupshup is unavailable.
                     </div>
                   )}
 

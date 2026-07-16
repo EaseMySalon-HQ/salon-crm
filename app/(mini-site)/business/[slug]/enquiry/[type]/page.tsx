@@ -2,6 +2,8 @@ import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import { EnquiryForm } from '@/components/mini-site/enquiry-form'
 import { loadSiteProfile, siteMetadata } from '@/lib/mini-site-server'
+import { ST } from '@/lib/mini-site-theme'
+import { cn } from '@/lib/utils'
 
 const TYPES = ['bridal', 'package', 'membership', 'product', 'general'] as const
 type EnquiryType = (typeof TYPES)[number]
@@ -55,8 +57,8 @@ export default async function EnquiryTypePage({
 
   return (
     <div className="mx-auto max-w-xl px-4 py-12">
-      <h1 className="text-3xl font-semibold">{TITLES[type]}</h1>
-      <p className="mt-2 text-stone-600">Tell {profile.name} how we can help.</p>
+      <h1 className={cn('text-3xl font-semibold', ST.textPrimary)}>{TITLES[type]}</h1>
+      <p className={cn('mt-2', ST.textMuted)}>Tell {profile.name} how we can help.</p>
       <div className="mt-8">
         <EnquiryForm
           slug={profile.slug}

@@ -1,17 +1,14 @@
 /**
- * Compliance / Meta approval booster.
+ * Compliance checklist for WhatsApp campaigns and integration status.
  *
- * Returns a five-tick checklist used by:
- *  - Settings → WhatsApp Integration (status card)
- *  - Campaigns step builder (pre-send precondition)
- *
- * Each tick is a structured object so the UI can deep-link to where the salon
- * fixes the gap.
+ * Gupshup is available when the salon has connected its own app OR the
+ * platform shared number is configured.
  */
 
 'use strict';
 
 const databaseManager = require('../config/database-manager');
+const gupshupConfig = require('./gupshup-config');
 const { logger } = require('../utils/logger');
 
 async function getModels() {
@@ -45,7 +42,7 @@ async function getComplianceState(businessId) {
       '/whatsapp/campaigns'
     ),
     templatesApproved: tick(false, 'At least one approved template available', null, '/whatsapp/templates'),
-    rateLimited: tick(true, 'Send pipeline batches at safe Meta rate limits', null, null),
+    rateLimited: tick(true, 'Send pipeline batches at safe rate limits', null, null),
     optOutSupported: tick(
       true,
       'Inbound STOP / UNSUBSCRIBE auto opts-out the client',
@@ -58,19 +55,30 @@ async function getComplianceState(businessId) {
       null,
       '/reports?tab=messages'
     ),
-    wabaConnected: tick(false, 'WABA connected (Meta Cloud API)', null, '/settings?section=whatsapp-integration'),
+    wabaConnected: tick(false, 'WhatsApp sender available (Gupshup)', null, '/settings?section=whatsapp-integration'),
   };
 
   try {
     const { Account, Template } = await getModels();
     const account = await Account.findOne({ businessId }).lean();
-    if (account && account.status === 'connected') {
-      items.wabaConnected = tick(true, 'WABA connected (Meta Cloud API)');
+    const salonConnected = gupshupConfig.isBusinessAppUsable(account);
+    const platform = await gupshupConfig.loadPlatformConfig();
+    const platformAvailable = Boolean(platform.appId && platform.source);
+
+    if (salonConnected) {
+      items.wabaConnected = tick(true, 'Your Gupshup app is connected');
+    } else if (platformAvailable) {
+      items.wabaConnected = tick(
+        true,
+        'Using shared platform WhatsApp number',
+        'Connect your own Gupshup app in Settings to send from your business number.',
+        '/settings?section=whatsapp-integration'
+      );
     } else {
       items.wabaConnected = tick(
         false,
-        'WABA connected (Meta Cloud API)',
-        'Click "Connect WhatsApp" in Settings to start Embedded Signup.',
+        'WhatsApp sender available (Gupshup)',
+        'Connect your Gupshup app in Settings, or ask your administrator to configure the shared platform number.',
         '/settings?section=whatsapp-integration'
       );
     }
@@ -85,7 +93,7 @@ async function getComplianceState(businessId) {
       items.templatesApproved = tick(
         false,
         'At least one approved template available',
-        'Submit a template to Meta and wait for approval.',
+        'Create and submit a template for Gupshup approval.',
         '/whatsapp/templates'
       );
     }

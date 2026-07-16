@@ -16,11 +16,44 @@ const whatsappAccountSchema = new mongoose.Schema(
       unique: true,
       index: true,
     },
-    wabaId: { type: String, required: true },
+    /**
+     * BSP provider for this account. `meta` = Meta Cloud API (Embedded Signup);
+     * `gupshup` = Gupshup Partner Portal app (admin-linked). The Meta-only
+     * identifiers below are required only for Meta accounts.
+     */
+    provider: {
+      type: String,
+      enum: ['meta', 'gupshup'],
+      default: 'meta',
+      index: true,
+    },
+
+    wabaId: {
+      type: String,
+      required: function () {
+        return this.provider !== 'gupshup';
+      },
+      default: null,
+    },
     metaBusinessId: { type: String, default: null },
-    phoneNumberId: { type: String, required: true },
+    phoneNumberId: {
+      type: String,
+      required: function () {
+        return this.provider !== 'gupshup';
+      },
+      default: null,
+    },
     phoneE164: { type: String, default: null },
     displayName: { type: String, default: null },
+
+    // --- Gupshup Partner Portal (provider === 'gupshup') ---
+    // The linked Gupshup app id, its src.name, and the business sender number.
+    gupshupAppId: { type: String, default: null, index: true },
+    gupshupAppName: { type: String, default: null },
+    // Sender number for template sends (country-code prefixed, no '+').
+    sourceNumber: { type: String, default: null },
+    // Encrypted Gupshup app access token (envelope from backend/lib/crypto.js).
+    appTokenCipher: { type: String, default: null },
 
     // Encrypted access token (envelope from backend/lib/crypto.js).
     accessTokenCipher: { type: String, default: null },

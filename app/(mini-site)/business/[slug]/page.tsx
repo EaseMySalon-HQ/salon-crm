@@ -26,6 +26,7 @@ import { loadSiteProfile, siteMetadata } from '@/lib/mini-site-server'
 import { JsonLd } from '@/components/mini-site/json-ld'
 import { ST } from '@/lib/mini-site-theme'
 import { miniSiteBasePath } from '@/lib/mini-site-path'
+import { cn } from '@/lib/utils'
 
 export async function generateMetadata({
   params,
@@ -110,7 +111,7 @@ export default async function SalonHomePage({ params }: { params: Promise<{ slug
           <div className="flex items-end justify-between gap-4">
             <div>
               <h2 className="text-2xl font-semibold">Popular services</h2>
-              <p className="mt-1 text-stone-600">Book your next visit in a few taps.</p>
+              <p className={cn('mt-1', ST.textMuted)}>Book your next visit in a few taps.</p>
             </div>
             <Link href={miniSiteBasePath(slug, 'services')} className={ST.linkNav}>
               View all
@@ -135,7 +136,7 @@ export default async function SalonHomePage({ params }: { params: Promise<{ slug
           <div className="flex items-end justify-between gap-4">
             <div>
               <h2 className="text-2xl font-semibold">Featured packages</h2>
-              <p className="mt-1 text-stone-600">Save more with curated packages.</p>
+              <p className={cn('mt-1', ST.textMuted)}>Save more with curated packages.</p>
             </div>
             <Link href={miniSiteBasePath(slug, 'packages')} className={ST.linkNav}>
               View all
@@ -160,9 +161,9 @@ export default async function SalonHomePage({ params }: { params: Promise<{ slug
           <h2 className="text-2xl font-semibold">Memberships</h2>
           <div className="mt-6 grid gap-4 md:grid-cols-3">
             {membershipPreview.map((m) => (
-              <article key={m.id} className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
-                <h3 className="text-lg font-medium">{m.name}</h3>
-                <p className="mt-2 text-sm text-stone-600">{m.shortDescription || m.description}</p>
+              <article key={m.id} className={cn('p-5', ST.card)}>
+                <h3 className={cn('text-lg font-medium', ST.textPrimary)}>{m.name}</h3>
+                <p className={cn('mt-2 text-sm', ST.textMuted)}>{m.shortDescription || m.description}</p>
                 {showPrices && m.price != null ? (
                   <p className="mt-3 font-semibold">{formatInr(m.price)}</p>
                 ) : null}
@@ -183,10 +184,10 @@ export default async function SalonHomePage({ params }: { params: Promise<{ slug
           <h2 className="text-2xl font-semibold">Featured prepaid wallets</h2>
           <div className="mt-6 grid gap-4 md:grid-cols-3">
             {prepaidWalletPreview.map((w) => (
-              <article key={w.id} className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
-                <h3 className="text-lg font-medium">{w.name}</h3>
+              <article key={w.id} className={cn('p-5', ST.card)}>
+                <h3 className={cn('text-lg font-medium', ST.textPrimary)}>{w.name}</h3>
                 {w.shortDescription ? (
-                  <p className="mt-2 text-sm text-stone-600">{w.shortDescription}</p>
+                  <p className={cn('mt-2 text-sm', ST.textMuted)}>{w.shortDescription}</p>
                 ) : null}
                 {showPrices && (w.payAmount != null || w.creditAmount != null) ? (
                   <p className="mt-3 text-sm font-semibold">
@@ -196,7 +197,7 @@ export default async function SalonHomePage({ params }: { params: Promise<{ slug
                     {w.validityDays ? ` · ${w.validityDays} days` : null}
                   </p>
                 ) : w.validityDays ? (
-                  <p className="mt-3 text-sm text-stone-600">{w.validityDays} days validity</p>
+                  <p className={cn('mt-3 text-sm', ST.textMuted)}>{w.validityDays} days validity</p>
                 ) : null}
                 <Link
                   href={miniSiteBasePath(slug, 'contact')}
@@ -229,13 +230,13 @@ export default async function SalonHomePage({ params }: { params: Promise<{ slug
           </div>
           <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {productPreview.map((p) => (
-              <article key={p.id} className="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
+              <article key={p.id} className={cn('overflow-hidden', ST.card)}>
                 {showProductImages && p.imageUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={p.imageUrl} alt={p.imageAlt || p.name} className="h-36 w-full object-cover" />
                 ) : null}
                 <div className="p-4">
-                  <h3 className="font-medium">{p.name}</h3>
+                  <h3 className={cn('font-medium', ST.textPrimary)}>{p.name}</h3>
                   {showProductPrices && p.price != null ? (
                     <p className="mt-1 text-sm font-semibold">{formatInr(p.price)}</p>
                   ) : null}
@@ -297,13 +298,13 @@ export default async function SalonHomePage({ params }: { params: Promise<{ slug
 
       <section className="mx-auto max-w-6xl px-4 py-12">
         <h2 className="text-2xl font-semibold">Visit us</h2>
-        <p className="mt-2 text-stone-600">{address || 'Contact us for directions.'}</p>
+        <p className={cn('mt-2', ST.textMuted)}>{address || 'Contact us for directions.'}</p>
         {maps !== '#' ? (
           <a href={maps} className={`mt-3 inline-block text-sm font-medium ${ST.link}`}>
             Open in Google Maps
           </a>
         ) : null}
-        <div className="mt-6 overflow-hidden rounded-2xl border border-stone-200 bg-stone-100">
+        <div className="mt-6 overflow-hidden rounded-2xl border border-[color:var(--site-border)] bg-[color-mix(in_srgb,var(--site-text-muted)_12%,var(--site-surface))]">
           {profile.social.googleMapsUrl?.includes('maps') ? (
             <iframe
               title="Map"
@@ -325,7 +326,7 @@ export default async function SalonHomePage({ params }: { params: Promise<{ slug
               referrerPolicy="no-referrer-when-downgrade"
             />
           ) : (
-            <div className="flex h-48 items-center justify-center text-sm text-stone-500">
+            <div className={cn('flex h-48 items-center justify-center text-sm', ST.textMuted)}>
               Map coming soon
             </div>
           )}

@@ -3,8 +3,8 @@
  * Mounted at /api/whatsapp/v2/campaigns.
  *
  * Hard gates on send:
- *   - WABA must be connected (status === 'connected')
- *   - Template must be approved
+ *   - Gupshup must be available (connected salon app OR shared platform app)
+ *   - Template must be approved with a Gupshup template id
  *   - Recipients filtered to whatsappConsent.optedIn === true
  *   - WhatsApp add-on must be enabled in the business plan
  *   - Wallet balance must cover (recipients × marketing rate)
@@ -26,7 +26,8 @@ const { resolveCostPaise, PRICE_LIST_VERSION } = require('../config/whatsapp-pri
 const { getComplianceState } = require('../lib/whatsapp-compliance');
 const { logEvent } = require('../lib/whatsapp-audit');
 const { getAddonStatus } = require('../lib/entitlements');
-const metaWhatsApp = require('../services/meta-whatsapp-service');
+const gupshupConfig = require('../lib/gupshup-config');
+const gupshupWhatsApp = require('../services/gupshup-whatsapp-service');
 const {
   getMainModels,
   resolveAudience,
@@ -211,43 +212,71 @@ router.post(
       }
 
       const account = await Account.findOne({ businessId }).lean();
-      if (!account || account.status !== 'connected') {
-        return res.status(400).json({ success: false, error: 'WhatsApp Business account is not connected. Connect via Settings → WhatsApp Integration.' });
+      const salonConnected = gupshupConfig.isBusinessAppUsable(account);
+      const platformAvailable = await gupshupConfig.isPlatformConfiguredAsync();
+      const platform = await gupshupConfig.loadPlatformConfig();
+      if (!salonConnected && !platformAvailable) {
+        return res.status(400).json({
+          success: false,
+          error:
+            'WhatsApp is not available. Connect your Gupshup app in Settings → WhatsApp Integration, or ask your administrator to configure the shared platform number.',
+        });
       }
       const template = await Template.findOne({ _id: campaign.templateId, businessId }).lean();
       if (!template || template.status !== 'approved') {
-        return res.status(400).json({ success: false, error: 'Template is not approved. Submit it to Meta and wait for approval.' });
+        return res.status(400).json({ success: false, error: 'Template is not approved.' });
+      }
+      if (!template.gupshupTemplateId && !template.metaTemplateId) {
+        return res.status(400).json({
+          success: false,
+          error: 'Template has no Gupshup template id. Sync from Gupshup or submit for approval first.',
+        });
       }
       const business = await Business.findById(businessId).select('plan.addons wallet.balancePaise').lean();
       if (!getAddonStatus(business, 'waba').enabled) {
         return res.status(403).json({
           success: false,
-          error: 'WABA Integration add-on is not enabled. The new Meta WhatsApp module requires the WABA add-on (separate from legacy WhatsApp/MSG91).',
+          error: 'WABA Integration add-on is not enabled. Enable the WABA add-on to send WhatsApp campaigns.',
         });
       }
 
       /**
-       * Pre-flight token validity check. Without this, an expired/invalidated
-       * token causes every recipient send to 401 individually — which both
-       * spams Meta with junk requests and (worse) leaves the campaign with a
-       * row of "Failed: N" without any single clear error in the UI. We now
-       * call Meta's `debug_token` once before fan-out; if Meta says the
-       * token is dead we abort the campaign with a precise message and let
-       * the on-failure handler (in send-whatsapp.js) flip the account to
-       * `error` so the salon sees the reconnect banner immediately.
+       * Pre-flight Gupshup health check on the sender that will deliver this
+       * campaign (salon app when connected, else shared platform app).
        */
-      const tokenCheck = await metaWhatsApp.validateToken({
-        businessId,
-        phoneNumberId: account.phoneNumberId,
-      });
-      /**
-       * Auto-heal: if the account was previously stamped `error` but the
-       * token now validates (user rotated it via Connect → Manual), flip
-       * back to `connected` and clear the banner before fanning out. This
-       * removes the dead-end where the salon updates the token but the
-       * old error banner sticks because nothing flips status back.
-       */
-      if (tokenCheck.ok && account.status !== 'connected') {
+      const senderAppId = salonConnected
+        ? account.gupshupAppId
+        : platform.appId;
+      const health = await gupshupWhatsApp.getWabaHealth({ appId: senderAppId });
+      if (!health.success) {
+        if (salonConnected) {
+          try {
+            await Account.updateOne(
+              { businessId },
+              {
+                $set: {
+                  status: 'error',
+                  lastErrorMessage:
+                    'Gupshup app health check failed. Reconnect via Settings → WhatsApp Integration.',
+                },
+              }
+            );
+          } catch (acctErr) {
+            logger.warn(
+              '[whatsapp-campaigns] could not flip account status after health check:',
+              acctErr?.message || acctErr
+            );
+          }
+        }
+        return res.status(400).json({
+          success: false,
+          code: 'GUPSHUP_HEALTH_FAILED',
+          error: 'Gupshup sender is not healthy. Check your app connection or platform configuration.',
+          details: health.error,
+        });
+      }
+
+      if (salonConnected && account.status !== 'connected') {
         try {
           await Account.updateOne(
             { businessId },
@@ -259,35 +288,7 @@ router.post(
         }
       }
 
-      if (!tokenCheck.ok) {
-        try {
-          await Account.updateOne(
-            { businessId },
-            {
-              $set: {
-                status: 'error',
-                lastErrorMessage:
-                  tokenCheck.subcode === 463
-                    ? 'Access token has expired. Reconnect via Settings → WhatsApp Integration.'
-                    : tokenCheck.message || 'Access token is not valid. Reconnect WhatsApp.',
-              },
-            }
-          );
-        } catch (acctErr) {
-          logger.warn(
-            '[whatsapp-campaigns] could not flip account status after token check:',
-            acctErr?.message || acctErr
-          );
-        }
-        return res.status(400).json({
-          success: false,
-          code: 'WABA_TOKEN_INVALID',
-          error:
-            tokenCheck.subcode === 463
-              ? 'WhatsApp access token has expired. Reconnect via Settings → WhatsApp Integration before sending.'
-              : `WhatsApp access token is not valid: ${tokenCheck.message}`,
-        });
-      }
+      const sendMode = salonConnected ? account.mode || 'live' : 'live';
 
       const recipients = await resolveAudience({ campaign, businessModels: req.businessModels });
       if (recipients.length === 0) {
@@ -307,7 +308,7 @@ router.post(
       const ratePerRecipientPaise = resolveCostPaise({ category: 'marketing', countryCode: 'IN', freeWindow: false });
       const expectedSpend = ratePerRecipientPaise * recipients.length;
       const balance = Number(business?.wallet?.balancePaise || 0);
-      if (account.mode === 'live' && balance < expectedSpend) {
+      if (sendMode === 'live' && balance < expectedSpend) {
         return res.status(402).json({
           success: false,
           error: `Insufficient wallet balance. Needed ₹${(expectedSpend / 100).toFixed(2)}, available ₹${(balance / 100).toFixed(2)}.`,
@@ -351,7 +352,7 @@ router.post(
         success: true,
         data: {
           recipientCount: recipients.length,
-          expectedSpendPaise: account.mode === 'live' ? expectedSpend : 0,
+          expectedSpendPaise: sendMode === 'live' ? expectedSpend : 0,
           queued: Boolean(queued),
         },
       });

@@ -4805,56 +4805,56 @@ export type PaymentSettingsUpdatePayload = {
 } & Record<string, unknown>
 
 // =============================================================================
-// WhatsApp Business module (Meta Cloud API)
+// WhatsApp Business module (Gupshup)
 // =============================================================================
 
-export class WhatsAppMetaAPI {
+export class WhatsAppGupshupAPI {
   static async getStatus(): Promise<ApiResponse<any>> {
-    const response = await apiClient.get('/whatsapp/meta/status')
+    const response = await apiClient.get('/whatsapp/gupshup/status')
     return response.data
   }
 
-  static async exchangeCode(payload: {
-    code: string
-    wabaId: string
-    phoneNumberId: string
-    phoneE164?: string
-    displayName?: string
-    mode?: 'test' | 'live'
-    redirectUri?: string
+  static async connect(payload: {
+    appId: string
+    appName?: string
+    sourceNumber: string
   }): Promise<ApiResponse<any>> {
-    const response = await apiClient.post('/whatsapp/meta/connect/exchange', payload)
+    const response = await apiClient.post('/whatsapp/gupshup/connect', payload)
     return response.data
   }
 
   static async disconnect(): Promise<ApiResponse<any>> {
-    const response = await apiClient.post('/whatsapp/meta/disconnect')
+    const response = await apiClient.post('/whatsapp/gupshup/disconnect')
     return response.data
   }
 
   static async refresh(): Promise<ApiResponse<any>> {
-    const response = await apiClient.post('/whatsapp/meta/refresh')
+    const response = await apiClient.post('/whatsapp/gupshup/refresh')
     return response.data
   }
 
-  static async setMode(payload: { mode: 'test' | 'live'; testRecipientWhitelist?: string[] }): Promise<ApiResponse<any>> {
-    const response = await apiClient.post('/whatsapp/meta/mode', payload)
-    return response.data
-  }
-
-  static async sendTest(to: string, templateName = 'hello_world', language = 'en_US'): Promise<ApiResponse<any>> {
-    const response = await apiClient.post('/whatsapp/meta/test-message', { to, templateName, language })
+  static async sendTest(to: string, gupshupTemplateId: string, params: string[] = []): Promise<ApiResponse<any>> {
+    const response = await apiClient.post('/whatsapp/gupshup/test-message', { to, gupshupTemplateId, params })
     return response.data
   }
 
   static async getCompliance(): Promise<ApiResponse<any>> {
-    const response = await apiClient.get('/whatsapp/meta/compliance')
+    const response = await apiClient.get('/whatsapp/gupshup/compliance')
     return response.data
   }
 }
 
+/** @deprecated use WhatsAppGupshupAPI */
+export const WhatsAppMetaAPI = WhatsAppGupshupAPI
+
 export class WhatsAppTemplatesAPI {
-  static async list(params?: { status?: string; search?: string; limit?: number; skip?: number }): Promise<ApiResponse<any[]> & { total?: number; limit?: number; skip?: number }> {
+  static async list(params?: {
+    status?: string
+    search?: string
+    origin?: "own" | "all"
+    limit?: number
+    skip?: number
+  }): Promise<ApiResponse<any[]> & { total?: number; limit?: number; skip?: number }> {
     const response = await apiClient.get('/whatsapp/v2/templates', { params })
     return response.data
   }
@@ -4864,9 +4864,14 @@ export class WhatsAppTemplatesAPI {
     return response.data
   }
 
-  static async fromMeta(): Promise<ApiResponse<any[]>> {
-    const response = await apiClient.get('/whatsapp/v2/templates/from-meta')
+  static async fromGupshup(): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get('/whatsapp/v2/templates/from-gupshup')
     return response.data
+  }
+
+  /** @deprecated use fromGupshup */
+  static async fromMeta(): Promise<ApiResponse<any[]>> {
+    return this.fromGupshup()
   }
 
   static async create(data: any): Promise<ApiResponse<any>> {
@@ -4897,6 +4902,49 @@ export class WhatsAppTemplatesAPI {
   static async remove(id: string, opts?: { force?: boolean }): Promise<ApiResponse> {
     const response = await apiClient.delete(`/whatsapp/v2/templates/${id}`, {
       params: opts?.force ? { force: 1 } : undefined,
+    })
+    return response.data
+  }
+
+  static async meta(): Promise<ApiResponse<{ slotKeys: string[]; catalog: any[] }>> {
+    const response = await apiClient.get('/whatsapp/v2/templates/meta')
+    return response.data
+  }
+
+  static async library(scope: "promotional" | "transactional"): Promise<ApiResponse<any[]>> {
+    const response = await apiClient.get("/whatsapp/v2/templates/library", { params: { scope } })
+    return response.data
+  }
+
+  static async importCatalog(scope: "promotional" | "transactional"): Promise<ApiResponse<{ imported: number; skipped: string[] }>> {
+    const response = await apiClient.post("/whatsapp/v2/templates/import-catalog", { scope })
+    return response.data
+  }
+
+  static async importFromLibrary(platformTemplateId: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/whatsapp/v2/templates/library/${platformTemplateId}/import`)
+    return response.data
+  }
+
+  static async syncSlots(): Promise<ApiResponse<{ linked: any[]; pending: any[]; unmatched: any[] }>> {
+    const response = await apiClient.post('/whatsapp/v2/templates/sync-slots')
+    return response.data
+  }
+
+  static async map(id: string, slotKey: string | null): Promise<ApiResponse<any>> {
+    const response = await apiClient.put(`/whatsapp/v2/templates/${id}/map`, { slotKey })
+    return response.data
+  }
+
+  static async uploadHeaderMedia(
+    format: "IMAGE" | "VIDEO" | "DOCUMENT",
+    media: string,
+    contentType?: string
+  ): Promise<ApiResponse<{ url: string }>> {
+    const response = await apiClient.post("/whatsapp/v2/templates/upload-header-media", {
+      format,
+      media,
+      ...(contentType ? { contentType } : {}),
     })
     return response.data
   }

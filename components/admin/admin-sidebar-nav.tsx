@@ -10,6 +10,7 @@ import {
   Phone,
   FileText,
   LayoutDashboard,
+  MessageSquare,
   ScrollText,
   Settings,
   Shield,
@@ -49,6 +50,7 @@ export const adminNavGroups: NavGroup[] = [
     label: "Platform",
     items: [
       { title: "Settings", href: "/admin/settings?tab=system", icon: Settings, settingsTab: "system" },
+      { title: "Template Manager", href: "/admin/platform/template-manager", icon: MessageSquare },
       { title: "Plans", href: "/admin/plans", icon: CreditCard },
       { title: "Access", href: "/admin/users", icon: Shield },
       { title: "Logs", href: "/admin/logs", icon: ScrollText },

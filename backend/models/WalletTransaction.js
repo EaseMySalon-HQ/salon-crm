@@ -62,7 +62,7 @@ const walletTransactionSchema = new mongoose.Schema({
   },
   provider: {
     type: String,
-    enum: ['razorpay', 'stripe', 'zoho', 'system', 'meta', 'msg91'],
+    enum: ['razorpay', 'stripe', 'zoho', 'system', 'meta', 'msg91', 'gupshup'],
     default: 'system',
     index: true
   },

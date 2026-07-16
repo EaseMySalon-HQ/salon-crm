@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import { submitSiteEnquiry, type SiteEnquiryCustomField } from '@/lib/public-site-api'
 import { useSiteTrack } from '@/components/mini-site/mini-site-shell'
 import { ST } from '@/lib/mini-site-theme'
+import { cn } from '@/lib/utils'
 
 export function EnquiryForm({
   slug,
@@ -136,10 +137,10 @@ export function EnquiryForm({
   }
 
   return (
-    <form onSubmit={onSubmit} className="space-y-4 rounded-2xl border border-stone-200 bg-white p-6 shadow-sm">
+    <form onSubmit={onSubmit} className={cn('space-y-4 p-6', ST.card)}>
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="block text-sm">
-          <span className="mb-1 block text-stone-600">Name</span>
+          <span className={cn('mb-1 block', ST.textMuted)}>Name</span>
           <input
             required
             value={name}
@@ -148,7 +149,7 @@ export function EnquiryForm({
           />
         </label>
         <label className="block text-sm">
-          <span className="mb-1 block text-stone-600">Phone</span>
+          <span className={cn('mb-1 block', ST.textMuted)}>Phone</span>
           <input
             required
             value={phone}
@@ -158,7 +159,7 @@ export function EnquiryForm({
         </label>
       </div>
       <label className="block text-sm">
-        <span className="mb-1 block text-stone-600">Email (optional)</span>
+        <span className={cn('mb-1 block', ST.textMuted)}>Email (optional)</span>
         <input
           type="email"
           value={email}
@@ -168,7 +169,7 @@ export function EnquiryForm({
       </label>
       {sortedCustomFields.map((field) => (
         <label key={field.key} className="block text-sm">
-          <span className="mb-1 block text-stone-600">
+          <span className={cn('mb-1 block', ST.textMuted)}>
             {field.label}
             {field.required ? '' : ' (optional)'}
           </span>
@@ -176,7 +177,7 @@ export function EnquiryForm({
         </label>
       ))}
       <label className="block text-sm">
-        <span className="mb-1 block text-stone-600">Message</span>
+        <span className={cn('mb-1 block', ST.textMuted)}>Message</span>
         <textarea
           value={message}
           onChange={(e) => setMessage(e.target.value)}
@@ -192,7 +193,7 @@ export function EnquiryForm({
         className="hidden"
         aria-hidden
       />
-      {error ? <p className="text-sm text-red-600">{error}</p> : null}
+      {error ? <p className="text-sm text-red-500">{error}</p> : null}
       <button
         type="submit"
         disabled={status === 'loading'}

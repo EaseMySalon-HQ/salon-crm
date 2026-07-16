@@ -14,7 +14,6 @@ import {
   Receipt,
   Calendar,
   AlertTriangle,
-  CheckCircle2,
   XCircle,
   Wallet,
 } from "lucide-react"
@@ -22,14 +21,22 @@ import { useToast } from "@/components/ui/use-toast"
 import { useAuth } from "@/lib/auth-context"
 import { EmailNotificationsAPI } from "@/lib/api"
 import { useEntitlements } from "@/hooks/use-entitlements"
-import { WhatsAppMetaConnectCard } from "./whatsapp-meta-connect-card"
+import { WhatsAppGupshupConnectCard } from "./whatsapp-gupshup-connect-card"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api"
 
 type WhatsAppAdminConfig = {
   adminConfigured: boolean
   adminEnabled: boolean
+  platformAvailable?: boolean
+  platformTemplatesReady?: boolean
+  salonConnected?: boolean
+  senderMode?: "none" | "platform" | "business" | "msg91"
+  wabaAddonEnabled?: boolean
+  legacyWhatsappAddonEnabled?: boolean
+  messagingAddonEnabled?: boolean
   addonEnabled: boolean
+  canConfigure?: boolean
   canUse: boolean
   provider: string
 }
@@ -121,13 +128,11 @@ function useWhatsAppAdminStatus() {
     }
   }, [])
 
-  return { adminConfig, isLoadingStatus, canUseWhatsApp: adminConfig?.canUse && !isLoadingStatus }
+  return { adminConfig, isLoadingStatus, canUseWhatsApp: adminConfig?.canConfigure && !isLoadingStatus }
 }
 
-/** Settings → WhatsApp Integration: Meta Cloud API connection only. */
+/** Settings → WhatsApp Integration: connect own Gupshup app (optional). */
 export function WhatsAppIntegrationSettings() {
-  const { adminConfig, isLoadingStatus } = useWhatsAppAdminStatus()
-
   return (
     <div className="space-y-6">
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
@@ -139,45 +144,14 @@ export function WhatsAppIntegrationSettings() {
             <div>
               <h2 className="text-2xl font-bold text-slate-800">WhatsApp Integration</h2>
               <p className="text-slate-600">
-                Connect your WhatsApp Business number via Meta Cloud API (Embedded Signup). Message
-                preferences live under Settings → Notifications → WhatsApp.
+                Connect your own WhatsApp Business app to send from your business number.
               </p>
             </div>
           </div>
         </div>
       </div>
 
-      <WhatsAppMetaConnectCard />
-
-      {!isLoadingStatus && (
-        <Card className={adminConfig?.adminConfigured ? "border-green-200 bg-green-50" : "border-yellow-200 bg-yellow-50"}>
-          <CardContent className="pt-6">
-            <div className="flex items-start space-x-3">
-              {adminConfig?.adminConfigured ? (
-                <CheckCircle2 className="h-5 w-5 text-green-600 mt-0.5" />
-              ) : (
-                <AlertTriangle className="h-5 w-5 text-yellow-600 mt-0.5" />
-              )}
-              <div className="flex-1">
-                <p className="text-sm font-medium">
-                  {adminConfig?.adminConfigured
-                    ? "WhatsApp is configured by the system administrator."
-                    : "WhatsApp is not configured. Please contact your administrator."}
-                </p>
-                {adminConfig && (
-                  <div className="mt-2 space-y-1 text-xs text-gray-600">
-                    <p>Admin Configuration: {adminConfig.adminEnabled ? "Enabled" : "Disabled"}</p>
-                    <p>Business Addon: {adminConfig.addonEnabled ? "Enabled" : "Disabled"}</p>
-                    {adminConfig.addonEnabled && (
-                      <p>Billing: Per-message from wallet (₹0.20 transactional, ₹1.20 campaign)</p>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      <WhatsAppGupshupConnectCard />
     </div>
   )
 }
@@ -327,17 +301,20 @@ export function WhatsAppNotificationSettings() {
               <p className="text-lg font-medium mb-2 text-gray-600">WhatsApp Not Available</p>
               <p className="text-sm text-gray-500 max-w-md mx-auto">
                 {!adminConfig?.adminConfigured
-                  ? "WhatsApp must be configured by the system administrator before you can send messages."
-                  : !adminConfig?.addonEnabled
-                    ? "WhatsApp addon is not enabled for your business. Please contact support to enable it."
+                  ? "The platform administrator must configure shared WhatsApp templates (Admin → Template Manager) before transactional messages can be sent."
+                  : !adminConfig?.messagingAddonEnabled && !adminConfig?.addonEnabled
+                    ? "Enable WABA Integration (Gupshup) or legacy WhatsApp messaging on your plan in Plan Management. WABA uses the shared platform number — no Gupshup app connection required."
                     : "Your wallet balance is too low to send WhatsApp messages. Please top up from Settings → Recharge."}
               </p>
-              <p className="text-sm text-gray-500 mt-4">
-                <Link href="/settings?section=whatsapp-integration" className="text-indigo-600 hover:underline font-medium">
-                  Open WhatsApp Integration
-                </Link>{" "}
-                to connect your Meta Cloud API number.
-              </p>
+              {adminConfig?.messagingAddonEnabled && !adminConfig?.salonConnected && (
+                <p className="text-sm text-gray-500 mt-4 max-w-md mx-auto">
+                  Optional:{" "}
+                  <Link href="/settings?section=whatsapp-integration" className="text-indigo-600 hover:underline font-medium">
+                    connect your own Gupshup app
+                  </Link>{" "}
+                  to send from your business number instead of the shared platform number.
+                </p>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -345,6 +322,17 @@ export function WhatsAppNotificationSettings() {
 
       {canUseWhatsApp && (
         <>
+          {adminConfig?.senderMode === "platform" && !adminConfig?.salonConnected && (
+            <Card className="border-green-200 bg-green-50/50">
+              <CardContent className="pt-6 pb-6">
+                <p className="text-sm text-green-900">
+                  <strong>Shared platform number.</strong> Receipts, appointment updates, and other
+                  notifications send from the EaseMySalon WhatsApp number. No app connection is
+                  required for your salon.
+                </p>
+              </CardContent>
+            </Card>
+          )}
           <Card className={settings.enabled ? "" : "border-gray-200 bg-gray-50"}>
             <CardHeader>
               <CardTitle className="flex items-center space-x-2">

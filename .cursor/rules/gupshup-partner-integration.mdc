@@ -1,0 +1,200 @@
+---
+description: Reference rulebook for integrating Gupshup Partner Portal (WhatsApp Business API) — auth, tokens, rate limits, messaging, webhooks, templates, media
+globs: backend/services/gupshup-*.js, backend/lib/gupshup-*.js, backend/routes/gupshup-*.js, backend/services/*whatsapp*.js, backend/lib/*whatsapp*.js, backend/routes/*whatsapp*.js
+alwaysApply: false
+---
+
+# Gupshup Partner Portal Integration Rulebook
+
+Reference for building against the **Gupshup Partner Portal** (WhatsApp Business API BSP). Use this before writing any Gupshup client code. Source: [partner-docs.gupshup.io](https://partner-docs.gupshup.io/docs/gupshup-partner-eco-system) · full index at [`/llms.txt`](https://partner-docs.gupshup.io/llms.txt).
+
+> This CRM sends WhatsApp via **Gupshup Partner Portal** (primary) with **MSG91** fallback for transactional messages. Meta Cloud API was removed; when adding provider code, mirror the existing pipeline (`send-whatsapp.js`: dedupe → persist → provider → wallet debit) and register it in `whatsapp-router.js`; do **not** bypass that pipeline.
+
+## 1. Model & base URL
+
+- Gupshup is a **BSP / Meta Tech Provider**. Partners are ISVs/TPs; the Partner Portal manages many customers' **WABA apps**. WhatsApp is the **only** channel; bot studio / journey builder are NOT available to partners.
+- Billing is **prepaid** (partner wallet is debited per customer usage; commissions apply).
+- **Base URL:** `https://partner.gupshup.io` — all partner APIs live under `/partner/...`.
+- Store the base URL as `GUPSHUP_PARTNER_BASE_URL` (default `https://partner.gupshup.io`); never hardcode inline.
+
+## 2. Three credentials — do not confuse them
+
+| Credential | How obtained | Scope | Lifetime | Header usage |
+|---|---|---|---|---|
+| **Client Secret** | Generated in Portal → Settings → API client details | Identifies partner user | Recommend ≤ 3 months (rotate) | Passed as `secret`/`password` to login API only |
+| **Partner Token** (JWT) | `POST /partner/account/login` with `email` + `secret` | All partner-account APIs | **24 hours** | `Authorization: <PARTNER_TOKEN>` |
+| **App Access Token** | `GET /partner/app/{appId}/token` (needs Partner Token) | One WABA app: messages, templates, subscriptions, media | Idempotent; long-lived (`expiresOn: 0` = no expiry) | `Authorization: <PARTNER_APP_TOKEN>` |
+
+- The **Client Secret** is the login password (post 20-Nov-2024). Older accounts may still use their portal password until they rotate.
+- `GET .../token` is **idempotent**: returns the existing token if present, else generates one. Cache it; do not call it per-message (rate limit: 10/min/app).
+
+## 3. Token lifecycle (MANDATORY caching)
+
+```
+login (email+secret) ──> Partner Token (24h)  ──cache──> reuse until ~23h
+                              │
+                              └─> GET /app/{appId}/token ──> App Token ──cache──> reuse
+```
+
+- **Cache the Partner Token** (~24h) and **App Token** (per `appId`) in DB/Redis. Refresh Partner Token *before* expiry with a small skew (e.g. renew at 23h).
+- On `401`/`403` from any app API, refresh the App Token once, then the Partner Token, then retry once. Do not loop.
+- **Never** log or return tokens/secrets. Encrypt at rest with the existing `lib/crypto.js` (`encrypt`/`decrypt`), same as `WhatsAppAccount.accessTokenCipher`.
+- Login rate limit is **10/min** — a token-refresh stampede will get you `429`.
+
+## 4. Rate limits (enforce client-side)
+
+| Endpoint | Limit |
+|---|---|
+| `/partner/account/login` | 10 / min |
+| `/partner/app/{appId}/token` | 10 / min / app |
+| `/partner/app/{appId}/health` | 10 / min / app |
+| `/partner/app/{appId}/templates` | 10 / min / app |
+| `/partner/app/{appId}/template/analytics` | 10 / 60s / app |
+| `/partner/app/{appId}/subscription` | 5 / 60s / app |
+| `/partner/app/{appId}/media/` | 10 / sec / app |
+| `/partner/app/{appId}/mmlite/msg/enable` | 2 / hour / app |
+| **All others** | **10 / sec** |
+
+- Cooldown = the window unit (1s for per-second, 1min for per-minute).
+- Treat `429 {"status":"error","message":"Too Many Requests"}` with exponential backoff + jitter. Prefer caching/queueing over retries.
+
+## 5. Core endpoints
+
+**Account (Partner Token):**
+- `POST /partner/account/login` → `{ token, id, billingType, ... }` (form-urlencoded: `email`, `secret`).
+- `GET  /partner/account/api/partnerApps` → list of linked apps (`id`, `name`, `live`, `healthy`, `cap`, ...).
+- `POST /partner/account/api/appLink` → link an existing Gupshup app (API key + app name) to the partner.
+- `GET  /partner/app/{appId}/token` → App Access Token.
+
+**App (App Token) — messaging & management:**
+- `POST /partner/app/{appId}/v3/message` → send session (free-form) messages (see §6).
+- `POST /partner/app/{appId}/template/msg` → send **template** message by template ID (see §6).
+- `POST /partner/app/{appId}/templates` → apply for a template (with sample media / `handleId`).
+- `GET  /partner/app/{appId}/templates` → list templates (+ rejection reason, `correctCategory`).
+- `POST /partner/app/{appId}/subscription` → set webhook subscription (see §7).
+- `POST /partner/app/{appId}/media` (file) / `.../media?url=` (URL) → upload → media ID.
+- `GET  /partner/app/{appId}/health` · `GET .../ratings` (quality/tier) · `GET .../wallet/balance` · `GET .../business/profile`.
+
+Response envelope is usually `{"status":"success"|"error", ...}` for portal APIs; **messaging v3 returns Meta-style** `{ messages:[{id}], contacts:[...] }`.
+
+## 6. Sending messages
+
+### 6a. Session message (v3, Meta-native shape) — 24h window only
+`POST /partner/app/{appId}/v3/message`, `Content-Type: application/json`:
+```json
+{
+  "messaging_product": "whatsapp",
+  "recipient_type": "individual",
+  "to": "9178XXXXXXXX",
+  "type": "text",
+  "text": { "body": "Hello", "preview_url": true }
+}
+```
+- `to` = digits, country-code prefixed, **no `+`**. Reuse `send-whatsapp.js` phone canonicalization (`COUNTRY_DIAL_CODES`) — a bare 10-digit number is misrouted.
+- Success → `{ "messages":[{"id":"<GS_MSG_ID>"}], ... }`. Persist that id as the provider message id (analogous to `metaMessageId`).
+- Reply/quote a prior message with `"context": { "message_id": "<id>" }`.
+- `400 "Callback Billing must be enabled for this API"` → the app isn't enabled for callback billing.
+
+### 6b. Template message (outside 24h window)
+`POST /partner/app/{appId}/template/msg`, `Content-Type: application/x-www-form-urlencoded`:
+```
+source=91XXXXXXXXXX            # business number, country-code prefixed
+src.name=<APP_NAME>
+destination=91XXXXXXXXXX       # customer number
+template={"id":"<TEMPLATE_ID>","params":["v1","v2"]}
+channel=whatsapp
+```
+- `template.params` is an **ordered array** matching `{{1}}, {{2}}...`. Count MUST match the approved template exactly (mismatch = failure; same class of bug as the MSG91 variable-count pitfall).
+- Media/carousel headers go in the `message` field; quick-reply postbacks via `postbackTexts=[{"index":0,"text":"..."}]`.
+- Success → `{ "status":"submitted", "messageId":"..." }`. Final delivery arrives via webhook callback.
+
+## 7. Webhooks (inbound messages + status)
+
+Set per-app with `POST /partner/app/{appId}/subscription` (form-urlencoded), rate limit **5/60s/app**:
+```
+modes=ALL           # or comma set: MESSAGE,SENT,DELIVERED,READ,FAILED,TEMPLATE,ACCOUNT,...
+tag=<unique-name>   # unique & mandatory per app
+url=https://<host>/api/gupshup/webhook
+version=3           # use v3
+meta={"headers":{"Authorization":"Bearer <shared-secret>"}}   # sent back as request headers → verify these
+```
+
+**Subscription modes:** `MESSAGE` (incoming, non-flow), `ALL` (all incoming), `SENT`/`DELIVERED`/`READ`/`FAILED` (status), `TEMPLATE`, `ACCOUNT`, `BILLING`, `FLOWS_MESSAGE`, `PAYMENTS`, `OTHERS`, `COEXISTENCE`.
+
+**Webhook endpoint rules (non-negotiable):**
+- Respond **HTTP 2xx with an empty body**, within **10s** (target < 100ms, acceptable 500–1000ms). Slow/failed ack → Gupshup retries.
+- **Process asynchronously**: enqueue the payload (job/queue) and ack immediately. Never do DB-heavy work before responding.
+- Must be **publicly reachable**, accept the `User-Agent` header, and handle the `sandbox-start` event.
+- **Verify authenticity**: check the custom header you set via `meta`, AND allowlist Gupshup IPs (§8). Do not trust the payload blind.
+- Status names: `sent`, `delivered`, `read`, `failed` (includes reason), `deleted`, `warning`. Map to the existing `WhatsAppMessage`/`WhatsAppMessageLog` status enum.
+
+## 8. Gupshup inbound IP allowlist
+
+Allowlist these at the edge/CORS/firewall for the webhook route (verify current list in docs before shipping):
+```
+34.202.224.208  52.66.99.126   15.206.217.7   13.126.35.181  3.6.228.131
+13.232.173.180  13.127.57.130  13.234.143.231 3.7.115.196    13.232.49.3
+18.193.1.225    3.68.131.220   63.176.209.228 63.183.31.123   # added 2026-04-15
+```
+IPs change over time — keep them in config (`GUPSHUP_WEBHOOK_IPS`), not hardcoded, and re-check the docs periodically.
+
+## 9. Templates (API-only — no manual portal authoring)
+
+Gupshup Partner Portal does **not** provide a UI to create templates on the platform app.
+Templates are created exclusively via API:
+
+| Action | API |
+|--------|-----|
+| Apply / create | `POST /partner/app/{appId}/templates` (form-urlencoded: `elementName`, `category`, `content`, `example`, `vertical`, …) |
+| List | `GET /partner/app/{appId}/templates` |
+| Read one | `GET /partner/app/{appId}/templates/{templateId}` |
+| Send | `POST /partner/app/{appId}/template/msg` with approved `template.id` |
+
+**Shared platform number (multi-tenant):**
+
+1. Configure the platform app (`GUPSHUP_PLATFORM_*` or Admin → Gupshup shared app).
+2. **Admin → Platform → Template Manager**: create drafts, submit via API, sync status, link approved IDs to notification slots.
+3. Wait for Meta approval (`PENDING` → `APPROVED`). Use **Sync** on each row or **Sync approved → slots** when ready.
+4. Approved IDs populate `AdminSettings.notifications.whatsapp.templates.*` for transactional sends.
+
+Salons with **their own connected app** use **WhatsApp → Templates** in the tenant UI (same API, their app via `resolveSender`).
+
+- Categories: **`AUTHENTICATION`**, **`MARKETING`**, **`UTILITY`** only.
+- Provide `example`/`exampleHeader` and `enableSample=true` (required for variable templates).
+- Optional: Meta Library templates (`gettemplatesfromlibrary` → `createtemplatefromlibrary`) for pre-approved utility flows.
+- Approval is async: status starts `PENDING`. Poll/sync with `GET .../templates`.
+- Client: `backend/services/gupshup-whatsapp-service.js` (`applyTemplate`, `listTemplates`).
+- Catalog: `backend/lib/gupshup-platform-template-catalog.js`.
+
+## 10. Media management (partner responsibility)
+
+- On inbound media: **download and store it yourself** (S3/GCS) immediately. Persist the **expiry timestamp**.
+- Do **not** re-fetch media older than **7 days** (Cloud API) — it expires. Migrated on-prem→CAPI media will not work; never call it.
+- Invalid media returns `400/404 {"status":"error","message":"Invalid Media Id"}`. **Use this to stop retrying.**
+- **20+ invalid media calls/hour → `429` with a 1-hour cooldown.** Cache invalid IDs so you never re-request them.
+
+## 11. Security (see also `security.mdc`)
+
+- Secrets (`GUPSHUP_EMAIL`, `GUPSHUP_CLIENT_SECRET`, webhook shared secret) live in env / host secret store — document in `env.example` with placeholders, never real values.
+- App Access Tokens & Partner Tokens: encrypt at rest (`lib/crypto.js`), decrypt only at call time, never log plaintext, never send to the client bundle.
+- Webhook is a trust boundary: verify the shared-secret header **and** source IP; validate/sanitize every field server-side before persisting.
+- Authorize mutating admin/config routes (who may connect/disconnect a WABA), not just authenticate.
+
+## 12. Fitting this codebase
+
+When implementing, follow existing conventions:
+- New provider client: `backend/services/gupshup-whatsapp-service.js` (token lookup, decrypt-at-use, axios, no plaintext logs).
+- Register in `whatsapp-router.js` so `send-whatsapp.js` can route to it; keep dedupe + wallet debit in the unified pipeline.
+- Per-business config on `WhatsAppAccount` (`provider: 'gupshup'`, `gupshupAppId`, `appTokenCipher`); shared platform app in env (`GUPSHUP_PLATFORM_*`) or AdminSettings (`gupshupAppId`, `gupshupSourceNumber`).
+- Webhook route `backend/routes/gupshup-webhook.js`, mounted under the CSRF **skip** list (external POST, secret+IP verified instead — see `csrf.mdc`).
+- Main DB is `ease_my_salon_main` via `databaseManager.getMainConnection()`.
+
+## 13. Key references
+- Eco-system / Introduction: `/docs/gupshup-partner-eco-system`, `/docs/introduction`
+- Auth: `/docs/generate-secret-and-token`, `/reference/post_partner-account-login`, `/reference/get_partner-app-appid-token`
+- Rate limits: `/docs/partner-rate-limits`
+- Webhooks: `/docs/webhook-key-points`, `/reference/setsubscription-api-v3`, `/docs/inbound-events`, `/docs/gupshup-ip-allowlisting`
+- Messaging: `/docs/whatsapp-messages`, `/reference/post_partner-app-appid-v3-text-message`, `/reference/post_partner-app-appid-template-msg`
+- Templates: `/reference/post_partner-app-appid-templates`, `/reference/gettemplatesfromlibrary`
+- Media: `/docs/media-management`
+- Onboarding: `/docs/onboarding-apis`, `/reference/post_partner-app`, `/reference/post_partner-account-api-applink`

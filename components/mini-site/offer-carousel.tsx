@@ -1,4 +1,7 @@
 import type { SiteOffer } from '@/lib/public-site-api'
+import { MiniSiteImageLightbox } from '@/components/mini-site/mini-site-image-lightbox'
+import { ST } from '@/lib/mini-site-theme'
+import { cn } from '@/lib/utils'
 
 export function OfferCarousel({ offers }: { offers: SiteOffer[] }) {
   if (!offers.length) return null
@@ -7,17 +10,20 @@ export function OfferCarousel({ offers }: { offers: SiteOffer[] }) {
       {offers.map((offer) => (
         <article
           key={offer.id}
-          className="min-w-[260px] max-w-xs shrink-0 overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm"
+          className={cn('min-w-[260px] max-w-xs shrink-0 overflow-hidden', ST.card)}
         >
           {offer.imageUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={offer.imageUrl} alt={offer.title} className="h-36 w-full object-cover" />
+            <MiniSiteImageLightbox
+              src={offer.imageUrl}
+              alt={offer.title}
+              imageClassName="h-36 w-full object-cover transition hover:opacity-95"
+            />
           ) : null}
           <div className="p-4">
-            <h3 className="font-medium">{offer.title}</h3>
-            <p className="mt-1 line-clamp-2 text-sm text-stone-600">{offer.shortDescription}</p>
+            <h3 className={cn('font-medium', ST.textPrimary)}>{offer.title}</h3>
+            <p className={cn('mt-1 line-clamp-2 text-sm', ST.textMuted)}>{offer.shortDescription}</p>
             {offer.ctaHref ? (
-              <a href={offer.ctaHref} className="mt-3 inline-block text-sm font-medium underline">
+              <a href={offer.ctaHref} className={cn('mt-3 inline-block text-sm font-medium', ST.link)}>
                 {offer.ctaLabel || 'Learn more'}
               </a>
             ) : null}

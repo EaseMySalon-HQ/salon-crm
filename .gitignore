@@ -54,6 +54,9 @@ backend/scripts/
 backend/node_modules/.cache/
 backend/node_modules/.bin/
 
+# User-uploaded media (WhatsApp template header samples, etc.)
+backend/uploads/whatsapp-template-media/
+
 # macOS system files
 .DS_Store
 **/.DS_Store

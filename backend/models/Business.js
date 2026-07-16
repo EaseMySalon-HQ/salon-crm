@@ -216,6 +216,13 @@ const businessSchema = new mongoose.Schema({
       clientWalletExpiryReminderNotifications: {
         enabled: { type: Boolean, default: true },
       },
+      /**
+       * Per-business Gupshup template ids for transactional slots (connected own app).
+       * Populated via WhatsApp → Templates → Map. Shared-number salons use AdminSettings.
+       */
+      templates: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
+      /** Maps body_1 / button_1 etc. to CRM field names per slot. */
+      templateVariables: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
     },
     
     // Branding

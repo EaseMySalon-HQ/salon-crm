@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import Link from "next/link"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -185,6 +186,7 @@ function StatusTick({ status, className = "" }: { status: Message["status"]; cla
 export function WhatsAppInboxPage() {
   const { toast } = useToast()
   const [addonDisabled, setAddonDisabled] = useState(false)
+  const [appNotConnected, setAppNotConnected] = useState(false)
 
   /* List state */
   const [conversations, setConversations] = useState<Conversation[]>([])
@@ -246,12 +248,18 @@ export function WhatsAppInboxPage() {
       if (res.success) {
         setConversations(res.data || [])
         setAddonDisabled(false)
+        setAppNotConnected(false)
       }
     } catch (err: any) {
       const status = err?.response?.status
       const code = err?.response?.data?.code
       if (status === 403 && code === "WABA_ADDON_DISABLED") {
         setAddonDisabled(true)
+        setAppNotConnected(false)
+        setConversations([])
+      } else if (status === 403 && code === "WHATSAPP_APP_NOT_CONNECTED") {
+        setAppNotConnected(true)
+        setAddonDisabled(false)
         setConversations([])
       } else {
         toast({
@@ -611,6 +619,21 @@ export function WhatsAppInboxPage() {
               <p className="text-sm text-slate-600 mt-2">
                 Ask your platform admin to enable the WABA add-on under Plan Management to access the WhatsApp Inbox.
               </p>
+            </div>
+          </CardContent>
+        </Card>
+      ) : appNotConnected ? (
+        <Card>
+          <CardContent className="py-12 text-center">
+            <div className="mx-auto max-w-lg rounded-xl border border-amber-200 bg-amber-50/60 p-6">
+              <MessageSquareReply className="h-10 w-10 text-amber-600 mx-auto mb-3" />
+              <p className="text-base font-medium text-slate-800">Connect your WhatsApp app</p>
+              <p className="text-sm text-slate-600 mt-2">
+                The inbox uses your connected WhatsApp app only. Connect your business number under Settings → WhatsApp Integration to view and reply to customer conversations.
+              </p>
+              <Button asChild className="mt-4 bg-emerald-600 hover:bg-emerald-700">
+                <Link href="/settings?section=whatsapp-integration">Go to WhatsApp Integration</Link>
+              </Button>
             </div>
           </CardContent>
         </Card>
