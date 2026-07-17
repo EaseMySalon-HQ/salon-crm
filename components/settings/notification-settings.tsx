@@ -533,8 +533,10 @@ export function NotificationSettings() {
               <div>
                 <h2 className="text-2xl font-bold text-slate-800">Notification Settings</h2>
                 <p className="text-slate-600">
-                  Configure email and WhatsApp notifications for your business. Connect WhatsApp under{" "}
-                  <span className="font-medium text-slate-700">Settings → WhatsApp Integration</span>.
+                  Configure email and WhatsApp notifications for your business. WhatsApp uses the shared
+                  platform number by default; connect your own app under{" "}
+                  <span className="font-medium text-slate-700">Settings → WhatsApp Integration</span>{" "}
+                  if you prefer your business number.
                 </p>
               </div>
             </div>

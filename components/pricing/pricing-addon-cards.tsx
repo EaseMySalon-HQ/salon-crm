@@ -169,7 +169,7 @@ const ADDONS: AddOn[] = [
   {
     id: "whatsapp-integration",
     name: "WhatsApp Integration",
-    description: "Meta WABA onboarding, number verification, templates, and end-to-end setup.",
+    description: "Gupshup WABA onboarding, number verification, templates, and end-to-end setup.",
     priceInr: 4999,
     billing: "one-time",
     accentBg: "bg-emerald-50",

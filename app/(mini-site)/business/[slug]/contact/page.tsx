@@ -8,6 +8,7 @@ import {
 } from '@/lib/public-site-api'
 import { loadSiteProfile, siteMetadata } from '@/lib/mini-site-server'
 import { ST } from '@/lib/mini-site-theme'
+import { cn } from '@/lib/utils'
 
 export async function generateMetadata({
   params,
@@ -28,9 +29,9 @@ export default async function ContactPage({ params }: { params: Promise<{ slug: 
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-12">
-      <h1 className="text-3xl font-semibold">Contact</h1>
+      <h1 className={cn('text-3xl font-semibold', ST.textPrimary)}>Contact</h1>
       <div className="mt-8 grid gap-10 lg:grid-cols-2">
-        <div className="space-y-4 text-stone-700">
+        <div className={cn('space-y-4', ST.textPrimary)}>
           {address ? <p>{address}</p> : null}
           {profile.contact.phone ? (
             <p>
@@ -57,8 +58,8 @@ export default async function ContactPage({ params }: { params: Promise<{ slug: 
             </p>
           ) : null}
           <div className="pt-4">
-            <h2 className="font-medium">Opening hours</h2>
-            <ul className="mt-2 space-y-1 text-sm">
+            <h2 className={cn('font-medium', ST.textPrimary)}>Opening hours</h2>
+            <ul className={cn('mt-2 space-y-1 text-sm', ST.textMuted)}>
               {Object.entries(hours).map(([day, h]) => (
                 <li key={day} className="flex justify-between gap-4 capitalize">
                   <span>{day}</span>
@@ -71,13 +72,13 @@ export default async function ContactPage({ params }: { params: Promise<{ slug: 
           </div>
           {profile.description ? (
             <div className="pt-4">
-              <h2 className="font-medium">About us</h2>
-              <p className="mt-2 whitespace-pre-wrap text-sm text-stone-600">{profile.description}</p>
+              <h2 className={cn('font-medium', ST.textPrimary)}>About us</h2>
+              <p className={cn('mt-2 whitespace-pre-wrap text-sm', ST.textMuted)}>{profile.description}</p>
             </div>
           ) : null}
         </div>
         <div>
-          <h2 className="text-xl font-medium">Send an enquiry</h2>
+          <h2 className={cn('text-xl font-medium', ST.textPrimary)}>Send an enquiry</h2>
           <div className="mt-4">
             <EnquiryForm
               slug={profile.slug}

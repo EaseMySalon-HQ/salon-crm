@@ -24,7 +24,7 @@ import { UserSettings } from "./admin-settings/user-settings"
 import { DatabaseSettings } from "./admin-settings/database-settings"
 import { NotificationSettings } from "./admin-settings/notification-settings"
 import { APISettings } from "./admin-settings/api-settings"
-import { WhatsAppMetaConfigSettings } from "./admin-settings/whatsapp-meta-config"
+import { GupshupConfigSettings } from "./admin-settings/gupshup-config"
 import { GoogleBusinessConfigSettings } from "./admin-settings/google-business-config"
 const settingsCategories = [
   {
@@ -312,7 +312,7 @@ export function AdminSettingsPage() {
       case "api":
         return (
           <div className="space-y-6">
-            <WhatsAppMetaConfigSettings />
+            <GupshupConfigSettings />
             <GoogleBusinessConfigSettings />
             <APISettings
               settings={categorySettings}

@@ -2,6 +2,8 @@ import type { Metadata } from 'next'
 import { ProductsCatalog } from '@/components/mini-site/products-catalog'
 import { fetchSiteProducts } from '@/lib/public-site-api'
 import { loadSiteProfile, siteMetadata } from '@/lib/mini-site-server'
+import { ST } from '@/lib/mini-site-theme'
+import { cn } from '@/lib/utils'
 
 export async function generateMetadata({
   params,
@@ -19,8 +21,8 @@ export default async function ProductsPage({ params }: { params: Promise<{ slug:
   if (!profile.visibility.showProducts) {
     return (
       <div className="mx-auto max-w-6xl px-4 py-12">
-        <h1 className="text-3xl font-semibold">Products</h1>
-        <p className="mt-2 text-stone-500">Products are not listed on this website.</p>
+        <h1 className={cn('text-3xl font-semibold', ST.textPrimary)}>Products</h1>
+        <p className={cn('mt-2', ST.textMuted)}>Products are not listed on this website.</p>
       </div>
     )
   }
@@ -28,8 +30,8 @@ export default async function ProductsPage({ params }: { params: Promise<{ slug:
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-12">
-      <h1 className="text-3xl font-semibold tracking-tight">Products</h1>
-      <p className="mt-2 text-stone-600">Browse retail products and send an enquiry.</p>
+      <h1 className={cn('text-3xl font-semibold tracking-tight', ST.textPrimary)}>Products</h1>
+      <p className={cn('mt-2', ST.textMuted)}>Browse retail products and send an enquiry.</p>
       <ProductsCatalog
         slug={profile.slug}
         products={products}

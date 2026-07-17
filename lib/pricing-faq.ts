@@ -54,7 +54,7 @@ export const PRICING_FAQ: PricingFaqItem[] = [
   },
   {
     q: "Do I need to set up WhatsApp Business separately?",
-    a: "WhatsApp Business (Meta WABA) is included on the Pro plan. You connect your number via Meta Embedded Signup in Settings → WhatsApp Integration. We handle the Meta verification flow and message template approvals.",
+    a: "WhatsApp Business (WABA) is included on the Pro plan. You connect your number via Gupshup in Settings → WhatsApp Integration, or use the shared platform number until you connect your own app. We handle template approvals and campaign delivery through Gupshup.",
   },
   {
     q: "Do you support multi-outlet or chain pricing?",

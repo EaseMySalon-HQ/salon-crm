@@ -35,7 +35,7 @@ const whatsappMessageSchema = new mongoose.Schema(
     },
     provider: {
       type: String,
-      enum: ['meta', 'msg91'],
+      enum: ['meta', 'msg91', 'gupshup'],
       required: true,
       default: 'meta',
       index: true,
@@ -72,6 +72,10 @@ const whatsappMessageSchema = new mongoose.Schema(
     },
 
     metaMessageId: { type: String, default: null },
+    // Provider-agnostic message id (Meta wamid / Gupshup message id). Populated
+    // for every provider; metaMessageId is kept for back-compat during the
+    // Gupshup migration and mirrors this for Meta sends.
+    providerMessageId: { type: String, default: null },
     dedupeKey: { type: String, default: null },
 
     conversationId: {
@@ -84,7 +88,7 @@ const whatsappMessageSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ['queued', 'sent', 'delivered', 'read', 'failed'],
+      enum: ['queued', 'sent', 'delivered', 'read', 'failed', 'deleted'],
       required: true,
       default: 'queued',
       index: true,
@@ -131,6 +135,10 @@ whatsappMessageSchema.index({ clientId: 1, timestamp: -1 });
 whatsappMessageSchema.index(
   { metaMessageId: 1 },
   { sparse: true, name: 'metaMessageId_1_sparse', background: true }
+);
+whatsappMessageSchema.index(
+  { providerMessageId: 1 },
+  { sparse: true, name: 'providerMessageId_1_sparse', background: true }
 );
 
 module.exports = {

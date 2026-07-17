@@ -10,14 +10,12 @@
  *   2. Compute a stable dedupeKey and short-circuit if a non-failed message
  *      already exists for that key.
  *   3. Persist `WhatsAppMessage` (status=queued).
- *   4. Call the provider (Meta first; MSG91 fallback for transactional).
- *   5. Update the message with provider response + `metaMessageId`.
+ *   4. Call the provider (Gupshup primary; MSG91 fallback for transactional).
+ *   5. Update the message with provider response + `providerMessageId`.
  *   6. Debit wallet only when `freeWindow=false`, `category!='service'`,
- *      provider is Meta, and the account is in `live` mode. Test mode skips
- *      billing so demos don't drain balance.
+ *      provider is Gupshup, and the account is in `live` mode.
  *
- * Idempotency: Meta enforces user-level dedupe but billing happens before
- * Meta sees duplicates, so we short-circuit ourselves to prevent double debit.
+ * Idempotency: short-circuit on dedupeKey before wallet debit / provider call.
  */
 
 'use strict';
@@ -25,7 +23,9 @@
 const crypto = require('crypto');
 const databaseManager = require('../config/database-manager');
 const { route } = require('../services/whatsapp-router');
-const metaWhatsApp = require('../services/meta-whatsapp-service');
+const gupshupConfig = require('../lib/gupshup-config');
+const gupshupWhatsApp = require('../services/gupshup-whatsapp-service');
+const { buildGupshupParams } = require('./gupshup-template-params');
 const { getDescriptor } = require('./whatsapp-intents');
 const { resolveCostPaise } = require('../config/whatsapp-pricing');
 const { logger } = require('../utils/logger');
@@ -178,6 +178,7 @@ async function debitWalletForMessage({
   freeWindow,
   messageId,
   description,
+  provider = 'gupshup',
 }) {
   if (!costPaise || costPaise <= 0) return { success: true, skipped: true };
   const { Business, WalletTransaction } = await getMainModels();
@@ -196,7 +197,7 @@ async function debitWalletForMessage({
     amountPaise: costPaise,
     channel: 'whatsapp',
     messageCategory: category,
-    provider: 'meta',
+    provider,
     description: description || `WhatsApp ${category}`,
     relatedEntityId: messageId || null,
     relatedEntityType: 'WhatsAppMessage',
@@ -207,41 +208,59 @@ async function debitWalletForMessage({
 }
 
 /**
- * Send via Meta Cloud API path.
+ * Resolve the Gupshup template id for an outbound template send. Prefer an
+ * explicit id from the caller, then the WhatsAppTemplate row (by _id, then by
+ * name+language). Returns null when nothing maps — the caller must fail the
+ * send rather than deliver an unaddressed template.
  */
-async function sendViaMeta({
-  account,
+async function resolveGupshupTemplateId({ businessId, gupshupTemplateId, templateId, templateName, language }) {
+  if (gupshupTemplateId) return gupshupTemplateId;
+  const { Template } = await getMainModels();
+  let tpl = null;
+  if (templateId) {
+    tpl = await Template.findById(templateId).select('gupshupTemplateId').lean();
+  }
+  if (!tpl?.gupshupTemplateId && templateName) {
+    tpl = await Template.findOne({
+      businessId,
+      name: templateName,
+      language: language || 'en_US',
+    })
+      .select('gupshupTemplateId')
+      .lean();
+  }
+  return tpl?.gupshupTemplateId || null;
+}
+
+/**
+ * Send via the Gupshup Partner Portal. Session (free-form) messages use the v3
+ * endpoint; templates use /template/msg with the resolved Gupshup template id
+ * and ordered params. Sender (per-salon vs shared platform) is resolved inside
+ * the Gupshup service.
+ */
+async function sendViaGupshup({
   businessId,
   recipientPhone,
-  templateName,
-  language,
-  components,
-  intent,
   isService,
   serviceText,
+  gupshupTemplateId,
+  params,
+  requireBusinessSender = false,
 }) {
-  if (account.mode === 'test' && account.testRecipientWhitelist?.length) {
-    if (!account.testRecipientWhitelist.includes(recipientPhone)) {
-      return {
-        success: false,
-        error: `Test mode: recipient ${recipientPhone} is not in whitelist`,
-        code: 'TEST_MODE_BLOCKED',
-      };
-    }
-  }
   if (isService) {
-    return metaWhatsApp.sendText({
+    return gupshupWhatsApp.sendText({
       businessId,
       to: recipientPhone,
       body: serviceText || '',
+      requireBusinessSender,
     });
   }
-  return metaWhatsApp.sendTemplate({
+  return gupshupWhatsApp.sendTemplate({
     businessId,
     to: recipientPhone,
-    templateName,
-    language,
-    components,
+    templateId: gupshupTemplateId,
+    params: params || [],
+    requireBusinessSender,
   });
 }
 
@@ -260,6 +279,14 @@ async function sendWhatsApp(args) {
     language = 'en_US',
     components = [],
     variables = null,
+    /**
+     * Gupshup-specific overrides (optional). When the active provider is
+     * Gupshup, `gupshupTemplateId` addresses the approved template directly and
+     * `params` supplies the ordered variable list. If omitted they are derived
+     * from the WhatsAppTemplate row and `components` respectively.
+     */
+    gupshupTemplateId = null,
+    params = null,
     related = null,
     campaignId = null,
     bucketSeconds = 60,
@@ -276,6 +303,8 @@ async function sendWhatsApp(args) {
      * approved before it can be used.
      */
     allowUnapproved = false,
+    /** When true, send only via the tenant's connected Gupshup app (no platform fallback). */
+    requireTenantApp = false,
   } = args;
 
   if (!businessId || !intent || !recipientPhone) {
@@ -317,6 +346,19 @@ async function sendWhatsApp(args) {
 
   const { Message, Account, Conversation } = await getMainModels();
 
+  if (requireTenantApp) {
+    const account = await Account.findOne({ businessId }).lean();
+    if (!gupshupConfig.isBusinessAppUsable(account)) {
+      return {
+        success: false,
+        deduped: false,
+        message: null,
+        error: gupshupConfig.TENANT_APP_REQUIRED_MSG,
+        code: 'WHATSAPP_APP_NOT_CONNECTED',
+      };
+    }
+  }
+
   const dedupeKey = buildDedupeKey({
     businessId,
     clientId,
@@ -342,6 +384,16 @@ async function sendWhatsApp(args) {
       deduped: false,
       message: null,
       error: routing.reason || 'No provider available',
+    };
+  }
+
+  if (requireTenantApp && routing.senderScope !== 'business') {
+    return {
+      success: false,
+      deduped: false,
+      message: null,
+      error: gupshupConfig.TENANT_APP_REQUIRED_MSG,
+      code: 'WHATSAPP_APP_NOT_CONNECTED',
     };
   }
 
@@ -396,21 +448,33 @@ async function sendWhatsApp(args) {
 
   // Provider call.
   let providerResult = { success: false, error: 'Unsupported provider in send pipeline' };
-  if (routing.provider === 'meta') {
-    const account = await Account.findOne({ businessId });
-    if (!account) {
-      providerResult = { success: false, error: 'WABA not connected' };
-    } else {
-      providerResult = await sendViaMeta({
-        account,
+  if (routing.provider === 'gupshup') {
+    let resolvedTemplateId = null;
+    if (!isService) {
+      resolvedTemplateId = await resolveGupshupTemplateId({
         businessId,
-        recipientPhone: normalizedRecipient,
+        gupshupTemplateId,
+        templateId,
         templateName,
         language,
-        components,
-        intent,
+      });
+    }
+    if (!isService && !resolvedTemplateId) {
+      providerResult = {
+        success: false,
+        code: 'GUPSHUP_TEMPLATE_UNMAPPED',
+        error: `No Gupshup template id mapped for "${templateName || templateId || 'unknown'}"`,
+      };
+    } else {
+      const gsParams = params || buildGupshupParams(components);
+      providerResult = await sendViaGupshup({
+        businessId,
+        recipientPhone: normalizedRecipient,
         isService,
         serviceText,
+        gupshupTemplateId: resolvedTemplateId,
+        params: gsParams,
+        requireBusinessSender: requireTenantApp,
       });
     }
   } else if (routing.provider === 'msg91') {
@@ -441,90 +505,24 @@ async function sendWhatsApp(args) {
     });
     await messageDoc.save();
 
-    /**
-     * If Meta returns OAuthException (code 190 with subcodes 463/467/460/...)
-     * the access token is dead — every subsequent send in this campaign / job
-     * will also fail. Flip the WABA account to `error` status and stamp a
-     * human-readable message so the Settings card surfaces a "reconnect"
-     * banner instead of leaving the salon in an opaque "connected but
-     * everything fails" state. We only do this for Meta provider failures.
-     */
-    if (routing.provider === 'meta') {
-      const meta = providerResult.error?.error || providerResult.error || {};
-      /**
-       * Meta tags lots of non-auth errors with type=OAuthException
-       * (e.g. 131030 "recipient not in allowed list"), so we can't infer
-       * "token dead" from the type alone. Only code 190 is a true auth
-       * failure. Stay strict here so a sandbox/recipient-list error doesn't
-       * wrongly flip the WABA account to "error" status.
-       */
-      /**
-       * 131047 = "Re-engagement message" → Meta says the 24h CSW has
-       * expired. Close our local CSW so the inbox UI immediately switches
-       * to template-only mode instead of letting the operator keep trying
-       * free-form text. (We also handle this in the async webhook, but
-       * synchronous failures need the same fix.)
-       */
-      if (Number(meta.code) === 131047) {
-        try {
-          await Conversation.updateOne(
-            { businessId, recipientPhone: normalizedRecipient },
-            { $set: { cswExpiresAt: new Date(Date.now() - 1000) } }
-          );
-        } catch (cswErr) {
-          // best-effort
-        }
-      }
-
-      const isAuthError = Number(meta.code) === 190;
-      if (isAuthError) {
-        const subcode = meta.error_subcode || meta.subcode || null;
-        const friendlyByCode = {
-          463: 'Access token has expired. Reconnect via Settings → WhatsApp Integration.',
-          467: 'Access token has been invalidated. Reconnect via Settings → WhatsApp Integration.',
-          460: 'Password changed for the connected Meta user. Reconnect WhatsApp.',
-          458: 'Connected user has been removed from the Meta app. Reconnect WhatsApp.',
-        };
-        const friendly =
-          friendlyByCode[Number(subcode)] ||
-          `Meta rejected the access token (subcode ${subcode || 'unknown'}). Reconnect WhatsApp.`;
-        try {
-          await Account.updateOne(
-            { businessId },
-            {
-              $set: {
-                status: 'error',
-                lastErrorMessage: friendly,
-              },
-            }
-          );
-          logger.warn(
-            `[send-whatsapp] WABA token rejected (code 190 subcode ${subcode}); flipped account ${businessId} to status=error`
-          );
-        } catch (acctErr) {
-          logger.error(
-            '[send-whatsapp] could not flip WABA status after auth failure:',
-            acctErr?.message || acctErr
-          );
-        }
-      }
-    }
-
     return { success: false, deduped: false, message: messageDoc, error: providerResult.error };
   }
 
-  const metaMsgId =
+  const providerMsgId =
+    providerResult.messageId ||
     providerResult.data?.messages?.[0]?.id ||
     providerResult.data?.messages?.[0]?.message_id ||
+    providerResult.data?.messageId ||
     null;
   messageDoc.status = 'sent';
-  messageDoc.metaMessageId = metaMsgId;
+  messageDoc.providerMessageId = providerMsgId;
+  messageDoc.metaMessageId = providerMsgId;
   messageDoc.statusEvents.push({ status: 'sent', at: new Date(), raw: providerResult.data });
   await messageDoc.save();
 
-  // Debit wallet (only Meta + live mode + not in free window + not service).
+  // Debit wallet (Gupshup + live mode + not in free window + not service).
   if (
-    routing.provider === 'meta' &&
+    routing.provider === 'gupshup' &&
     routing.accountMode === 'live' &&
     !routing.useFreeWindow &&
     desc.category !== 'service' &&
@@ -537,6 +535,7 @@ async function sendWhatsApp(args) {
       freeWindow: false,
       messageId: messageDoc._id,
       description: `WhatsApp ${desc.category} • ${intent}`,
+      provider: routing.provider,
     });
     if (!debit.success) {
       logger.warn(

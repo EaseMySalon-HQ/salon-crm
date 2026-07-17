@@ -1,5 +1,15 @@
 'use strict';
 
+/**
+ * FROZEN (Gupshup migration): This legacy MSG91 campaign runner is retained for
+ * rollback only. Do NOT add new functionality here. New/active campaigns run
+ * through the Meta/Gupshup campaign runner (`whatsapp-campaign-runner.js`),
+ * which routes via the unified `sendWhatsApp()` pipeline. Under
+ * `WHATSAPP_PROVIDER=gupshup`, sends dispatched here still funnel through
+ * `whatsapp-service.sendTemplateMessage`, which routes to Gupshup. This file is
+ * slated for removal after the Gupshup campaign flow is stable in production.
+ */
+
 const databaseManager = require('../config/database-manager');
 const whatsappService = require('../services/whatsapp-service');
 const { getBullConnection } = require('./redis');

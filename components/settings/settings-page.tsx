@@ -323,7 +323,7 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
       {
         id: "whatsapp-integration",
         title: "WhatsApp Integration",
-        description: "Connect your WhatsApp Business number via Meta Cloud API (Embedded Signup).",
+        description: "Connect your WhatsApp Business number via Gupshup, or use the shared platform number.",
         icon: MessageCircle,
         iconColors:
           "bg-green-50 text-green-600 border-green-100 group-hover:bg-green-100/80 group-hover:border-green-200",

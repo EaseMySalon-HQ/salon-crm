@@ -83,6 +83,7 @@ async function sendClientWalletExpiryReminderWhatsApp(branchId, client, wallet, 
 
   const result = await whatsappService.sendClientWalletExpiryReminder({
     to: client.phone,
+    businessId: business._id,
     ...data,
   });
 

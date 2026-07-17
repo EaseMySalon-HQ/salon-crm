@@ -4,6 +4,8 @@
  * Mounted at /api/whatsapp/v2/inbox. All routes are gated by:
  *   1. authenticateToken     — staff-or-above session
  *   2. requireWabaAddon      — business must have the `waba` add-on enabled
+ *   3. requireTenantGupshupApp — tenant must have their own Gupshup app connected
+ *      (inbox never uses the shared platform number)
  *
  * Why this file exists:
  *   The conversation row only stores `recipientPhone` + a `clientId` reference.
@@ -24,6 +26,7 @@ const router = express.Router();
 const { authenticateToken, requireStaff } = require('../middleware/auth');
 const { setupMainDatabase } = require('../middleware/business-db');
 const requireWabaAddon = require('../middleware/waba-addon');
+const requireTenantGupshupApp = require('../middleware/require-tenant-gupshup-app');
 const { logger } = require('../utils/logger');
 const databaseManager = require('../config/database-manager');
 const { sendWhatsApp, normalizeRecipientPhone } = require('../lib/send-whatsapp');
@@ -147,6 +150,7 @@ router.get(
   requireStaff,
   setupMainDatabase,
   requireWabaAddon,
+  requireTenantGupshupApp,
   async (req, res) => {
     try {
       const { Conversation } = await getMainModels();
@@ -213,6 +217,7 @@ router.get(
   requireStaff,
   setupMainDatabase,
   requireWabaAddon,
+  requireTenantGupshupApp,
   async (req, res) => {
     try {
       const { Conversation, Message } = await getMainModels();
@@ -268,6 +273,7 @@ router.post(
   requireStaff,
   setupMainDatabase,
   requireWabaAddon,
+  requireTenantGupshupApp,
   async (req, res) => {
     try {
       const businessId = req.user.branchId;
@@ -342,11 +348,13 @@ router.post(
         actorId: req.user._id,
         actorType: 'user',
         bucketSeconds: 5,
+        requireTenantApp: true,
       });
 
       if (!result.success) {
         return res.status(400).json({
           success: false,
+          code: result.code || undefined,
           error: typeof result.error === 'string' ? result.error : (result.error?.error?.message || 'Reply failed'),
         });
       }
@@ -392,6 +400,7 @@ router.get(
   requireStaff,
   setupMainDatabase,
   requireWabaAddon,
+  requireTenantGupshupApp,
   async (req, res) => {
     try {
       const businessId = req.user.branchId;
@@ -435,6 +444,7 @@ router.post(
   requireStaff,
   setupMainDatabase,
   requireWabaAddon,
+  requireTenantGupshupApp,
   async (req, res) => {
     try {
       const { Conversation } = await getMainModels();
@@ -474,6 +484,7 @@ router.post(
   requireStaff,
   setupMainDatabase,
   requireWabaAddon,
+  requireTenantGupshupApp,
   async (req, res) => {
     try {
       const businessId = req.user.branchId;

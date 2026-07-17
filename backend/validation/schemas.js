@@ -451,11 +451,22 @@ const wa_buttonSchema = z
       (v) => (v === '' || v == null ? undefined : v),
       z.string().trim().min(3).max(32).optional()
     ),
+    urlExample: z.preprocess(
+      (v) => (v === '' || v == null ? undefined : v),
+      z.string().trim().url().max(2000).optional()
+    ),
   })
   .strict()
   .superRefine((val, ctx) => {
     if (val.type === 'URL' && !val.url) {
       ctx.addIssue({ code: 'custom', message: 'URL button requires url', path: ['url'] });
+    }
+    if (val.type === 'URL' && val.url && /\{\{\d+\}\}/.test(val.url) && !val.urlExample) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Dynamic URL buttons require urlExample (full sample URL)',
+        path: ['urlExample'],
+      });
     }
     if (val.type === 'PHONE_NUMBER' && !val.phone) {
       ctx.addIssue({
@@ -522,8 +533,24 @@ const whatsappTemplateListQuerySchema = z
   .object({
     status: z.string().optional(),
     search: z.string().optional(),
+    /** `own` = salon-created only (excludes templates added from admin library). */
+    origin: z.enum(['own', 'all']).optional(),
     limit: z.coerce.number().int().min(1).max(200).optional(),
     skip: z.coerce.number().int().min(0).optional(),
+  })
+  .strict();
+
+const whatsappTemplateLibraryQuerySchema = z
+  .object({
+    scope: z.enum(['promotional', 'transactional']),
+  })
+  .strict();
+
+const whatsappTemplateHeaderMediaUploadSchema = z
+  .object({
+    format: z.enum(['IMAGE', 'VIDEO', 'DOCUMENT']),
+    media: z.string().trim().min(1).max(24_000_000),
+    contentType: z.string().trim().max(120).optional(),
   })
   .strict();
 
@@ -659,6 +686,8 @@ module.exports = {
   whatsappTemplateBodySchema,
   whatsappTemplateUpdateBodySchema,
   whatsappTemplateListQuerySchema,
+  whatsappTemplateLibraryQuerySchema,
+  whatsappTemplateHeaderMediaUploadSchema,
   publicDemoLeadSchema,
   publicBookingSlotsBodySchema,
   publicBookingHoldsBodySchema,

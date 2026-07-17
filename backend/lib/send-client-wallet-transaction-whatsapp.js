@@ -108,6 +108,7 @@ async function sendClientWalletTransactionWhatsApp(branchId, businessModels, wal
 
   const result = await whatsappService.sendClientWalletTransaction({
     to: client.phone,
+    businessId: business._id,
     ...data,
   });
 

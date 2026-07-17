@@ -434,6 +434,7 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
                   const businessSettingsForWhatsApp = await req.businessModels.BusinessSettings.findOne().lean().catch(() => null);
                   const result = await whatsappService.sendAppointmentConfirmation({
                     to: client.phone,
+                    businessId: business._id,
                     clientName: client.name || 'Client',
                     appointmentData: {
                       serviceName: serviceName,

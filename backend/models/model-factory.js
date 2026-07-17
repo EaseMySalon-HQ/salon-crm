@@ -245,14 +245,13 @@ class ModelFactory {
         connection
       ),
 
-      // WhatsApp Business module (Meta Cloud API)
+      // WhatsApp Business module (Gupshup primary; MSG91 legacy fallback)
       WhatsAppAccount: this.getModel('WhatsAppAccount', require('./WhatsAppAccount').schema, connection),
       WhatsAppMessage: this.getModel('WhatsAppMessage', require('./WhatsAppMessage').schema, connection),
       WhatsAppConversation: this.getModel('WhatsAppConversation', require('./WhatsAppConversation').schema, connection),
       WhatsAppAuditLog: this.getModel('WhatsAppAuditLog', require('./WhatsAppAuditLog').schema, connection),
       WhatsAppTemplate: this.getModel('WhatsAppTemplate', require('./WhatsAppTemplate').schema, connection),
       WhatsAppCampaign: this.getModel('WhatsAppCampaign', require('./WhatsAppCampaign').schema, connection),
-      WhatsAppMetaConfig: this.getModel('WhatsAppMetaConfig', require('./WhatsAppMetaConfig').schema, connection),
 
       GmbAccount: this.getModel('GmbAccount', require('./GmbAccount').schema, connection),
       GmbMetaConfig: this.getModel('GmbMetaConfig', require('./GmbMetaConfig').schema, connection),
