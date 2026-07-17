@@ -67,9 +67,10 @@ async function sendText({ businessId, to, body, previewUrl = false, requireBusin
     sender = await resolveSendSender(businessId, { requireBusinessSender });
   } catch (err) {
     logger.warn('[gupshup] sendText sender resolve failed:', err?.message);
+    const detail = err?.cause ? `${err.message} (${err.cause})` : err?.message;
     return {
       success: false,
-      error: err?.message || 'sender unavailable',
+      error: detail || 'sender unavailable',
       code: err?.code || 'GUPSHUP_SENDER_UNAVAILABLE',
     };
   }
@@ -93,6 +94,9 @@ async function sendText({ businessId, to, body, previewUrl = false, requireBusin
       // Refresh token once and retry.
       try {
         const token = await gupshupAuth.getAppToken(sender.appId, { forceRefresh: true });
+        if (sender.scope === 'platform') {
+          await gupshupConfig.persistPlatformAppToken(sender.appId, token);
+        }
         const { data } = await axios.post(url, payload, { headers: jsonHeaders(token), timeout: 15000 });
         return { success: true, data, messageId: extractMessageId(data) };
       } catch (retryErr) {
@@ -127,9 +131,10 @@ async function sendTemplate({
     sender = await resolveSendSender(businessId, { requireBusinessSender });
   } catch (err) {
     logger.warn('[gupshup] sendTemplate sender resolve failed:', err?.message);
+    const detail = err?.cause ? `${err.message} (${err.cause})` : err?.message;
     return {
       success: false,
-      error: err?.message || 'sender unavailable',
+      error: detail || 'sender unavailable',
       code: err?.code || 'GUPSHUP_SENDER_UNAVAILABLE',
     };
   }
@@ -179,6 +184,9 @@ async function sendTemplate({
     if (status === 401 || status === 403) {
       try {
         const token = await gupshupAuth.getAppToken(sender.appId, { forceRefresh: true });
+        if (sender.scope === 'platform') {
+          await gupshupConfig.persistPlatformAppToken(sender.appId, token);
+        }
         const { data } = await axios.post(url, buildForm(), { headers: formHeaders(token), timeout: 15000 });
         if (data?.status === 'error') return { success: false, error: data, code: 'GUPSHUP_SEND_ERROR' };
         return { success: true, data, messageId: extractMessageId(data) };
@@ -262,8 +270,8 @@ async function applyTemplate({ appId, fields }) {
  * @param {string} [args.secret] shared secret mirrored back as request header
  */
 async function setSubscription({ appId, url, modes = 'ALL', tag, secret }) {
-  try {
-    const data = await gupshupAuth.withAppToken(appId, async (token) => {
+  const postOnce = async () =>
+    gupshupAuth.withAppToken(appId, async (token) => {
       const form = new URLSearchParams();
       form.set('modes', modes);
       form.set('tag', tag || `salon-crm-${appId}`);
@@ -278,11 +286,109 @@ async function setSubscription({ appId, url, modes = 'ALL', tag, secret }) {
       });
       return data;
     });
+
+  try {
+    let data = await postOnce();
+    if (data?.status === 'error') {
+      const msg = String(data?.message || data?.error || '').toLowerCase();
+      if (msg.includes('too many') || msg.includes('rate limit')) {
+        logger.warn('[gupshup] setSubscription rate limited; retrying once after 15s');
+        await sleep(15000);
+        data = await postOnce();
+      }
+    }
     if (data?.status === 'error') return { success: false, error: data };
     return { success: true, data };
   } catch (err) {
+    const status = err?.response?.status;
+    if (status === 429) {
+      logger.warn('[gupshup] setSubscription HTTP 429; retrying once after 15s');
+      try {
+        await sleep(15000);
+        const data = await postOnce();
+        if (data?.status === 'error') return { success: false, error: data, status: 429 };
+        return { success: true, data };
+      } catch (retryErr) {
+        return failure('setSubscription', retryErr);
+      }
+    }
     return failure('setSubscription', err);
   }
+}
+
+/**
+ * Register webhook if needed — updates existing subscription when tag/URL changed.
+ */
+async function ensureSubscription({ appId, url, modes = 'ALL', tag, secret }) {
+  const resolvedTag = tag || `salon-crm-${appId}`;
+
+  const listed = await listSubscriptions({ appId });
+  if (listed.success) {
+    const existingForUrl = findActiveSubscriptionForUrl(listed.data, url);
+    if (existingForUrl) {
+      return { success: true, data: existingForUrl, alreadyRegistered: true };
+    }
+
+    const existingForTag = findSubscriptionByTag(listed.data, resolvedTag);
+    if (existingForTag?.id) {
+      const updated = await updateSubscription({
+        appId,
+        subscriptionId: existingForTag.id,
+        url,
+        modes,
+        tag: resolvedTag,
+        secret,
+      });
+      if (updated.success) {
+        return { success: true, data: updated.data, updated: true, alreadyRegistered: false };
+      }
+      return {
+        ...updated,
+        error: subscriptionErrorMessage(updated.error, updated.status),
+      };
+    }
+  } else if (listed.status === 429) {
+    return {
+      success: false,
+      error: subscriptionErrorMessage(listed.error, 429),
+      status: 429,
+    };
+  }
+
+  const sub = await setSubscription({ appId, url, modes, tag: resolvedTag, secret });
+  if (!sub.success) {
+    const errText = String(
+      typeof sub.error === 'string' ? sub.error : sub.error?.message || sub.error?.error || ''
+    ).toLowerCase();
+    if (errText.includes('duplicate') && errText.includes('tag')) {
+      const retryList = await listSubscriptions({ appId });
+      const existingForTag = retryList.success
+        ? findSubscriptionByTag(retryList.data, resolvedTag)
+        : null;
+      if (existingForTag?.id) {
+        const updated = await updateSubscription({
+          appId,
+          subscriptionId: existingForTag.id,
+          url,
+          modes,
+          tag: resolvedTag,
+          secret,
+        });
+        if (updated.success) {
+          return { success: true, data: updated.data, updated: true, alreadyRegistered: false };
+        }
+      }
+    }
+    return {
+      ...sub,
+      error: subscriptionErrorMessage(sub.error, sub.status),
+    };
+  }
+  return { ...sub, alreadyRegistered: false };
+}
+
+async function sleep(ms) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -377,6 +483,102 @@ function failure(op, err) {
   return { success: false, error: errData, status };
 }
 
+function normalizeSubscriptionUrl(url) {
+  try {
+    const u = new URL(String(url || '').trim());
+    u.pathname = u.pathname.replace(/\/+$/, '') || '/';
+    return u.href.replace(/\/+$/, '');
+  } catch {
+    return String(url || '').trim().replace(/\/+$/, '');
+  }
+}
+
+function subscriptionErrorMessage(error, status) {
+  if (status === 429) {
+    return 'Gupshup rate limit: max 5 subscription calls per minute per app. Wait 60 seconds, then try again.';
+  }
+  if (typeof error === 'string') return error;
+  return error?.message || error?.error || 'Subscription request failed';
+}
+
+/** List active webhook subscriptions for an app (GET — same 5/min rate limit as POST). */
+async function listSubscriptions({ appId }) {
+  try {
+    const data = await gupshupAuth.withAppToken(appId, async (token) => {
+      const { data } = await axios.get(`${appBase(appId)}/subscription`, {
+        headers: { Authorization: token },
+        timeout: 15000,
+      });
+      return data;
+    });
+    if (data?.status === 'error') return { success: false, error: data };
+    const subs = Array.isArray(data?.subscriptions) ? data.subscriptions : [];
+    return { success: true, data: subs };
+  } catch (err) {
+    return failure('listSubscriptions', err);
+  }
+}
+
+function findActiveSubscriptionForUrl(subscriptions, targetUrl) {
+  const normalizedTarget = normalizeSubscriptionUrl(targetUrl);
+  if (!normalizedTarget) return null;
+  return (
+    (subscriptions || []).find(
+      (sub) =>
+        sub?.active !== false &&
+        normalizeSubscriptionUrl(sub?.url) === normalizedTarget
+    ) || null
+  );
+}
+
+function findSubscriptionByTag(subscriptions, tag) {
+  const wanted = String(tag || '').trim();
+  if (!wanted) return null;
+  return (
+    (subscriptions || []).find(
+      (sub) => sub?.active !== false && String(sub.tag || '').trim() === wanted
+    ) || null
+  );
+}
+
+async function updateSubscription({
+  appId,
+  subscriptionId,
+  url,
+  modes = 'ALL',
+  tag,
+  secret,
+  active = true,
+}) {
+  if (!subscriptionId) {
+    return { success: false, error: 'subscriptionId is required' };
+  }
+  try {
+    const data = await gupshupAuth.withAppToken(appId, async (token) => {
+      const form = new URLSearchParams();
+      if (url) form.set('url', url);
+      if (modes) form.set('modes', modes);
+      if (tag) form.set('tag', tag);
+      form.set('version', '3');
+      form.set('active', active ? 'true' : 'false');
+      form.set('doCheck', 'true');
+      if (secret) {
+        form.set('meta', JSON.stringify({ headers: { Authorization: `Bearer ${secret}` } }));
+      }
+      const { data } = await axios.put(
+        `${appBase(appId)}/subscription/${encodeURIComponent(subscriptionId)}`,
+        form.toString(),
+        { headers: formHeaders(token), timeout: 15000 }
+      );
+      return data;
+    });
+    if (data?.status === 'error') return { success: false, error: data };
+    return { success: true, data: data?.subscription || data };
+  } catch (err) {
+    return failure('updateSubscription', err);
+  }
+}
+
 module.exports = {
   sendText,
   sendTemplate,
@@ -384,6 +586,12 @@ module.exports = {
   getTemplate,
   applyTemplate,
   setSubscription,
+  ensureSubscription,
+  updateSubscription,
+  listSubscriptions,
+  findActiveSubscriptionForUrl,
+  findSubscriptionByTag,
+  normalizeSubscriptionUrl,
   uploadMedia,
   listPartnerApps,
   getWabaHealth,

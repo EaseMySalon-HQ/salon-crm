@@ -89,6 +89,7 @@ interface WhatsAppSettingsState {
   systemAlerts?: boolean | { enabled?: boolean; lowInventory?: boolean; paymentFailures?: boolean }
   clientWalletTransactionNotifications?: boolean | { enabled?: boolean }
   clientWalletExpiryReminderNotifications?: boolean | { enabled?: boolean }
+  platformLeadWelcomeNotifications?: boolean | { enabled?: boolean }
   quietHours?: { enabled: boolean; start: string; end: string }
   [key: string]: unknown
 }
@@ -96,6 +97,7 @@ interface WhatsAppSettingsState {
 /** All MSG91 template slot keys (admin table rows). Deep-merge with API so new slots appear even if the DB document predates them. */
 export const EMPTY_WHATSAPP_TEMPLATE_SLOTS: Record<string, string> = {
   welcomeMessage: "",
+  platformLeadWelcome: "",
   businessAccountCreated: "",
   receipt: "",
   receiptWithFeedback: "",
@@ -112,6 +114,7 @@ export const EMPTY_WHATSAPP_TEMPLATE_SLOTS: Record<string, string> = {
 
 const WHATSAPP_TEMPLATE_LABELS: Record<string, string> = {
   receiptWithFeedback: "Receipt with Feedback Link",
+  platformLeadWelcome: "Platform Lead Welcome",
 }
 
 function whatsappTemplateLabel(templateType: string): string {
@@ -1404,6 +1407,31 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
                     ? settings.clientWalletExpiryReminderNotifications
                     : { enabled: true }
                 handleSettingChange("clientWalletExpiryReminderNotifications", { ...prev, enabled: checked })
+              }}
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Platform lead welcome WhatsApp</Label>
+              <p className="text-xs text-gray-500">
+                Automatically send the welcome template to new platform leads (website demo form and admin Lead
+                Management). Requires the shared Gupshup app and an approved Platform lead welcome template.
+              </p>
+            </div>
+            <Switch
+              checked={
+                typeof settings.platformLeadWelcomeNotifications === "boolean"
+                  ? settings.platformLeadWelcomeNotifications
+                  : (settings.platformLeadWelcomeNotifications?.enabled ?? true)
+              }
+              onCheckedChange={(checked) => {
+                const prev =
+                  typeof settings.platformLeadWelcomeNotifications === "object" &&
+                  settings.platformLeadWelcomeNotifications !== null
+                    ? settings.platformLeadWelcomeNotifications
+                    : { enabled: true }
+                handleSettingChange("platformLeadWelcomeNotifications", { ...prev, enabled: checked })
               }}
             />
           </div>

@@ -96,6 +96,15 @@ const PLATFORM_TEMPLATE_CATALOG = Object.freeze([
     content: 'Hi {{1}}, welcome to {{2}}! {{3}}',
   },
   {
+    slotKey: 'platformLeadWelcome',
+    elementName: 'ems_platform_lead_welcome',
+    category: 'UTILITY',
+    language: 'en_US',
+    exampleParams: ['Priya'],
+    content:
+      '👋 Hi {{1}},\n\nWelcome to EaseMySalon! 💙\n\nThank you for your interest in our salon management software.\n\nWe help salons and spas streamline their entire business with features like:\n✨ Online Appointment Booking\n👥 Client & CRM Management\n💳 Billing & POS\n📱 WhatsApp Automation\n🎁 Memberships & Packages\n💰 Staff Commission & Payroll\n📊 Business Reports & Analytics\n\nOne of our product experts will connect with you shortly to understand your requirements and give you a personalized demo.\n\nLooking forward to helping your salon grow! 🚀\nTeam EaseMySalon',
+  },
+  {
     slotKey: 'default',
     elementName: 'ems_default',
     category: 'UTILITY',
@@ -148,6 +157,7 @@ const NOTIFICATION_SLOT_KEYS = [
   'clientWalletTransaction',
   'clientWalletExpiryReminder',
   'welcomeMessage',
+  'platformLeadWelcome',
   'businessAccountCreated',
   'default',
 ];

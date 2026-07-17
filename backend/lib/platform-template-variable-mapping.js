@@ -18,6 +18,7 @@ const APPOINTMENT_SLOT_KEYS = Object.freeze([
 /** Default data fields per notification slot (body vars in order). */
 const SLOT_DEFAULT_FIELDS = Object.freeze({
   welcomeMessage: ['clientName', 'businessName', 'welcomeMessage'],
+  platformLeadWelcome: ['firstName'],
   businessAccountCreated: ['businessName', 'businessCode', 'adminName', 'loginUrl'],
   receipt: ['clientName', 'businessName', 'receiptLink'],
   receiptWithFeedback: ['clientName', 'businessName', 'receiptLink', 'feedbackLink'],

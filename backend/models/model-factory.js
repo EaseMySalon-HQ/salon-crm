@@ -238,6 +238,26 @@ class ModelFactory {
         require('./PlatformLeadActivity').schema,
         connection
       ),
+      PlatformWhatsAppTemplate: this.getModel(
+        'PlatformWhatsAppTemplate',
+        require('./PlatformWhatsAppTemplate').schema,
+        connection
+      ),
+      PlatformWhatsAppConversation: this.getModel(
+        'PlatformWhatsAppConversation',
+        require('./PlatformWhatsAppConversation').schema,
+        connection
+      ),
+      PlatformWhatsAppMessage: this.getModel(
+        'PlatformWhatsAppMessage',
+        require('./PlatformWhatsAppMessage').schema,
+        connection
+      ),
+      PlatformWhatsAppCampaign: this.getModel(
+        'PlatformWhatsAppCampaign',
+        require('./PlatformWhatsAppCampaign').schema,
+        connection
+      ),
       PlanPromoCode: this.getModel('PlanPromoCode', require('./PlanPromoCode').schema, connection),
       PlanPromoRedemption: this.getModel(
         'PlanPromoRedemption',

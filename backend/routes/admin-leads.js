@@ -13,6 +13,7 @@ const { setupMainDatabase } = require('../middleware/business-db');
 const { authenticateAdmin, checkAdminPermission } = require('../middleware/admin-auth');
 const { logAdminActivity, getClientIp } = require('../utils/admin-logger');
 const { notifyPlatformAdminsPendingLead } = require('../lib/notify-platform-leads-pending');
+const { sendPlatformLeadWelcomeWhatsApp } = require('../lib/send-platform-lead-welcome-whatsapp');
 const { linkPlatformLeadToBusiness } = require('../lib/link-platform-lead-to-business');
 const { normalizeLeadContact } = require('../lib/platform-lead-contact');
 
@@ -268,6 +269,8 @@ router.post('/', checkAdminPermission('leads', 'create'), async (req, res) => {
     if (!savedLead.assignedAdminId) {
       notifyPlatformAdminsPendingLead(req.mainModels, savedLead);
     }
+
+    sendPlatformLeadWelcomeWhatsApp(req.mainModels, savedLead);
 
     res.status(201).json({ success: true, data: populatedLead });
   } catch (error) {

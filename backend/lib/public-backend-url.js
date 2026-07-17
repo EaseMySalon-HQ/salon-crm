@@ -53,6 +53,23 @@ function resolvePublicBackendBaseUrl() {
   return `http://localhost:${port}`;
 }
 
+const GUPSHUP_WEBHOOK_PATH = '/api/webhooks/whatsapp/gupshup';
+
+/**
+ * Ensure a public URL includes the Gupshup webhook path. Accepts a tunnel host,
+ * backend base, or full webhook URL.
+ */
+function normalizeGupshupWebhookUrl(raw) {
+  let url = normalizeBase(raw);
+  if (!url) return '';
+  if (!/^https?:\/\//i.test(url)) {
+    url = `https://${url}`;
+  }
+  if (url.endsWith(GUPSHUP_WEBHOOK_PATH)) return url;
+  if (url.endsWith('/api')) return `${url}/webhooks/whatsapp/gupshup`;
+  return `${url}${GUPSHUP_WEBHOOK_PATH}`;
+}
+
 /**
  * Full Gupshup delivery webhook URL.
  * @param {object} [opts]
@@ -62,21 +79,23 @@ function resolvePublicBackendBaseUrl() {
 function resolveGupshupWebhookUrl({ adminWebhookUrl } = {}) {
   const explicitEnv = normalizeBase(process.env.GUPSHUP_WEBHOOK_URL);
   if (explicitEnv) {
-    return { url: explicitEnv, source: 'env' };
+    return { url: normalizeGupshupWebhookUrl(explicitEnv), source: 'env' };
   }
   const admin = normalizeBase(adminWebhookUrl);
   if (admin) {
-    return { url: admin, source: 'admin' };
+    return { url: normalizeGupshupWebhookUrl(admin), source: 'admin' };
   }
   const base = resolvePublicBackendBaseUrl();
   return {
-    url: `${base}/api/webhooks/whatsapp/gupshup`,
+    url: `${base}${GUPSHUP_WEBHOOK_PATH}`,
     source: 'computed',
   };
 }
 
 module.exports = {
   normalizeBase,
+  normalizeGupshupWebhookUrl,
+  GUPSHUP_WEBHOOK_PATH,
   resolvePublicBackendBaseUrl,
   resolveGupshupWebhookUrl,
 };

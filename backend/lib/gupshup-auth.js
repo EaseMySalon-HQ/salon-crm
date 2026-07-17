@@ -99,12 +99,33 @@ async function login() {
     return token;
   } catch (err) {
     const status = err?.response?.status;
-    logger.error(
-      `[gupshup-auth] login failed (status=${status || 'n/a'}): ${
-        err?.response?.data?.message || err?.message
-      }`
-    );
-    throw new Error('Gupshup partner login failed');
+    const retryable = status === 429 || status === 500 || status === 502 || status === 503;
+    if (retryable) {
+      await new Promise((r) => setTimeout(r, 1500));
+      try {
+        const { data } = await axios.post(url, body.toString(), {
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          timeout: 15000,
+        });
+        const token = data?.token?.token || data?.token || null;
+        if (token && typeof token === 'string') return token;
+      } catch (retryErr) {
+        err = retryErr;
+      }
+    }
+    const message =
+      err?.response?.data?.message || err?.response?.data?.error || err?.message || 'unknown error';
+    logger.error(`[gupshup-auth] login failed (status=${status || 'n/a'}): ${message}`);
+    const hint =
+      status === 401 || status === 403
+        ? 'Check partner email and client secret in Settings → API → Gupshup'
+        : status === 429
+          ? 'Gupshup login rate limit — wait a minute and retry'
+          : 'Gupshup partner API error — retry in a few minutes';
+    const wrapped = new Error(`Gupshup partner login failed: ${hint}`);
+    wrapped.code = 'GUPSHUP_PARTNER_LOGIN_FAILED';
+    wrapped.cause = message;
+    throw wrapped;
   }
 }
 
@@ -117,9 +138,19 @@ async function getPartnerToken({ forceRefresh = false } = {}) {
   ) {
     return partnerTokenCache.token;
   }
-  const token = await login();
-  partnerTokenCache = { token, fetchedAt: now };
-  return token;
+  try {
+    const token = await login();
+    partnerTokenCache = { token, fetchedAt: now };
+    return token;
+  } catch (err) {
+    // If Gupshup login is temporarily down, keep using a recently cached partner token.
+    const STALE_GRACE_MS = 25 * 60 * 60 * 1000;
+    if (partnerTokenCache.token && now - partnerTokenCache.fetchedAt < STALE_GRACE_MS) {
+      logger.warn('[gupshup-auth] partner login failed; using cached partner token');
+      return partnerTokenCache.token;
+    }
+    throw err;
+  }
 }
 
 async function getAppToken(appId, { forceRefresh = false } = {}) {
