@@ -17,6 +17,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -33,6 +34,7 @@ import { useToast } from "@/hooks/use-toast"
 import { adminRequestHeaders } from "@/lib/admin-request-headers"
 import {
   FileText,
+  Eye,
   Loader2,
   PlusCircle,
   RefreshCw,
@@ -55,6 +57,7 @@ interface PlatformTemplate {
   gupshupTemplateId?: string | null
   rejectionReason?: string | null
   components?: {
+    header?: { format?: string | null; text?: string | null }
     body?: { text?: string; examples?: string[][] }
     footer?: { text?: string }
     buttons?: TemplateButton[]
@@ -77,6 +80,7 @@ const NOTIFICATION_SLOT_LABELS: Record<string, string> = {
   clientWalletTransaction: "Prepaid wallet transaction",
   clientWalletExpiryReminder: "Prepaid wallet expiry reminder",
   welcomeMessage: "Welcome message",
+  platformLeadWelcome: "Platform lead welcome",
   businessAccountCreated: "Business account created",
   default: "Default template",
 }
@@ -127,6 +131,51 @@ function placeholderParamSlots(text: string): number[] {
   return Array.from({ length: max }, (_, i) => i + 1)
 }
 
+function applyBodySamples(text: string, examples: string[] = []): string {
+  const slots = placeholderParamSlots(text)
+  return slots.reduce((out, n, i) => {
+    const sample = examples[i]?.trim()
+    return out.replaceAll(`{{${n}}}`, sample || `{{${n}}}`)
+  }, text)
+}
+
+function PlatformTemplateMessagePreview({ tpl }: { tpl: PlatformTemplate }) {
+  const bodyText = tpl.components?.body?.text || ""
+  const examples = tpl.components?.body?.examples?.[0] || []
+  const renderedBody = applyBodySamples(bodyText, examples)
+  const footerText = tpl.components?.footer?.text || ""
+  const buttons = tpl.components?.buttons || []
+  const header = tpl.components?.header
+  const headerFormat = header?.format && header.format !== "NONE" ? header.format : null
+
+  return (
+    <div className="rounded-xl bg-emerald-50/60 border border-emerald-100 p-4">
+      <div className="max-w-md mx-auto bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+        {headerFormat ? (
+          <div className="bg-slate-100 px-4 py-3 border-b border-slate-200 text-sm font-semibold text-slate-800">
+            {headerFormat === "TEXT"
+              ? header?.text || "Header"
+              : `${String(headerFormat).toLowerCase()} header`}
+          </div>
+        ) : null}
+        <div className="px-4 py-3 text-sm text-slate-800 whitespace-pre-wrap">
+          {renderedBody || <span className="text-slate-400">Empty body</span>}
+        </div>
+        {footerText ? <div className="px-4 pb-3 text-xs text-slate-500">{footerText}</div> : null}
+        {buttons.length > 0 ? (
+          <div className="border-t border-slate-100 divide-y divide-slate-100">
+            {buttons.map((b, i) => (
+              <div key={i} className="px-4 py-2.5 text-sm text-emerald-700 text-center font-medium">
+                {b.text || `Button ${i + 1}`}
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
 export function PlatformWhatsAppTemplateManager() {
   const { toast } = useToast()
   const [loading, setLoading] = useState(true)
@@ -138,6 +187,8 @@ export function PlatformWhatsAppTemplateManager() {
   const [mappingTemplate, setMappingTemplate] = useState<PlatformTemplate | null>(null)
   const [mapSlotKey, setMapSlotKey] = useState("")
   const [testDialogOpen, setTestDialogOpen] = useState(false)
+  const [viewDialogOpen, setViewDialogOpen] = useState(false)
+  const [viewingTemplate, setViewingTemplate] = useState<PlatformTemplate | null>(null)
   const [testingTemplate, setTestingTemplate] = useState<PlatformTemplate | null>(null)
   const [testPhone, setTestPhone] = useState("")
   const [testParams, setTestParams] = useState<string[]>([])
@@ -322,6 +373,11 @@ export function PlatformWhatsAppTemplateManager() {
     setMappingTemplate(tpl)
     setMapSlotKey(tpl.slotKey || "")
     setMapDialogOpen(true)
+  }
+
+  const openView = (tpl: PlatformTemplate) => {
+    setViewingTemplate(tpl)
+    setViewDialogOpen(true)
   }
 
   const openTest = (tpl: PlatformTemplate) => {
@@ -638,6 +694,10 @@ export function PlatformWhatsAppTemplateManager() {
                       {tpl.gupshupTemplateId || "—"}
                     </TableCell>
                     <TableCell className="text-right space-x-1">
+                      <Button variant="ghost" size="sm" onClick={() => openView(tpl)} disabled={busy}>
+                        <Eye className="h-4 w-4 mr-1" />
+                        View
+                      </Button>
                       {tpl.status === "approved" && (
                         <Button variant="ghost" size="sm" onClick={() => openMap(tpl)} disabled={busy}>
                           Map
@@ -967,6 +1027,47 @@ export function PlatformWhatsAppTemplateManager() {
             </Button>
             <Button onClick={onSendTest} disabled={busy}>
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Send test"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={viewDialogOpen} onOpenChange={setViewDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Template message</DialogTitle>
+            <DialogDescription>
+              Preview of how this template appears in WhatsApp. Sample values fill {"{{n}}"} placeholders
+              when configured.
+            </DialogDescription>
+          </DialogHeader>
+          {viewingTemplate ? (
+            <div className="space-y-4 py-2">
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs">{viewingTemplate.name}</code>
+                <Badge variant="outline">{viewingTemplate.category}</Badge>
+                {statusBadge(viewingTemplate.status)}
+                <span className="text-muted-foreground">{viewingTemplate.language}</span>
+              </div>
+              {viewingTemplate.slotKey ? (
+                <p className="text-xs text-muted-foreground">
+                  Notification: {NOTIFICATION_SLOT_LABELS[viewingTemplate.slotKey] || viewingTemplate.slotKey}
+                </p>
+              ) : null}
+              <PlatformTemplateMessagePreview tpl={viewingTemplate} />
+              {viewingTemplate.components?.body?.text ? (
+                <details className="text-xs text-muted-foreground">
+                  <summary className="cursor-pointer font-medium text-slate-700">Raw body text</summary>
+                  <pre className="mt-2 whitespace-pre-wrap rounded-md bg-slate-50 p-3 font-mono text-[11px] text-slate-700">
+                    {viewingTemplate.components.body.text}
+                  </pre>
+                </details>
+              ) : null}
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setViewDialogOpen(false)}>
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>

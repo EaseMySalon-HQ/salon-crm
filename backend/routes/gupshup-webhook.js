@@ -21,6 +21,7 @@ const router = express.Router();
 const databaseManager = require('../config/database-manager');
 const gupshupConfig = require('../lib/gupshup-config');
 const { logger } = require('../utils/logger');
+const { normalizePlatformLeadPhone } = require('../lib/send-platform-lead-welcome-whatsapp');
 
 const STATUS_PRIORITY = { queued: 1, sent: 2, delivered: 3, read: 4, failed: 99, deleted: 99 };
 const TERMINAL = new Set(['failed', 'deleted']);
@@ -42,6 +43,18 @@ async function getModels() {
   return {
     Account: main.model('WhatsAppAccount', require('../models/WhatsAppAccount').schema),
     Message: main.model('WhatsAppMessage', require('../models/WhatsAppMessage').schema),
+    PlatformMessage: main.model(
+      'PlatformWhatsAppMessage',
+      require('../models/PlatformWhatsAppMessage').schema
+    ),
+    PlatformCampaign: main.model(
+      'PlatformWhatsAppCampaign',
+      require('../models/PlatformWhatsAppCampaign').schema
+    ),
+    PlatformConversation: main.model(
+      'PlatformWhatsAppConversation',
+      require('../models/PlatformWhatsAppConversation').schema
+    ),
     Conversation: main.model(
       'WhatsAppConversation',
       require('../models/WhatsAppConversation').schema
@@ -49,6 +62,7 @@ async function getModels() {
     Campaign: main.model('WhatsAppCampaign', require('../models/WhatsAppCampaign').schema),
     Business: main.model('Business', require('../models/Business').schema),
     WalletTransaction: main.model('WalletTransaction', require('../models/WalletTransaction').schema),
+    PlatformLead: main.model('PlatformLead', require('../models/PlatformLead').schema),
   };
 }
 
@@ -66,6 +80,47 @@ function sourceIp(req) {
   return xff || req.ip || req.socket?.remoteAddress || '';
 }
 
+function isLoopbackOrTunnelProxy(ip) {
+  const normalized = String(ip || '').replace(/^::ffff:/, '');
+  return (
+    normalized === '127.0.0.1' ||
+    normalized === '::1' ||
+    normalized.startsWith('127.') ||
+    normalized === 'localhost'
+  );
+}
+
+/** Recent webhook events for admin diagnostics (in-memory, dev-friendly). */
+const recentWebhookEvents = [];
+const MAX_RECENT_WEBHOOK_EVENTS = 50;
+
+function pushWebhookEvent(entry) {
+  recentWebhookEvents.unshift({ ...entry, at: new Date().toISOString() });
+  if (recentWebhookEvents.length > MAX_RECENT_WEBHOOK_EVENTS) {
+    recentWebhookEvents.length = MAX_RECENT_WEBHOOK_EVENTS;
+  }
+}
+
+function summarizeWebhookBody(body) {
+  if (!body || typeof body !== 'object') return { shape: 'empty' };
+  if (body.object === 'whatsapp_business_account') {
+    let messages = 0;
+    let statuses = 0;
+    for (const entry of body.entry || []) {
+      for (const change of entry.changes || []) {
+        messages += (change.value?.messages || []).length;
+        statuses += (change.value?.statuses || []).length;
+      }
+    }
+    return { shape: 'v3', messages, statuses };
+  }
+  return {
+    shape: 'legacy',
+    type: body.type || null,
+    app: body.app || null,
+  };
+}
+
 /**
  * Verify the request is genuinely from Gupshup: shared-secret header must match
  * (when configured) AND source IP must be allowlisted (when configured). Both
@@ -76,12 +131,22 @@ function verifyAuth(req) {
   if (secret) {
     const auth = String(req.headers['authorization'] || '');
     const expected = `Bearer ${secret}`;
-    if (auth !== expected) return { ok: false, reason: 'bad secret header' };
+    if (auth !== expected) {
+      return {
+        ok: false,
+        reason: auth
+          ? 'bad secret header'
+          : 'missing Authorization header (required when GUPSHUP_WEBHOOK_SECRET is set)',
+      };
+    }
   }
   const ips = allowedIps();
   if (ips.length) {
     const ip = sourceIp(req).replace(/^::ffff:/, '');
-    if (!ips.includes(ip)) return { ok: false, reason: `ip not allowlisted (${ip})` };
+    // Cloudflare tunnel / cloudflared forwards from loopback — not a Gupshup IP.
+    if (!isLoopbackOrTunnelProxy(ip) && !ips.includes(ip)) {
+      return { ok: false, reason: `ip not allowlisted (${ip})` };
+    }
   }
   return { ok: true };
 }
@@ -122,15 +187,38 @@ async function refundDebitForMessage({ msg, reason }) {
 
 /** Find outbound message by gs_id, wamid, or legacy provider id. */
 async function findMessageByProviderIds(ids) {
-  const { Message } = await getModels();
+  const { Message, PlatformMessage } = await getModels();
   const unique = [...new Set(ids.filter(Boolean).map(String))];
   if (!unique.length) return null;
-  return Message.findOne({
+  const query = {
     $or: unique.flatMap((id) => [
       { providerMessageId: id },
       { metaMessageId: id },
     ]),
-  });
+  };
+  const tenantMsg = await Message.findOne(query);
+  if (tenantMsg) return { scope: 'tenant', msg: tenantMsg };
+  const platformMsg = await PlatformMessage.findOne(query);
+  if (platformMsg) return { scope: 'platform', msg: platformMsg };
+  return null;
+}
+
+/** Fallback when Gupshup sends wamid but we only stored gsId from template send. */
+async function findPlatformMessageByRecipient(evt) {
+  const { PlatformMessage } = await getModels();
+  const rawPhone = evt.recipient_id || evt.destination || evt.to || evt.phone || null;
+  const recipientPhone = normalizePlatformLeadPhone(rawPhone);
+  if (!recipientPhone) return null;
+  const since = new Date(Date.now() - 48 * 60 * 60 * 1000);
+  const msg = await PlatformMessage.findOne({
+    recipientPhone,
+    direction: 'outbound',
+    status: { $in: ['queued', 'sent'] },
+    timestamp: { $gte: since },
+  })
+    .sort({ timestamp: -1 })
+    .limit(1);
+  return msg || null;
 }
 
 async function closeCswForRecipient({ businessId, recipientPhone }) {
@@ -162,26 +250,47 @@ function normalizeStatusEvent(evt) {
 }
 
 async function applyStatusEvent(evt) {
-  const { Message, Campaign } = await getModels();
+  const { Message, Campaign, PlatformMessage } = await getModels();
   const norm = normalizeStatusEvent(evt);
   const { rawStatus, newStatus, wamid, gsId, nestedError, errors } = norm;
   if (!newStatus) return;
 
   const lookupIds = [wamid, gsId, norm.providerMessageId].filter(Boolean);
-  const msg = await findMessageByProviderIds(lookupIds);
-  if (!msg) {
+  let found = await findMessageByProviderIds(lookupIds);
+  if (!found && (wamid || gsId)) {
+    const platformMsg = await findPlatformMessageByRecipient(evt);
+    if (platformMsg) found = { scope: 'platform', msg: platformMsg };
+  }
+  if (!found) {
     logger.warn(`[gupshup-webhook] status for unknown message ${lookupIds.join('/')} (${rawStatus})`);
     return;
   }
 
-  // Link gs_id → wamid when Gupshup sends both (common on enqueued → sent).
-  if (wamid && gsId && msg.providerMessageId === gsId) {
-    msg.providerMessageId = wamid;
-    msg.metaMessageId = wamid;
-  } else if (wamid && !msg.metaMessageId) {
-    msg.metaMessageId = wamid;
-    if (!msg.providerMessageId || msg.providerMessageId === gsId) {
+  const msg = found.msg;
+  const isPlatform = found.scope === 'platform';
+
+  if (!isPlatform) {
+    // Link gs_id → wamid when Gupshup sends both (common on enqueued → sent).
+    if (wamid && gsId && msg.providerMessageId === gsId) {
       msg.providerMessageId = wamid;
+      msg.metaMessageId = wamid;
+    } else if (wamid && !msg.metaMessageId) {
+      msg.metaMessageId = wamid;
+      if (!msg.providerMessageId || msg.providerMessageId === gsId) {
+        msg.providerMessageId = wamid;
+      }
+    }
+  } else {
+    if (wamid && gsId && msg.providerMessageId === gsId) {
+      msg.providerMessageId = wamid;
+      msg.metaMessageId = wamid;
+    } else if (wamid) {
+      if (!msg.metaMessageId) msg.metaMessageId = wamid;
+      if (!msg.providerMessageId || msg.providerMessageId === gsId) {
+        msg.providerMessageId = wamid;
+      }
+    } else if (gsId && !msg.providerMessageId) {
+      msg.providerMessageId = gsId;
     }
   }
 
@@ -198,27 +307,160 @@ async function applyStatusEvent(evt) {
   msg.status = newStatus;
   if (newStatus === 'failed') {
     const details = nestedError;
-    msg.failureCode = String(details.code || details.reason || 'FAILED');
-    msg.failureReason = String(details.reason || details.message || details.title || 'Send failed').slice(0, 500);
-    await refundDebitForMessage({ msg, reason: 'failed' });
-
-    const errorCode = Number(details.code || errors[0]?.code);
-    if (errorCode === CSW_CLOSED_ERROR) {
-      await closeCswForRecipient({ businessId: msg.businessId, recipientPhone: msg.recipientPhone });
+    const failureReason = String(details.reason || details.message || details.title || 'Send failed').slice(0, 500);
+    if (isPlatform) {
+      msg.failureReason = failureReason;
+    } else {
+      msg.failureCode = String(details.code || details.reason || 'FAILED');
+      msg.failureReason = failureReason;
+      await refundDebitForMessage({ msg, reason: 'failed' });
+      const errorCode = Number(details.code || errors[0]?.code);
+      if (errorCode === CSW_CLOSED_ERROR) {
+        await closeCswForRecipient({ businessId: msg.businessId, recipientPhone: msg.recipientPhone });
+      }
     }
   }
   await msg.save();
 
-  if (msg.campaignId && (newStatus === 'delivered' || newStatus === 'read' || newStatus === 'failed')) {
+  if (msg.campaignId) {
     try {
-      await Campaign.updateOne(
-        { _id: msg.campaignId },
-        { $inc: { [`counts.${newStatus}`]: 1 } }
-      );
+      if (isPlatform) {
+        const { reconcileCampaignCounts } = require('../lib/platform-whatsapp-campaign-report');
+        await reconcileCampaignCounts(msg.campaignId);
+      } else if (newStatus === 'delivered' || newStatus === 'read' || newStatus === 'failed') {
+        const { Campaign } = await getModels();
+        await Campaign.updateOne(
+          { _id: msg.campaignId },
+          { $inc: { [`counts.${newStatus}`]: 1 } }
+        );
+      }
     } catch (err) {
       logger.warn('[gupshup-webhook] campaign counter update failed:', err?.message || err);
     }
   }
+}
+
+function normalizePhoneDigits(raw) {
+  return String(raw || '').replace(/\D/g, '');
+}
+
+function phoneSuffixMatchFilter(normalized) {
+  const suffix = String(normalized || '').slice(-10);
+  if (suffix.length !== 10) return { recipientPhone: normalized };
+  return {
+    $or: [{ recipientPhone: normalized }, { recipientPhone: { $regex: `${suffix}$` } }],
+  };
+}
+
+function extractInboundPhone(evt, ctx) {
+  const candidates = [
+    ctx?.recipientPhone,
+    evt?.from,
+    evt?.source,
+    evt?.sender?.phone,
+    typeof evt?.sender === 'string' ? evt.sender : null,
+    evt?.payload?.source,
+    evt?.payload?.sender?.phone,
+    evt?.payload?.from,
+  ];
+  for (const raw of candidates) {
+    const normalized = normalizePlatformLeadPhone(raw);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+/** Extract user text from Gupshup legacy or Meta v3 inbound shapes. */
+function extractInboundText(evt) {
+  if (!evt || typeof evt !== 'object') return null;
+  const inner = evt.payload && typeof evt.payload === 'object' ? evt.payload : null;
+  if (typeof inner?.text === 'string') return inner.text;
+  if (typeof inner?.text?.body === 'string') return inner.text.body;
+  if (typeof inner?.title === 'string') return inner.title;
+  if (typeof inner?.postbackText === 'string') return inner.postbackText;
+  if (typeof evt.payload?.text === 'string') return evt.payload.text;
+  if (typeof evt.payload?.text?.body === 'string') return evt.payload.text.body;
+  if (typeof evt.text?.body === 'string') return evt.text.body;
+  if (typeof evt.text === 'string') return evt.text;
+  if (typeof evt.interactive?.button_reply?.title === 'string') return evt.interactive.button_reply.title;
+  if (typeof evt.interactive?.list_reply?.title === 'string') return evt.interactive.list_reply.title;
+  if (inner?.type === 'button_reply' && typeof inner.payload?.title === 'string') {
+    return inner.payload.title;
+  }
+  if (inner?.type === 'list_reply' && typeof inner.payload?.title === 'string') {
+    return inner.payload.title;
+  }
+  if (typeof evt.type === 'string' && evt.type !== 'text') {
+    return `[${evt.type}]`;
+  }
+  return null;
+}
+
+/** True when the webhook belongs to the shared platform Gupshup app (not a tenant app). */
+async function isInboundForPlatformApp(ctx, platformCfg) {
+  if (!platformCfg?.appId) return false;
+
+  if (ctx.appId && String(ctx.appId) === String(platformCfg.appId)) return true;
+
+  if (
+    ctx.appName &&
+    platformCfg.appName &&
+    String(ctx.appName).toLowerCase() === String(platformCfg.appName).toLowerCase()
+  ) {
+    return true;
+  }
+
+  const platformSource = normalizePhoneDigits(platformCfg.source);
+  const displayPhone = normalizePhoneDigits(ctx.displayPhoneNumber);
+  if (platformSource && displayPhone) {
+    if (displayPhone === platformSource) return true;
+    const plat10 = platformSource.slice(-10);
+    const disp10 = displayPhone.slice(-10);
+    if (plat10.length === 10 && disp10 === plat10) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Route inbound to platform inbox when webhook metadata is ambiguous but we
+ * already messaged this phone from the platform app (template/campaign/inbox).
+ */
+async function shouldRouteInboundToPlatform(recipientPhone, ctx, platformCfg) {
+  if (await isInboundForPlatformApp(ctx, platformCfg)) return true;
+  if (!platformCfg?.appId) return false;
+
+  const normalized = normalizePlatformLeadPhone(recipientPhone);
+  if (!normalized) return false;
+
+  const { PlatformMessage, PlatformConversation } = await getModels();
+  const phoneFilter = phoneSuffixMatchFilter(normalized);
+
+  const conv = await PlatformConversation.findOne(phoneFilter).select('_id').lean();
+  if (conv) return true;
+
+  const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const outbound = await PlatformMessage.findOne({
+    direction: 'outbound',
+    timestamp: { $gte: since },
+    ...phoneFilter,
+  })
+    .select('_id')
+    .lean();
+  if (outbound) return true;
+
+  const businessId = await resolveBusinessIdForApp(ctx);
+  if (businessId) {
+    const account = await gupshupConfig.loadAccount(businessId);
+    if (
+      account?.gupshupAppId &&
+      String(account.gupshupAppId) === String(platformCfg.appId)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 async function resolveBusinessIdForApp({ appId, appName, phoneNumberId }) {
@@ -245,50 +487,92 @@ async function resolveBusinessIdByRecentOutbound(recipientPhone) {
   return recent?.businessId || null;
 }
 
+async function handlePlatformInbound(evt, ctx) {
+  const { recordPlatformInboundMessage } = require('../lib/platform-whatsapp-send');
+  const { PlatformConversation, PlatformLead } = await getModels();
+  const recipientPhone = extractInboundPhone(evt, ctx);
+  if (!recipientPhone) {
+    logger.warn('[gupshup-webhook] platform inbound missing sender phone', {
+      appId: ctx.appId,
+      appName: ctx.appName,
+      type: evt?.type || null,
+    });
+    return;
+  }
+
+  const text = extractInboundText(evt);
+  const preview = text || `[${evt.type || 'message'}]`;
+
+  const conv = await recordPlatformInboundMessage({
+    recipientPhone,
+    text,
+    providerMessageId: evt.id || null,
+    raw: evt,
+  });
+  if (!conv) {
+    logger.warn('[gupshup-webhook] platform inbound not stored for %s', recipientPhone);
+    return;
+  }
+
+  logger.info('[gupshup-webhook] platform inbound from %s', recipientPhone);
+
+  if (text && STOP_WORDS.test(text)) {
+    await PlatformConversation.updateOne(
+      { recipientPhone },
+      { $set: { marketingOptOut: true } }
+    );
+    const suffix = recipientPhone.slice(-10);
+    if (suffix) {
+      await PlatformLead.updateMany(
+        { phone: { $regex: `${suffix}$` } },
+        { $set: { marketingOptOut: true } }
+      );
+    }
+  }
+}
+
 async function handleInbound(evt, ctx) {
   const { Message, Conversation } = await getModels();
-  const sender = evt.sender || {};
-  const recipientPhone = String(
-    evt.source || evt.from || sender.phone || ctx.recipientPhone || ''
-  ).replace(/\D/g, '');
-  if (!recipientPhone) return;
+  const recipientPhone = extractInboundPhone(evt, ctx);
+  if (!recipientPhone) {
+    logger.warn('[gupshup-webhook] inbound missing sender phone', {
+      appId: ctx.appId,
+      appName: ctx.appName,
+      type: evt?.type || null,
+    });
+    return;
+  }
 
-  let businessId = await resolveBusinessIdForApp(ctx);
+  const platformCfg = await gupshupConfig.loadPlatformConfig();
+  if (await shouldRouteInboundToPlatform(recipientPhone, ctx, platformCfg)) {
+    await handlePlatformInbound(evt, { ...ctx, recipientPhone });
+    return;
+  }
+
+  const businessId = await resolveBusinessIdForApp(ctx);
   if (businessId) {
     const account = await gupshupConfig.loadAccount(businessId);
     if (!gupshupConfig.isBusinessAppUsable(account)) {
       logger.debug('[gupshup-webhook] inbound for disconnected tenant app; skipping inbox');
       return;
     }
-  } else {
-    const platformCfg = await gupshupConfig.loadPlatformConfig();
-    const isPlatformApp =
-      ctx.appId &&
+    if (
       platformCfg.appId &&
-      String(ctx.appId) === String(platformCfg.appId);
-    if (!isPlatformApp) {
-      logger.warn('[gupshup-webhook] inbound app not mapped to a tenant; skipping inbox');
+      account.gupshupAppId &&
+      String(account.gupshupAppId) === String(platformCfg.appId)
+    ) {
+      await handlePlatformInbound(evt, { ...ctx, recipientPhone });
       return;
     }
-    businessId = await resolveBusinessIdByRecentOutbound(recipientPhone);
-    if (!businessId) {
-      logger.warn('[gupshup-webhook] inbound could not be attributed to a business; skipping');
-      return;
-    }
-    const account = await gupshupConfig.loadAccount(businessId);
-    if (gupshupConfig.isBusinessAppUsable(account)) {
-      logger.debug(
-        '[gupshup-webhook] skipping platform-app inbound for tenant with own connected app'
-      );
-      return;
-    }
+  } else {
+    logger.warn(
+      '[gupshup-webhook] inbound app not mapped to platform or tenant; skipping inbox',
+      { appId: ctx.appId, appName: ctx.appName, displayPhone: ctx.displayPhoneNumber }
+    );
+    return;
   }
 
-  const text =
-    evt.payload?.text ||
-    evt.text?.body ||
-    (typeof evt.text === 'string' ? evt.text : null) ||
-    null;
+  const text = extractInboundText(evt);
   const preview = text || `[${evt.type || 'message'}]`;
   const now = new Date();
 
@@ -355,7 +639,12 @@ async function markClientOptOut(businessId, recipientPhone) {
 
 /** Process v3 Meta-shaped passthrough webhook (subscription version=3). */
 async function handleV3Payload(body) {
-  if (!body || body.object !== 'whatsapp_business_account' || !Array.isArray(body.entry)) return false;
+  if (!body || body.object !== 'whatsapp_business_account' || !Array.isArray(body.entry)) {
+    return { inbound: 0, statuses: 0 };
+  }
+
+  let inbound = 0;
+  let statuses = 0;
 
   for (const entry of body.entry) {
     const wabaId = entry.id || null;
@@ -366,14 +655,17 @@ async function handleV3Payload(body) {
         appId: value.appId || body.appId || null,
         appName: body.app || value.app || null,
         phoneNumberId: metadata.phone_number_id || null,
+        displayPhoneNumber: metadata.display_phone_number || null,
         wabaId,
       };
 
       for (const st of value.statuses || []) {
+        statuses += 1;
         await applyStatusEvent(st);
       }
 
       for (const msg of value.messages || []) {
+        inbound += 1;
         await handleInbound(msg, {
           ...ctx,
           recipientPhone: msg.from,
@@ -381,7 +673,7 @@ async function handleV3Payload(body) {
       }
     }
   }
-  return true;
+  return { inbound, statuses };
 }
 
 /** Normalize legacy Gupshup envelope into a flat event we can dispatch. */
@@ -390,12 +682,19 @@ async function handleLegacyPayload(body) {
   const type = String(body.type || '').toLowerCase();
   const appName = body.app || null;
   const payload = body.payload || {};
-  const ctx = { appId: payload.appId || body.appId || null, appName };
+  const ctx = {
+    appId: payload.appId || body.appId || null,
+    appName,
+    displayPhoneNumber: payload.destination || payload.phone || null,
+  };
 
   if (type === 'message-event' || type === 'message-status') {
     await applyStatusEvent(payload);
   } else if (type === 'message') {
-    await handleInbound(payload, ctx);
+    await handleInbound(payload, {
+      ...ctx,
+      recipientPhone: payload.source || payload.sender?.phone || payload.from || null,
+    });
   } else if (type === 'user-event') {
     logger.debug('[gupshup-webhook] user-event:', payload?.type || 'unknown');
   } else {
@@ -405,11 +704,32 @@ async function handleLegacyPayload(body) {
 
 async function handlePayload(body) {
   try {
-    const handledV3 = await handleV3Payload(body);
-    if (!handledV3) {
-      await handleLegacyPayload(body);
+    const summary = summarizeWebhookBody(body);
+    pushWebhookEvent({ phase: 'received', summary });
+
+    let v3 = { inbound: 0, statuses: 0 };
+    if (body?.object === 'whatsapp_business_account') {
+      v3 = await handleV3Payload(body);
     }
+
+    const legacyType = String(body?.type || '').toLowerCase();
+    // Gupshup often sends legacy `{ type: "message" }` even with version=3 subscriptions.
+    if (legacyType === 'message' || legacyType === 'message-event' || legacyType === 'message-status') {
+      await handleLegacyPayload(body);
+    } else if (v3.inbound === 0 && v3.statuses === 0 && !body?.object) {
+      logger.warn('[gupshup-webhook] unrecognized payload shape:', summary);
+      pushWebhookEvent({ phase: 'unrecognized', summary });
+    }
+
+    pushWebhookEvent({
+      phase: 'processed',
+      summary,
+      v3Inbound: v3.inbound,
+      v3Statuses: v3.statuses,
+      legacyType: legacyType || null,
+    });
   } catch (err) {
+    pushWebhookEvent({ phase: 'error', error: err?.message || String(err) });
     logger.error('[gupshup-webhook] processing error:', err?.message || err);
   }
 }
@@ -421,16 +741,19 @@ router.post('/', express.json({ limit: '2mb' }), (req, res) => {
   const auth = verifyAuth(req);
   if (!auth.ok) {
     logger.warn(`[gupshup-webhook] rejected: ${auth.reason}`);
+    pushWebhookEvent({ phase: 'rejected', reason: auth.reason, ip: sourceIp(req) });
     return res.sendStatus(401);
   }
   // Ack immediately, then process asynchronously (Gupshup requires <10s).
   res.sendStatus(200);
   const body = req.body;
   setImmediate(() => {
-    handlePayload(body).catch((err) =>
-      logger.error('[gupshup-webhook] async handler failed:', err?.message || err)
-    );
+    handlePayload(body).catch((err) => {
+      pushWebhookEvent({ phase: 'error', error: err?.message || String(err) });
+      logger.error('[gupshup-webhook] async handler failed:', err?.message || err);
+    });
   });
 });
 
 module.exports = router;
+module.exports.getRecentWebhookEvents = () => recentWebhookEvents.slice();

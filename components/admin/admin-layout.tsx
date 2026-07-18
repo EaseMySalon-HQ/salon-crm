@@ -11,9 +11,11 @@ import { ThemeToggleButton } from "@/components/theme-toggle"
 
 interface AdminLayoutProps {
   children: React.ReactNode
+  /** Fill main area height — for chat/inbox pages that manage their own scroll regions. */
+  contentFill?: boolean
 }
 
-export function AdminLayout({ children }: AdminLayoutProps) {
+export function AdminLayout({ children, contentFill }: AdminLayoutProps) {
   const { admin, logout, isLoading } = useAdminAuth()
   const router = useRouter()
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -135,8 +137,18 @@ export function AdminLayout({ children }: AdminLayoutProps) {
           <span className="text-sm text-muted-foreground hidden sm:inline">Platform control center</span>
         </header>
 
-        <main className="flex-1 overflow-auto">
-          <div className="p-4 lg:p-8 max-w-[1600px] mx-auto">
+        <main
+          className={cn(
+            "flex-1 min-h-0",
+            contentFill ? "flex flex-col overflow-hidden" : "overflow-auto"
+          )}
+        >
+          <div
+            className={cn(
+              "mx-auto w-full max-w-[1600px] p-4 lg:p-8",
+              contentFill && "flex min-h-0 flex-1 flex-col overflow-hidden"
+            )}
+          >
             {children}
           </div>
         </main>

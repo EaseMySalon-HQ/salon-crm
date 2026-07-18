@@ -97,6 +97,10 @@ const platformLeadSchema = new mongoose.Schema({
   convertedAt: {
     type: Date,
   },
+  marketingOptOut: {
+    type: Boolean,
+    default: false,
+  },
   createdByAdminId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Admin',

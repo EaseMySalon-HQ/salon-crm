@@ -12,6 +12,7 @@ const { logger } = require('../utils/logger');
 const { validate } = require('../middleware/validate');
 const { publicDemoLeadSchema } = require('../validation/schemas');
 const { notifyPlatformAdminsPendingLead } = require('../lib/notify-platform-leads-pending');
+const { sendPlatformLeadWelcomeWhatsApp } = require('../lib/send-platform-lead-welcome-whatsapp');
 const { normalizeLeadContact } = require('../lib/platform-lead-contact');
 
 const router = express.Router();
@@ -173,6 +174,7 @@ router.post(
       });
 
       notifyPlatformAdminsPendingLead(req.mainModels, savedLead);
+      sendPlatformLeadWelcomeWhatsApp(req.mainModels, savedLead);
 
       res.status(201).json({
         success: true,

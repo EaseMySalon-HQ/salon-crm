@@ -20,7 +20,7 @@ const databaseManager = require('../config/database-manager');
 const gupshupAuth = require('../lib/gupshup-auth');
 const gupshupConfig = require('../lib/gupshup-config');
 const gupshupWhatsApp = require('../services/gupshup-whatsapp-service');
-const { resolveGupshupWebhookUrl } = require('../lib/public-backend-url');
+const { resolveGupshupWebhookUrl, normalizeGupshupWebhookUrl } = require('../lib/public-backend-url');
 const { linkGupshupApp, unlinkGupshupApp } = require('../lib/gupshup-link-app');
 const {
   buildGupshupApplyFields,
@@ -105,6 +105,150 @@ router.get('/config', checkAdminPermission('settings', 'view'), async (req, res)
   }
 });
 
+/** Register (or refresh) the Gupshup delivery webhook on the shared platform app. */
+router.post(
+  '/platform/register-webhook',
+  checkAdminPermission('settings', 'update'),
+  async (_req, res) => {
+    try {
+      const platform = await gupshupConfig.loadPlatformConfig();
+      if (!platform.appId) {
+        return res.status(400).json({
+          success: false,
+          error: 'Shared platform Gupshup app is not configured (App ID + sender number).',
+        });
+      }
+      const webhook = await resolveWebhook();
+      if (!webhook.url) {
+        return res.status(400).json({ success: false, error: 'Could not resolve webhook URL' });
+      }
+      const sub = await gupshupWhatsApp.ensureSubscription({
+        appId: platform.appId,
+        url: webhook.url,
+        modes: 'ALL',
+        tag: `salon-crm-platform-${platform.appId}`,
+        secret: process.env.GUPSHUP_WEBHOOK_SECRET || null,
+      });
+      if (!sub.success) {
+        const errMsg =
+          typeof sub.error === 'string'
+            ? sub.error
+            : sub.error?.message || sub.error?.error || JSON.stringify(sub.error || {});
+        return res.status(sub.status === 429 ? 429 : 400).json({
+          success: false,
+          error:
+            sub.status === 429
+              ? 'Gupshup subscription rate limit — wait 60 seconds and try again'
+              : 'Gupshup rejected webhook registration',
+          details: sub.error,
+          message: errMsg,
+          webhookUrl: webhook.url,
+        });
+      }
+      return res.json({
+        success: true,
+        data: {
+          appId: platform.appId,
+          webhookUrl: webhook.url,
+          webhookSource: webhook.source,
+          modes: 'ALL',
+          alreadyRegistered: Boolean(sub.alreadyRegistered),
+          updated: Boolean(sub.updated),
+        },
+      });
+    } catch (err) {
+      logger.error('[admin-gupshup] platform register-webhook failed:', err?.message || err);
+      return res.status(500).json({ success: false, error: 'Failed to register platform webhook' });
+    }
+  }
+);
+
+/** Check whether Gupshup already has the resolved webhook URL registered (read-only). */
+router.get(
+  '/platform/subscription-status',
+  checkAdminPermission('settings', 'view'),
+  async (_req, res) => {
+    try {
+      const platform = await gupshupConfig.loadPlatformConfig();
+      const webhook = await resolveWebhook();
+      if (!platform.appId) {
+        return res.json({
+          success: true,
+          data: { configured: false, webhookUrl: webhook.url || null, registered: false },
+        });
+      }
+      const listed = await gupshupWhatsApp.listSubscriptions({ appId: platform.appId });
+      if (!listed.success) {
+        const msg =
+          listed.status === 429
+            ? 'Gupshup rate limit — wait 60 seconds before checking again'
+            : typeof listed.error === 'string'
+              ? listed.error
+              : listed.error?.message || 'Could not load subscriptions';
+        return res.json({
+          success: true,
+          data: {
+            configured: true,
+            webhookUrl: webhook.url,
+            registered: false,
+            checkError: msg,
+            subscriptions: [],
+          },
+        });
+      }
+      const match = gupshupWhatsApp.findActiveSubscriptionForUrl(listed.data, webhook.url);
+      return res.json({
+        success: true,
+        data: {
+          configured: true,
+          webhookUrl: webhook.url,
+          registered: Boolean(match),
+          activeSubscription: match,
+          subscriptions: (listed.data || []).map((s) => ({
+            url: s.url,
+            active: s.active !== false,
+            tag: s.tag,
+            version: s.version,
+          })),
+        },
+      });
+    } catch (err) {
+      logger.error('[admin-gupshup] subscription-status failed:', err?.message || err);
+      return res.status(500).json({ success: false, error: 'Failed to check subscription status' });
+    }
+  }
+);
+
+/** Recent inbound webhook events (dev diagnostics — in-memory ring buffer). */
+router.get('/webhook/recent', checkAdminPermission('settings', 'view'), async (_req, res) => {
+  try {
+    const getRecentWebhookEvents = require('../routes/gupshup-webhook').getRecentWebhookEvents;
+    const main = await databaseManager.getMainConnection();
+    const PlatformMessage = main.model(
+      'PlatformWhatsAppMessage',
+      require('../models/PlatformWhatsAppMessage').schema
+    );
+    const lastInbound = await PlatformMessage.findOne({ direction: 'inbound' })
+      .sort({ timestamp: -1 })
+      .select('recipientPhone inboundText timestamp status')
+      .lean();
+    return res.json({
+      success: true,
+      data: {
+        events: typeof getRecentWebhookEvents === 'function' ? getRecentWebhookEvents() : [],
+        lastPlatformInbound: lastInbound,
+        hints: {
+          secretConfigured: Boolean(process.env.GUPSHUP_WEBHOOK_SECRET),
+          ipAllowlistConfigured: Boolean(process.env.GUPSHUP_WEBHOOK_IPS),
+        },
+      },
+    });
+  } catch (err) {
+    logger.error('[admin-gupshup] webhook recent failed:', err?.message || err);
+    return res.status(500).json({ success: false, error: 'Failed to load webhook diagnostics' });
+  }
+});
+
 /** Save admin-managed partner creds, shared platform app + webhook URL override. */
 router.put('/config', checkAdminPermission('settings', 'update'), async (req, res) => {
   try {
@@ -139,10 +283,15 @@ router.put('/config', checkAdminPermission('settings', 'update'), async (req, re
     }
 
     if (gupshupWebhookUrl != null) {
-      wa.gupshupWebhookUrl = String(gupshupWebhookUrl).trim();
+      const trimmed = String(gupshupWebhookUrl).trim();
+      wa.gupshupWebhookUrl = trimmed ? normalizeGupshupWebhookUrl(trimmed) : '';
     }
     if (gupshupAppId != null) {
-      wa.gupshupAppId = String(gupshupAppId).trim();
+      const nextAppId = String(gupshupAppId).trim();
+      if (nextAppId !== String(wa.gupshupAppId || '').trim()) {
+        wa.gupshupAppTokenCipher = '';
+      }
+      wa.gupshupAppId = nextAppId;
     }
     if (gupshupAppName != null) {
       wa.gupshupAppName = String(gupshupAppName).trim();
@@ -153,8 +302,13 @@ router.put('/config', checkAdminPermission('settings', 'update'), async (req, re
     await settings.save();
 
     const platform = await gupshupConfig.loadPlatformConfig();
-    const webhook = resolveGupshupWebhookUrl({ adminWebhookUrl: wa.gupshupWebhookUrl });
     const partnerConfigured = await gupshupAuth.hasPartnerCredentialsAsync();
+    if (platform.appId && platform.source && partnerConfigured) {
+      gupshupConfig.resolvePlatformSender().catch((err) => {
+        logger.warn('[admin-gupshup] platform token warm failed:', err?.message || err);
+      });
+    }
+    const webhook = resolveGupshupWebhookUrl({ adminWebhookUrl: wa.gupshupWebhookUrl });
     const partnerSource = gupshupAuth.hasPartnerCredentials()
       ? 'env'
       : wa.gupshupPartnerEmail && wa.gupshupClientSecretCipher
@@ -911,5 +1065,8 @@ router.get('/status/:businessId', checkAdminPermission('settings', 'view'), asyn
     return res.status(500).json({ success: false, error: 'Failed to load status' });
   }
 });
+
+router.use('/inbox', require('./admin-gupshup-inbox'));
+router.use('/campaigns', require('./admin-gupshup-campaigns'));
 
 module.exports = router;

@@ -9,9 +9,46 @@
 'use strict';
 
 const databaseManager = require('../config/database-manager');
-const { decrypt } = require('./crypto');
+const { decrypt, encrypt } = require('./crypto');
 const gupshupAuth = require('./gupshup-auth');
 const { logger } = require('../utils/logger');
+
+async function getAdminSettingsModel() {
+  const main = await databaseManager.getMainConnection();
+  return main.model('AdminSettings', require('../models/AdminSettings').schema);
+}
+
+async function loadStoredPlatformAppToken(expectedAppId) {
+  if (!expectedAppId) return null;
+  try {
+    const AdminSettings = await getAdminSettingsModel();
+    const settings = await AdminSettings.getSettings();
+    const wa = settings?.notifications?.whatsapp || {};
+    if (String(wa.gupshupAppId || '').trim() !== String(expectedAppId).trim()) return null;
+    const cipher = String(wa.gupshupAppTokenCipher || '').trim();
+    if (!cipher) return null;
+    return decrypt(cipher);
+  } catch (err) {
+    logger.warn('[gupshup-config] platform app token decrypt failed:', err?.message);
+    return null;
+  }
+}
+
+async function persistPlatformAppToken(appId, appToken) {
+  if (!appId || !appToken) return;
+  try {
+    const AdminSettings = await getAdminSettingsModel();
+    const settings = await AdminSettings.getSettings();
+    settings.notifications = settings.notifications || {};
+    settings.notifications.whatsapp = settings.notifications.whatsapp || {};
+    const wa = settings.notifications.whatsapp;
+    if (String(wa.gupshupAppId || '').trim() !== String(appId).trim()) return;
+    wa.gupshupAppTokenCipher = encrypt(String(appToken));
+    await settings.save();
+  } catch (err) {
+    logger.warn('[gupshup-config] platform app token persist failed:', err?.message);
+  }
+}
 
 async function loadAccount(businessId) {
   const main = await databaseManager.getMainConnection();
@@ -77,14 +114,21 @@ function isBusinessAppUsable(account) {
   );
 }
 
-async function resolvePlatformSender() {
+async function resolvePlatformSender({ forceRefresh = false } = {}) {
   const cfg = await loadPlatformConfig();
   if (!cfg.appId || !cfg.source) {
     throw new Error(
       'Gupshup platform app not configured (set GUPSHUP_PLATFORM_* env or Admin → Gupshup shared app)'
     );
   }
-  const appToken = await gupshupAuth.getAppToken(cfg.appId);
+  let appToken = null;
+  if (!forceRefresh) {
+    appToken = await loadStoredPlatformAppToken(cfg.appId);
+  }
+  if (!appToken) {
+    appToken = await gupshupAuth.getAppToken(cfg.appId, { forceRefresh });
+    await persistPlatformAppToken(cfg.appId, appToken);
+  }
   return {
     scope: 'platform',
     appId: cfg.appId,
@@ -156,6 +200,7 @@ module.exports = {
   loadPlatformConfig,
   isPlatformConfigured,
   isPlatformConfiguredAsync,
+  persistPlatformAppToken,
   isBusinessAppUsable,
   TENANT_APP_REQUIRED_MSG,
   resolvePlatformSender,

@@ -33,6 +33,15 @@ interface GupshupConfig {
   gupshupWebhookUrl?: string
 }
 
+type SubscriptionStatus = {
+  configured?: boolean
+  webhookUrl?: string | null
+  registered?: boolean
+  checkError?: string
+  activeSubscription?: { url?: string; tag?: string }
+  subscriptions?: Array<{ url?: string; active?: boolean; tag?: string }>
+}
+
 /**
  * Admin-managed Gupshup Partner Portal onboarding.
  */
@@ -42,12 +51,28 @@ export function GupshupConfigSettings() {
   const [config, setConfig] = useState<GupshupConfig | null>(null)
   const [linking, setLinking] = useState(false)
   const [savingWebhook, setSavingWebhook] = useState(false)
+  const [registeringWebhook, setRegisteringWebhook] = useState(false)
   const [savingPlatform, setSavingPlatform] = useState(false)
   const [savingPartner, setSavingPartner] = useState(false)
   const [webhookOverride, setWebhookOverride] = useState("")
   const [partnerForm, setPartnerForm] = useState({ email: "", clientSecret: "" })
   const [platformForm, setPlatformForm] = useState({ appId: "", appName: "", sourceNumber: "" })
   const [form, setForm] = useState({ businessId: "", appId: "", appName: "", sourceNumber: "" })
+  const [subscriptionStatus, setSubscriptionStatus] = useState<SubscriptionStatus | null>(null)
+  const [registerCooldownSec, setRegisterCooldownSec] = useState(0)
+
+  const loadSubscriptionStatus = async () => {
+    try {
+      const res = await fetch(`${API_URL}/admin/gupshup/platform/subscription-status`, {
+        credentials: "include",
+        headers: adminRequestHeaders(),
+      })
+      const json = await res.json()
+      if (res.ok && json?.success) setSubscriptionStatus(json.data)
+    } catch {
+      // non-blocking
+    }
+  }
 
   const load = async () => {
     setLoading(true)
@@ -69,6 +94,7 @@ export function GupshupConfigSettings() {
         appName: json.data?.gupshupAppName || "",
         sourceNumber: json.data?.gupshupSourceNumber || "",
       })
+      await loadSubscriptionStatus()
     } catch (err: any) {
       toast({ title: "Failed to load Gupshup config", description: err?.message || "", variant: "destructive" })
     } finally {
@@ -79,6 +105,19 @@ export function GupshupConfigSettings() {
   useEffect(() => {
     load()
   }, [])
+
+  useEffect(() => {
+    if (registerCooldownSec <= 0) return
+    const timer = setInterval(() => {
+      setRegisterCooldownSec((sec) => (sec <= 1 ? 0 : sec - 1))
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [registerCooldownSec])
+
+  const registerMismatch =
+    subscriptionStatus?.registered === false &&
+    subscriptionStatus?.subscriptions?.some((s) => s.active !== false && s.url)
+  const staleSubscriptionUrl = subscriptionStatus?.subscriptions?.find((s) => s.active !== false)?.url
 
   const onSavePartner = async () => {
     if (!partnerForm.email.trim()) {
@@ -156,6 +195,73 @@ export function GupshupConfigSettings() {
     } finally {
       setSavingWebhook(false)
     }
+  }
+
+  const onRegisterPlatformWebhook = async () => {
+    if (registerCooldownSec > 0) {
+      toast({
+        title: "Please wait",
+        description: `Gupshup allows 5 subscription calls per minute. Try again in ${registerCooldownSec}s.`,
+        variant: "destructive",
+      })
+      return
+    }
+    setRegisteringWebhook(true)
+    try {
+      const res = await fetch(`${API_URL}/admin/gupshup/platform/register-webhook`, {
+        method: "POST",
+        credentials: "include",
+        headers: adminRequestHeaders(),
+      })
+      const json = await res.json()
+      if (!res.ok || !json?.success) {
+        if (res.status === 429) setRegisterCooldownSec(60)
+        const details =
+          typeof json?.message === "string"
+            ? json.message
+            : typeof json?.details === "string"
+              ? json.details
+              : json?.details?.message ||
+                json?.details?.error ||
+                (json?.details ? JSON.stringify(json.details) : "")
+        const webhookUrl = json?.webhookUrl || json?.data?.webhookUrl || config?.webhookUrl || ""
+        throw new Error(
+          [json?.error, details, webhookUrl ? `Webhook URL: ${webhookUrl}` : ""].filter(Boolean).join("\n") ||
+            "Registration failed"
+        )
+      }
+      await loadSubscriptionStatus()
+      toast({
+        title: json.data?.alreadyRegistered
+          ? "Webhook already registered"
+          : json.data?.updated
+            ? "Webhook URL updated on Gupshup"
+            : "Webhook registered on platform app",
+        description: webhookUrlDescription(
+          json.data?.webhookUrl || config?.webhookUrl || "your URL",
+          json.data?.alreadyRegistered,
+          json.data?.updated
+        ),
+      })
+    } catch (err: any) {
+      toast({
+        title: "Webhook registration failed",
+        description: err?.message || "",
+        variant: "destructive",
+      })
+    } finally {
+      setRegisteringWebhook(false)
+    }
+  }
+
+  function webhookUrlDescription(url: string, alreadyRegistered?: boolean, updated?: boolean) {
+    if (alreadyRegistered) {
+      return `Gupshup already has this URL active:\n${url}\nReply from a contact's phone to open CSW in WhatsApp Chat.`
+    }
+    if (updated) {
+      return `Gupshup subscription updated to:\n${url}\nReply from a contact's phone to open CSW in WhatsApp Chat.`
+    }
+    return `Gupshup will POST inbound messages to:\n${url}`
   }
 
   const onSavePlatform = async () => {
@@ -397,7 +503,7 @@ export function GupshupConfigSettings() {
               <p className="text-xs text-muted-foreground mt-1">
                 Create and submit platform templates for Meta approval in{" "}
                 <Link href="/admin/platform/template-manager" className="text-indigo-600 hover:underline font-medium">
-                  Platform → Template Manager
+                  Communication → Template Manager
                 </Link>
                 .
               </p>
@@ -406,10 +512,28 @@ export function GupshupConfigSettings() {
             <div className="space-y-3 rounded-md border p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="text-sm font-medium">Delivery webhook URL</div>
-                {config?.webhookSource ? (
-                  <Badge variant="outline">Source: {config.webhookSource}</Badge>
-                ) : null}
+                <div className="flex flex-wrap gap-2">
+                  {subscriptionStatus?.registered ? (
+                    <Badge className="bg-emerald-600">Registered on Gupshup</Badge>
+                  ) : subscriptionStatus?.configured ? (
+                    <Badge variant="secondary">Not registered yet</Badge>
+                  ) : null}
+                  {config?.webhookSource ? (
+                    <Badge variant="outline">Source: {config.webhookSource}</Badge>
+                  ) : null}
+                </div>
               </div>
+              {subscriptionStatus?.checkError ? (
+                <p className="text-xs text-amber-700">{subscriptionStatus.checkError}</p>
+              ) : null}
+              {subscriptionStatus?.subscriptions?.length ? (
+                <p className="text-xs text-muted-foreground">
+                  Gupshup subscriptions:{" "}
+                  {subscriptionStatus.subscriptions
+                    .map((s) => `${s.active === false ? "(inactive) " : ""}${s.url}`)
+                    .join(" · ")}
+                </p>
+              ) : null}
               {config?.webhookUrl ? (
                 <p className="break-all text-xs text-muted-foreground">{config.webhookUrl}</p>
               ) : null}
@@ -419,19 +543,41 @@ export function GupshupConfigSettings() {
                   id="gs-webhook"
                   value={webhookOverride}
                   onChange={(e) => setWebhookOverride(e.target.value)}
-                  placeholder="https://your-backend.example.com/api/webhooks/whatsapp/gupshup"
+                  placeholder="https://your-tunnel.trycloudflare.com/api/webhooks/whatsapp/gupshup"
                 />
                 <p className="text-xs text-muted-foreground">
-                  Leave empty to auto-detect from BACKEND_PUBLIC_URL, Railway, or localhost. Set explicitly for
-                  staging/production or when the API runs on a different host than the frontend.
+                  Paste your Cloudflare tunnel or public backend host. The path{" "}
+                  <code className="text-xs">/api/webhooks/whatsapp/gupshup</code> is added automatically if
+                  omitted. Leave empty to auto-detect from BACKEND_PUBLIC_URL or Railway.
                 </p>
               </div>
+              {registerMismatch && staleSubscriptionUrl ? (
+                <Alert variant="destructive">
+                  <AlertTitle>Webhook URL mismatch</AlertTitle>
+                  <AlertDescription className="text-xs space-y-2">
+                    <p>
+                      Gupshup is still sending inbound messages to an older URL (likely a previous Cloudflare
+                      tunnel):
+                    </p>
+                    <p className="break-all font-mono">{staleSubscriptionUrl}</p>
+                    <p>
+                      Your saved URL is{" "}
+                      <span className="break-all font-mono">{config?.webhookUrl || webhookOverride}</span>. Wait 60
+                      seconds, then click Register once to update Gupshup.
+                    </p>
+                  </AlertDescription>
+                </Alert>
+              ) : null}
               {config?.webhookUrl?.includes("localhost") ? (
                 <Alert>
                   <AlertTitle>Local development</AlertTitle>
                   <AlertDescription className="text-xs">
-                    Gupshup cannot reach localhost. Use a tunnel (e.g. ngrok) and paste the public HTTPS URL above,
-                    or set GUPSHUP_WEBHOOK_URL / BACKEND_PUBLIC_URL on the backend service.
+                    Gupshup cannot reach localhost directly. Use a public tunnel (Cloudflare Tunnel, ngrok,
+                    etc.), set <code className="text-xs">GUPSHUP_WEBHOOK_URL</code> or the override below to{" "}
+                    <code className="text-xs">https://your-tunnel-host/api/webhooks/whatsapp/gupshup</code>,
+                    then click Register webhook. For tunnel dev, leave{" "}
+                    <code className="text-xs">GUPSHUP_WEBHOOK_IPS</code> unset in{" "}
+                    <code className="text-xs">.env</code> — requests arrive from the tunnel, not Gupshup IPs.
                   </AlertDescription>
                 </Alert>
               ) : null}
@@ -439,6 +585,28 @@ export function GupshupConfigSettings() {
                 {savingWebhook ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
                 Save webhook URL
               </Button>
+              <Button
+                variant="default"
+                size="sm"
+                onClick={onRegisterPlatformWebhook}
+                disabled={registeringWebhook || registerCooldownSec > 0 || !config?.platformAppId}
+              >
+                {registeringWebhook ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Link2 className="mr-2 h-4 w-4" />
+                )}
+                {registerCooldownSec > 0
+                  ? `Wait ${registerCooldownSec}s`
+                  : subscriptionStatus?.registered
+                    ? "Refresh webhook registration"
+                    : "Register webhook on platform app"}
+              </Button>
+              <p className="text-xs text-muted-foreground">
+                Inbound WhatsApp replies require this step after saving the webhook URL and platform app. Gupshup
+                limits subscription API to <strong>5 calls per minute</strong> — wait 60s if you see &quot;Too Many
+                Requests&quot;. Outbound templates work without it; the inbox does not.
+              </p>
             </div>
 
             <div className="space-y-3 rounded-md border p-4">

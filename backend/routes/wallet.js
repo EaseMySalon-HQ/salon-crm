@@ -22,28 +22,13 @@ const {
   buildInvoicePDFForTransaction,
 } = require('../lib/send-wallet-invoice');
 const { isWalletTaxInvoiceEligible } = require('../lib/wallet-tax-invoice-eligibility');
+const { computeWalletRechargeBreakdown } = require('../lib/wallet-recharge-breakdown');
 
 const MIN_RECHARGE_RUPEES = 10;
 const MAX_RECHARGE_RUPEES = 50000;
 
-// 18% GST is added on top of the entered recharge amount. The user is
-// charged `base × 1.18`; only the base (pre-tax) amount is credited to the
-// wallet. The GST slice is recorded for audit on the WalletTransaction row.
-const GST_RATE = 0.18;
-
 function computeRechargeBreakdown(amountRupees) {
-  const basePaise = Math.round(Number(amountRupees) * 100);
-  const gstPaise = Math.round(basePaise * GST_RATE);
-  const totalPaise = basePaise + gstPaise;
-  return {
-    basePaise,
-    gstPaise,
-    totalPaise,
-    baseRupees: basePaise / 100,
-    gstRupees: gstPaise / 100,
-    totalRupees: totalPaise / 100,
-    gstRate: GST_RATE,
-  };
+  return computeWalletRechargeBreakdown(amountRupees);
 }
 
 async function getMainModels() {

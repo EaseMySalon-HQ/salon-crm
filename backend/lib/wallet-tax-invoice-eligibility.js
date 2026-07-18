@@ -7,6 +7,7 @@
 function isWalletTaxInvoiceEligible(tx) {
   if (!tx || tx.type !== 'credit') return false;
   if (tx.taxInvoiceEligible === false) return false;
+  if (tx.taxInvoiceEligible === true) return true;
   if (tx.provider === 'system' && !tx.providerPaymentId && !tx.providerOrderId) {
     return false;
   }

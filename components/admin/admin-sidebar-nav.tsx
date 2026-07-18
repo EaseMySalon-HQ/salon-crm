@@ -11,6 +11,8 @@ import {
   FileText,
   LayoutDashboard,
   MessageSquare,
+  Megaphone,
+  MessagesSquare,
   ScrollText,
   Settings,
   Shield,
@@ -47,10 +49,17 @@ export const adminNavGroups: NavGroup[] = [
     ],
   },
   {
+    label: "Communication",
+    items: [
+      { title: "Template Manager", href: "/admin/platform/template-manager", icon: MessageSquare },
+      { title: "WhatsApp Chat", href: "/admin/platform/inbox", icon: MessagesSquare },
+      { title: "WhatsApp Campaigns", href: "/admin/platform/campaigns", icon: Megaphone },
+    ],
+  },
+  {
     label: "Platform",
     items: [
       { title: "Settings", href: "/admin/settings?tab=system", icon: Settings, settingsTab: "system" },
-      { title: "Template Manager", href: "/admin/platform/template-manager", icon: MessageSquare },
       { title: "Plans", href: "/admin/plans", icon: CreditCard },
       { title: "Access", href: "/admin/users", icon: Shield },
       { title: "Logs", href: "/admin/logs", icon: ScrollText },
@@ -146,7 +155,7 @@ export function AdminSidebarNav({ onNavigate }: AdminSidebarNavProps) {
 export function AdminSidebarNavSkeleton() {
   return (
     <div className="flex-1 min-h-0 py-5 px-3 space-y-6 animate-pulse overflow-y-auto">
-      {[1, 2, 3, 4].map((i) => (
+      {[1, 2, 3, 4, 5].map((i) => (
         <div key={i} className="space-y-2">
           <div className="h-3 w-16 rounded bg-slate-100 ml-3" />
           <div className="space-y-1">
