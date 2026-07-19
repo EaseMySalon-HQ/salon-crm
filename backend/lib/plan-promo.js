@@ -189,9 +189,64 @@ async function recordPlanPromoRedemption({
   }
 }
 
+/**
+ * Apply a validated promo to a GST checkout breakdown (discount on base, then GST).
+ */
+function applyPromoToGstBreakdown(breakdown, promoResult) {
+  if (!promoResult?.ok || !promoResult.promo) {
+    return { breakdown, promo: null };
+  }
+  const { promo } = promoResult;
+  const basePaise = promo.finalPaise;
+  const gstRate = Number(breakdown?.gstRate || 0);
+  const gstPaise = gstRate > 0 ? Math.round(basePaise * gstRate) : 0;
+  const totalPaise = basePaise + gstPaise;
+  return {
+    breakdown: {
+      ...breakdown,
+      basePaise,
+      gstPaise,
+      totalPaise,
+      baseRupees: basePaise / 100,
+      gstRupees: gstPaise / 100,
+      totalRupees: totalPaise / 100,
+    },
+    promo,
+  };
+}
+
+/**
+ * Validate promo (if code provided) and return adjusted breakdown for checkout.
+ */
+async function resolvePromoForCheckout({
+  code,
+  businessId,
+  planId,
+  billingPeriod,
+  breakdown,
+}) {
+  const trimmed = String(code || '').trim();
+  if (!trimmed) {
+    return { breakdown, promo: null };
+  }
+  const validation = await validatePlanPromoCode({
+    code: trimmed,
+    businessId,
+    planId,
+    billingPeriod,
+    basePaise: breakdown.basePaise,
+  });
+  if (!validation.ok) {
+    return { error: validation.error };
+  }
+  return applyPromoToGstBreakdown(breakdown, validation);
+}
+
 module.exports = {
   normalizePromoCode,
   computeDiscountPaise,
   validatePlanPromoCode,
   recordPlanPromoRedemption,
+  applyPromoToGstBreakdown,
+  resolvePromoForCheckout,
 };

@@ -5,6 +5,7 @@ import { useEntitlements } from "@/hooks/use-entitlements"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
@@ -25,6 +26,7 @@ import {
   Clock,
   X,
   Wallet,
+  Ticket,
 } from "lucide-react"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import Link from "next/link"
@@ -35,6 +37,7 @@ import {
   PlanCheckoutAPI,
   WalletAPI,
   type PlanBillingPeriod,
+  type PlanPromoPreview,
   type PlanSubscriptionId,
   type PlanTransaction,
 } from "@/lib/api"
@@ -112,6 +115,9 @@ export function PlanBilling() {
   // Bumped after a successful checkout so the Billing History card refetches.
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0)
   const [showCheckoutConfirm, setShowCheckoutConfirm] = useState(false)
+  const [promoCodeInput, setPromoCodeInput] = useState("")
+  const [appliedPromo, setAppliedPromo] = useState<PlanPromoPreview | null>(null)
+  const [promoApplying, setPromoApplying] = useState(false)
 
   const loadWalletBalance = useCallback(async () => {
     setWalletBalanceLoading(true)
@@ -191,6 +197,52 @@ export function PlanBilling() {
     }
   }
 
+  useEffect(() => {
+    setAppliedPromo(null)
+    setPromoCodeInput("")
+  }, [selectedPlanId, selectedBillingPeriod])
+
+  const handleApplyPromo = async () => {
+    const code = promoCodeInput.trim()
+    if (!code) {
+      setAppliedPromo(null)
+      return
+    }
+    if (!selectedPlanId) return
+
+    setPromoApplying(true)
+    try {
+      const res = await PlanCheckoutAPI.validatePromo(
+        selectedPlanId as PlanSubscriptionId,
+        selectedBillingPeriod as PlanBillingPeriod,
+        code
+      )
+      if (!res?.success || !res.data?.promo) {
+        throw new Error(res?.error || "Invalid promo code")
+      }
+      setAppliedPromo(res.data.promo)
+      setPromoCodeInput(res.data.promo.code)
+      toast({
+        title: "Promo applied",
+        description: `You save ${formatPrice(res.data.promo.discountRupees)} on this checkout.`,
+      })
+    } catch (err: unknown) {
+      setAppliedPromo(null)
+      toast({
+        variant: "destructive",
+        title: "Promo code",
+        description: err instanceof Error ? err.message : "Could not apply promo code",
+      })
+    } finally {
+      setPromoApplying(false)
+    }
+  }
+
+  const clearPromo = () => {
+    setAppliedPromo(null)
+    setPromoCodeInput("")
+  }
+
   // ── Checkout ─────────────────────────────────────────────────────────────
 
   const handleRenew = async () => {
@@ -234,7 +286,11 @@ export function PlanBilling() {
     // ── Branch 2: Renewal / upgrade → debit messaging wallet ─────────────
     try {
       setIsRenewing(true)
-      const payRes = await PlanCheckoutAPI.payWithWallet(planIdTyped, periodTyped)
+      const payRes = await PlanCheckoutAPI.payWithWallet(
+        planIdTyped,
+        periodTyped,
+        appliedPromo?.code || promoCodeInput.trim() || undefined
+      )
       if (!payRes?.success) {
         throw new Error(payRes?.error || "Failed to complete checkout")
       }
@@ -248,6 +304,7 @@ export function PlanBilling() {
       await refetchPlan()
       await loadWalletBalance()
       setHistoryRefreshKey(k => k + 1)
+      clearPromo()
     } catch (err: any) {
       toast({
         variant: "destructive",
@@ -441,8 +498,10 @@ export function PlanBilling() {
     ? (currentYearlyPrice || 0)
     : (currentMonthlyPrice || 0)
   const newPrice = renewalAmount || 0
+  const checkoutAmount =
+    appliedPromo && !isDowngrade ? appliedPromo.finalRupees : newPrice
 
-  const renewalChargePaise = renewalAmount ? Math.round(renewalAmount * 100) : 0
+  const renewalChargePaise = checkoutAmount ? Math.round(checkoutAmount * 100) : 0
   const walletBalanceInsufficient =
     !isDowngrade &&
     renewalChargePaise > 0 &&
@@ -452,8 +511,8 @@ export function PlanBilling() {
   const walletBalanceAfter =
     !isDowngrade &&
     walletBalanceRupees !== null &&
-    renewalAmount != null
-      ? walletBalanceRupees - renewalAmount
+    checkoutAmount != null
+      ? walletBalanceRupees - checkoutAmount
       : null
 
   // Pending downgrade (scheduled, not yet applied) — only populated by the
@@ -872,6 +931,56 @@ export function PlanBilling() {
               </div>
             </div>
 
+            {!isDowngrade && renewalAmount != null && renewalAmount > 0 ? (
+              <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50/80 p-4 mb-4 space-y-3">
+                <div className="flex items-center gap-2 text-sm font-medium text-slate-800">
+                  <Ticket className="h-4 w-4 text-indigo-600" />
+                  Promo code
+                </div>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <Input
+                    value={promoCodeInput}
+                    onChange={(e) => {
+                      setPromoCodeInput(e.target.value.toUpperCase())
+                      if (appliedPromo) setAppliedPromo(null)
+                    }}
+                    placeholder="Enter promo code"
+                    className="font-mono uppercase bg-white"
+                    disabled={promoApplying || isRenewing}
+                  />
+                  <div className="flex gap-2 shrink-0">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => void handleApplyPromo()}
+                      disabled={promoApplying || isRenewing || !promoCodeInput.trim()}
+                    >
+                      {promoApplying ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        "Apply"
+                      )}
+                    </Button>
+                    {appliedPromo ? (
+                      <Button type="button" variant="ghost" onClick={clearPromo} disabled={isRenewing}>
+                        Remove
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+                {appliedPromo ? (
+                  <p className="text-xs text-green-700">
+                    {appliedPromo.code} applied — you save {formatPrice(appliedPromo.discountRupees)}.
+                    {appliedPromo.description ? ` ${appliedPromo.description}` : ""}
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Have a code from EaseMySalon? Apply it before checkout.
+                  </p>
+                )}
+              </div>
+            ) : null}
+
             {/* Pricing Breakdown */}
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-3 mb-4">
               {isPlanChange && (
@@ -965,6 +1074,24 @@ export function PlanBilling() {
                   </span>
                 </div>
               )}
+              {appliedPromo && !isDowngrade ? (
+                <>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-gray-600">List price</span>
+                    <span className="text-gray-700 line-through">
+                      {formatPrice(appliedPromo.baseRupees)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-green-700 font-medium">
+                      Promo ({appliedPromo.code})
+                    </span>
+                    <span className="text-green-700 font-medium">
+                      −{formatPrice(appliedPromo.discountRupees)}
+                    </span>
+                  </div>
+                </>
+              ) : null}
               <div className="flex items-center justify-between bg-gray-50 rounded-lg p-3">
                 <span className="text-base font-semibold text-gray-900">
                   {isDowngrade ? 'Amount Due Now' : 'Total Amount'}
@@ -972,8 +1099,8 @@ export function PlanBilling() {
                 <span className="text-2xl font-bold text-blue-600">
                   {isDowngrade
                     ? formatPrice(0)
-                    : renewalAmount
-                    ? formatPrice(renewalAmount)
+                    : checkoutAmount
+                    ? formatPrice(checkoutAmount)
                     : 'Custom'}
                 </span>
               </div>
@@ -983,7 +1110,7 @@ export function PlanBilling() {
                   onClick={() => setShowCheckoutConfirm(true)}
                   disabled={
                     isRenewing ||
-                    (!isDowngrade && !renewalAmount) ||
+                    (!isDowngrade && !checkoutAmount && !renewalAmount) ||
                     (!isDowngrade && hasPendingDowngrade && !isPlanChange) ||
                     walletBalanceInsufficient
                   }
@@ -1103,6 +1230,14 @@ export function PlanBilling() {
                     {renewalAmount ? formatPrice(renewalAmount) : "Custom"}
                   </span>
                 </div>
+                {appliedPromo ? (
+                  <div className="flex items-start justify-between gap-4 px-4 py-3">
+                    <span className="text-muted-foreground">Promo ({appliedPromo.code})</span>
+                    <span className="font-medium tabular-nums text-green-700">
+                      −{formatPrice(appliedPromo.discountRupees)}
+                    </span>
+                  </div>
+                ) : null}
                 <div className="flex items-start justify-between gap-4 px-4 py-3">
                   <span className="text-muted-foreground">GST</span>
                   <span className="text-right text-muted-foreground">
@@ -1113,7 +1248,7 @@ export function PlanBilling() {
                 <div className="flex items-start justify-between gap-4 px-4 py-3">
                   <span className="text-muted-foreground">Wallet debit</span>
                   <span className="font-semibold tabular-nums text-blue-700">
-                    {renewalAmount ? formatPrice(renewalAmount) : "Custom"}
+                    {checkoutAmount ? formatPrice(checkoutAmount) : "Custom"}
                   </span>
                 </div>
                 {walletBalanceRupees !== null && (
@@ -1132,7 +1267,7 @@ export function PlanBilling() {
                 <div className="flex items-start justify-between gap-4 px-4 py-3 bg-white">
                   <span className="font-semibold text-gray-900">Total due now</span>
                   <span className="text-lg font-bold tabular-nums text-blue-700">
-                    {renewalAmount ? formatPrice(renewalAmount) : "Custom"}
+                    {checkoutAmount ? formatPrice(checkoutAmount) : "Custom"}
                   </span>
                 </div>
               </>

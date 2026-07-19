@@ -4608,6 +4608,19 @@ export interface PlanCheckoutOrder {
   gstRate: number
 }
 
+export interface PlanPromoPreview {
+  code: string
+  description: string
+  discountType: "percent" | "fixed"
+  discountValue: number
+  discountPaise: number
+  discountRupees: number
+  basePaise: number
+  baseRupees: number
+  finalPaise: number
+  finalRupees: number
+}
+
 export interface PlanCheckoutVerifyPayload {
   provider: WalletProvider
   orderId?: string
@@ -4615,6 +4628,7 @@ export interface PlanCheckoutVerifyPayload {
   signature?: string
   planId: PlanSubscriptionId
   billingPeriod: PlanBillingPeriod
+  promoCode?: string
 }
 
 export interface PlanCheckoutVerifyResponse {
@@ -4633,6 +4647,11 @@ export interface PlanCheckoutVerifyResponse {
     totalChargedPaise: number
     gstRate: number
   }
+  promo?: {
+    code: string
+    discountPaise: number
+    discountRupees: number
+  } | null
   plan?: {
     planId: PlanSubscriptionId
     billingPeriod: PlanBillingPeriod
@@ -4696,13 +4715,34 @@ export interface PlanTransactionsResponse {
 }
 
 export class PlanCheckoutAPI {
+  static async validatePromo(
+    planId: PlanSubscriptionId,
+    billingPeriod: PlanBillingPeriod,
+    promoCode: string
+  ): Promise<
+    ApiResponse<{
+      promo: PlanPromoPreview
+      walletChargePaise: number
+      walletChargeRupees: number
+    }>
+  > {
+    const response = await apiClient.post("/plan/checkout/validate-promo", {
+      planId,
+      billingPeriod,
+      promoCode,
+    })
+    return response.data
+  }
+
   static async createOrder(
     planId: PlanSubscriptionId,
-    billingPeriod: PlanBillingPeriod
+    billingPeriod: PlanBillingPeriod,
+    promoCode?: string
   ): Promise<ApiResponse<PlanCheckoutOrder>> {
     const response = await apiClient.post("/plan/checkout/order", {
       planId,
       billingPeriod,
+      promoCode: promoCode?.trim() || undefined,
     })
     return response.data
   }
@@ -4716,11 +4756,13 @@ export class PlanCheckoutAPI {
 
   static async payWithWallet(
     planId: PlanSubscriptionId,
-    billingPeriod: PlanBillingPeriod
+    billingPeriod: PlanBillingPeriod,
+    promoCode?: string
   ): Promise<ApiResponse<PlanCheckoutVerifyResponse>> {
     const response = await apiClient.post("/plan/checkout/wallet", {
       planId,
       billingPeriod,
+      promoCode: promoCode?.trim() || undefined,
     })
     return response.data
   }
