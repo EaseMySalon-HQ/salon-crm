@@ -16,6 +16,7 @@ import { getReceiptPreviewClassName, resolveReceiptPaperSize } from "@/lib/recei
 import { cn } from "@/lib/utils"
 import { Card, CardContent } from "@/components/ui/card"
 import { useCurrency } from "@/hooks/use-currency"
+import { shouldShowGstOnClientReceipt } from "@/lib/should-show-gst-on-client-receipt"
 
 interface ReceiptPreviewProps {
   receipt: Receipt
@@ -95,7 +96,7 @@ export function ReceiptPreview({ receipt, businessSettings }: ReceiptPreviewProp
   // `custom_receipt_templates` feature; backend strips it otherwise).
   const tpl = businessSettings?.receiptTemplate || {}
   const showLogo = tpl.showLogo !== false
-  const showGst = tpl.showGstNumber !== false
+  const showGst = shouldShowGstOnClientReceipt(businessSettings)
   const paperSize = resolveReceiptPaperSize(businessSettings)
 
   return (

@@ -110,6 +110,7 @@ import {
   communicationConsentPayload,
 } from "@/lib/client-communication-consent"
 import { ClientCommunicationConsentFields } from "@/components/clients/client-communication-consent-fields"
+import { ClientBirthdateField } from "@/components/clients/client-birthdate-field"
 import { ClientGenderRadioField, isClientGenderSelected } from "@/components/clients/client-gender-radio-field"
 import { customerDropdownList, findWalkInClient, formatClientPhoneForDisplay, isWalkInClient, WALK_IN_SYSTEM_PHONE, WALK_IN_UI_BADGE } from "@/lib/walk-in-client"
 import { CardSkeletonGrid, FormSkeleton, LoadingButton } from "@/components/loading"
@@ -633,6 +634,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
     lastName: "",
     phone: "",
     email: "",
+    birthdate: "",
     gender: "" as "" | "male" | "female",
     ...DEFAULT_CLIENT_COMMUNICATION_CONSENT,
   })
@@ -2112,6 +2114,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       lastName: "",
       phone: customerSearch,
       email: "",
+      birthdate: "",
       gender: "",
       ...DEFAULT_CLIENT_COMMUNICATION_CONSENT,
     })
@@ -2157,6 +2160,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       name: newCustomer.lastName ? `${newCustomer.firstName} ${newCustomer.lastName}` : newCustomer.firstName,
       phone: phoneNumber,
       email: newCustomer.email,
+      birthdate: newCustomer.birthdate.trim() || undefined,
       gender: newCustomer.gender,
       totalVisits: 0,
       totalSpent: 0,
@@ -2194,6 +2198,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           lastName: "",
           phone: "",
           email: "",
+          birthdate: "",
           gender: "",
           ...DEFAULT_CLIENT_COMMUNICATION_CONSENT,
         })
@@ -6436,16 +6441,27 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                   />
                 </div>
                 
-                <div className="space-y-2">
-                  <Label className="text-sm font-medium text-gray-700">Email</Label>
-                  <Input
-                    type="email"
-                    value={newCustomer.email}
-                    onChange={(e) => setNewCustomer({ ...newCustomer, email: e.target.value })}
-                    placeholder="Enter email address"
-                    className="border-gray-200 focus:border-indigo-500 focus:ring-indigo-500/20"
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium text-gray-700">Email</Label>
+                    <Input
+                      type="email"
+                      value={newCustomer.email}
+                      onChange={(e) => setNewCustomer({ ...newCustomer, email: e.target.value })}
+                      placeholder="Enter email address"
+                      className="border-gray-200 focus:border-indigo-500 focus:ring-indigo-500/20"
+                    />
+                  </div>
+                  <ClientBirthdateField
+                    id="quick-sale-new-customer-birthday"
+                    value={newCustomer.birthdate}
+                    onChange={(birthdate) => setNewCustomer({ ...newCustomer, birthdate })}
+                    showDescription={false}
                   />
                 </div>
+                <p className="text-xs text-muted-foreground -mt-2">
+                  Birthday is optional and used for birthday WhatsApp messages and offers.
+                </p>
 
                 <ClientCommunicationConsentFields
                   variant="compact"
@@ -9242,45 +9258,56 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                 </div>
               </div>
               
-              <div style={{marginBottom: '20px'}}>
-                <label style={{
-                  display: 'block',
-                  fontSize: '14px',
-                  fontWeight: '600',
-                  color: '#374151',
-                  marginBottom: '10px',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.5px'
-                }}>
-                  Email Address
-                </label>
-                <input
-                  type="email"
-                  value={newCustomer.email}
-                  onChange={(e) => setNewCustomer({ ...newCustomer, email: e.target.value })}
-                  placeholder="Enter email address"
-                  style={{
-                    width: '100%',
-                    padding: '14px 16px',
-                    border: '2px solid #e5e7eb',
-                    borderRadius: '12px',
-                    fontSize: '15px',
-                    backgroundColor: '#fafafa',
-                    transition: 'all 0.2s ease',
-                    outline: 'none'
-                  }}
-                  onFocus={(e) => {
-                    e.target.style.borderColor = '#8b5cf6'
-                    e.target.style.backgroundColor = 'white'
-                    e.target.style.boxShadow = '0 0 0 3px rgba(139, 92, 246, 0.1)'
-                  }}
-                  onBlur={(e) => {
-                    e.target.style.borderColor = '#e5e7eb'
-                    e.target.style.backgroundColor = '#fafafa'
-                    e.target.style.boxShadow = 'none'
-                  }}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "8px" }}>
+                <div>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    color: '#374151',
+                    marginBottom: '10px',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.5px'
+                  }}>
+                    Email Address
+                  </label>
+                  <input
+                    type="email"
+                    value={newCustomer.email}
+                    onChange={(e) => setNewCustomer({ ...newCustomer, email: e.target.value })}
+                    placeholder="Enter email address"
+                    style={{
+                      width: '100%',
+                      padding: '14px 16px',
+                      border: '2px solid #e5e7eb',
+                      borderRadius: '12px',
+                      fontSize: '15px',
+                      backgroundColor: '#fafafa',
+                      transition: 'all 0.2s ease',
+                      outline: 'none'
+                    }}
+                    onFocus={(e) => {
+                      e.target.style.borderColor = '#8b5cf6'
+                      e.target.style.backgroundColor = 'white'
+                      e.target.style.boxShadow = '0 0 0 3px rgba(139, 92, 246, 0.1)'
+                    }}
+                    onBlur={(e) => {
+                      e.target.style.borderColor = '#e5e7eb'
+                      e.target.style.backgroundColor = '#fafafa'
+                      e.target.style.boxShadow = 'none'
+                    }}
+                  />
+                </div>
+                <ClientBirthdateField
+                  id="quick-sale-new-customer-birthday-alt"
+                  value={newCustomer.birthdate}
+                  onChange={(birthdate) => setNewCustomer({ ...newCustomer, birthdate })}
+                  showDescription={false}
                 />
               </div>
+              <p className="text-xs text-muted-foreground" style={{ marginBottom: "20px" }}>
+                Birthday is optional and used for birthday WhatsApp messages and offers.
+              </p>
 
               <div style={{ marginBottom: "8px" }}>
                 <ClientCommunicationConsentFields

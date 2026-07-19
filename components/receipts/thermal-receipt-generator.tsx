@@ -14,6 +14,7 @@ import {
   renderReceiptTotalsHtml,
 } from "@/lib/receipt-totals-breakdown"
 import { getThermalPaperWidthMm, resolveReceiptPaperSize } from "@/lib/receipt-paper-size"
+import { shouldShowGstOnClientReceipt } from "@/lib/should-show-gst-on-client-receipt"
 
 const thermalFormat = (amount: number) => `₹${amount.toFixed(2)}`
 
@@ -419,6 +420,8 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
       `
     }
 
+    const showGstOnReceipt = shouldShowGstOnClientReceipt(businessSettings)
+
     return `
       <!DOCTYPE html>
       <html>
@@ -514,7 +517,7 @@ export function ThermalReceiptGenerator({ receipt, businessSettings }: ThermalRe
           <div class="business-info">${businessSettings.address || "123 Beauty Street"}, ${businessSettings.city || "City"}, ${businessSettings.state || "ST"} ${businessSettings.zipCode || "12345"}</div>
           <div class="business-info">Phone: ${businessSettings.phone || "(555) 123-SALON"}</div>
           <div class="business-info">Email: ${businessSettings.email || "info@glamoursalon.com"}</div>
-          ${businessSettings.gstNumber ? `<div class="business-info">GST: ${businessSettings.gstNumber}</div>` : ''}
+          ${showGstOnReceipt ? `<div class="business-info">GST: ${businessSettings.gstNumber}</div>` : ''}
         </div>
 
         <div class="receipt-info">

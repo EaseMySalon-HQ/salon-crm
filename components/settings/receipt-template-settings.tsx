@@ -158,7 +158,7 @@ export function ReceiptTemplateSettings() {
 
           {[
             { key: "showLogo" as const, label: "Show business logo" },
-            { key: "showGstNumber" as const, label: "Show GST number" },
+            { key: "showGstNumber" as const, label: "Show GST number on client receipts" },
             { key: "showStaffName" as const, label: "Show staff name" },
             { key: "showClientInfo" as const, label: "Show client information" },
           ].map((row) => (

@@ -15,6 +15,7 @@ import {
   buildReceiptTaxDetailHtml,
   renderReceiptTotalsHtml,
 } from "@/lib/receipt-totals-breakdown"
+import { shouldShowGstOnClientReceipt } from "@/lib/should-show-gst-on-client-receipt"
 
 interface ReceiptGeneratorProps {
   receipt: Receipt
@@ -56,6 +57,7 @@ export function ReceiptGenerator({ receipt, businessSettings }: ReceiptGenerator
 
     const correctTaxAmount = calculateCorrectTaxAmount()
     const correctTotal = calculateCorrectTotal()
+    const showGstOnReceipt = shouldShowGstOnClientReceipt(businessSettings)
 
     return `
       <!DOCTYPE html>
@@ -169,7 +171,7 @@ export function ReceiptGenerator({ receipt, businessSettings }: ReceiptGenerator
           <div class="salon-info">${businessSettings.address}, ${businessSettings.city}, ${businessSettings.state} ${businessSettings.zipCode}</div>
           <div class="salon-info">Phone: ${businessSettings.phone}</div>
           <div class="salon-info">Email: ${businessSettings.email}</div>
-          ${businessSettings.gstNumber ? `<div class="salon-info" style="font-weight: bold;">GST: ${businessSettings.gstNumber}</div>` : ''}
+          ${showGstOnReceipt ? `<div class="salon-info" style="font-weight: bold;">GST: ${businessSettings.gstNumber}</div>` : ''}
         </div>
 
         <div class="receipt-info">

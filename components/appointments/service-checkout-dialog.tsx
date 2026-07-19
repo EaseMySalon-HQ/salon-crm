@@ -96,6 +96,7 @@ import {
   communicationConsentPayload,
 } from "@/lib/client-communication-consent"
 import { ClientCommunicationConsentFields } from "@/components/clients/client-communication-consent-fields"
+import { ClientBirthdateField } from "@/components/clients/client-birthdate-field"
 import { ClientGenderRadioField, isClientGenderSelected } from "@/components/clients/client-gender-radio-field"
 import { SettleDuesDrawer } from "@/components/appointments/settle-dues-drawer"
 import {
@@ -1098,6 +1099,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     lastName: "",
     phone: "",
     email: "",
+    birthdate: "",
     gender: "" as "" | "male" | "female",
     ...DEFAULT_CLIENT_COMMUNICATION_CONSENT,
   })
@@ -3696,6 +3698,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       lastName: "",
       phone: isPhone ? q.slice(0, 10) : "",
       email: "",
+      birthdate: "",
       gender: "",
       ...DEFAULT_CLIENT_COMMUNICATION_CONSENT,
     })
@@ -3777,6 +3780,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
         name,
         phone: phoneNumber,
         email: newClient.email.trim() || undefined,
+        birthdate: newClient.birthdate.trim() || undefined,
         gender: newClient.gender,
         status: "active",
         ...communicationConsentPayload(newClient),
@@ -3808,6 +3812,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
         lastName: "",
         phone: "",
         email: "",
+        birthdate: "",
         gender: "",
         ...DEFAULT_CLIENT_COMMUNICATION_CONSENT,
       })
@@ -6821,16 +6826,28 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
               disabled={creatingClient}
             />
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="checkout-new-client-email">Email</Label>
-            <Input
-              id="checkout-new-client-email"
-              type="email"
-              value={newClient.email}
-              onChange={(e) => setNewClient({ ...newClient, email: e.target.value })}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="checkout-new-client-email">Email</Label>
+              <Input
+                id="checkout-new-client-email"
+                type="email"
+                value={newClient.email}
+                onChange={(e) => setNewClient({ ...newClient, email: e.target.value })}
+                disabled={creatingClient}
+              />
+            </div>
+            <ClientBirthdateField
+              id="checkout-new-client-birthday"
+              value={newClient.birthdate}
+              onChange={(birthdate) => setNewClient({ ...newClient, birthdate })}
               disabled={creatingClient}
+              showDescription={false}
             />
           </div>
+          <p className="text-xs text-muted-foreground -mt-2">
+            Birthday is optional and used for birthday WhatsApp messages and offers.
+          </p>
           <ClientCommunicationConsentFields
             variant="compact"
             disabled={creatingClient}
