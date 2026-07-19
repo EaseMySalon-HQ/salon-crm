@@ -2,6 +2,7 @@
  * Self-service plan-subscription checkout.
  *
  * Surface for the Settings → Plan & Billing → Proceed to Checkout button:
+ *   POST /api/plan/checkout/validate-promo   — preview promo discount for checkout
  *   POST /api/plan/checkout/order          — create payment order for a renewal/upgrade
  *   POST /api/plan/checkout/verify         — verify gateway callback and activate plan
  *   POST /api/plan/checkout/wallet         — debit messaging wallet and activate plan
@@ -37,6 +38,10 @@ const planResolver = require('../lib/plan-resolver');
 const { normalizePlanId, tierOf, isValidPlanId } = require('../lib/plan-id');
 const entitlementsCache = require('../lib/entitlements-cache');
 const { atomicDeduct } = require('../lib/wallet-deduction');
+const {
+  resolvePromoForCheckout,
+  recordPlanPromoRedemption,
+} = require('../lib/plan-promo');
 
 const GST_RATE = 0.18;
 
@@ -157,6 +162,7 @@ async function finalizePlanCheckout({
     providerPaymentId = null,
     totalChargedPaise,
   },
+  promo = null,
 }) {
   const { Business, PlanInvoiceTransaction, PlanChangeLog } = await getMainModels();
 
@@ -264,6 +270,25 @@ async function finalizePlanCheckout({
     );
   }
 
+  if (promo?.id) {
+    try {
+      await recordPlanPromoRedemption({
+        promoCodeId: promo.id,
+        code: promo.code,
+        businessId,
+        planId,
+        billingPeriod,
+        discountPaise: promo.discountPaise,
+        planInvoiceTransactionId: planTxn._id,
+      });
+    } catch (promoErr) {
+      logger.warn(
+        '[plan-checkout] Promo redemption record failed:',
+        promoErr?.message || promoErr
+      );
+    }
+  }
+
   setImmediate(() => {
     sendPlanRenewalInvoice({
       transactionId: planTxn._id,
@@ -282,6 +307,7 @@ async function finalizePlanCheckout({
     newRenewalDate,
     planTxn,
     expected,
+    promo: promo || null,
     plan: {
       planId,
       billingPeriod,
@@ -295,7 +321,7 @@ async function finalizePlanCheckout({
 }
 
 function buildCheckoutSuccessPayload(result) {
-  const { kind, planId, billingPeriod, newRenewalDate, planTxn, expected, plan } =
+  const { kind, planId, billingPeriod, newRenewalDate, planTxn, expected, plan, promo } =
     result;
   return {
     transactionId: String(planTxn._id),
@@ -309,9 +335,105 @@ function buildCheckoutSuccessPayload(result) {
       totalChargedPaise: expected.totalPaise,
       gstRate: expected.gstRate,
     },
+    promo: promo
+      ? {
+          code: promo.code,
+          discountPaise: promo.discountPaise,
+          discountRupees: promo.discountPaise / 100,
+        }
+      : null,
     plan,
   };
 }
+
+async function assertNotDowngrade(business, planId) {
+  const currentPlanId = business?.plan?.planId || 'starter';
+  if (tierOf(planId) < tierOf(currentPlanId)) {
+    return {
+      ok: false,
+      status: 400,
+      error:
+        'Downgrades are scheduled for your next renewal and do not require a payment. Use the schedule-downgrade endpoint instead.',
+    };
+  }
+  return { ok: true };
+}
+
+// ── POST /checkout/validate-promo ───────────────────────────────────────────
+
+router.post(
+  '/checkout/validate-promo',
+  authenticateToken,
+  setupMainDatabase,
+  async (req, res) => {
+    try {
+      if (!requireOwner(req, res)) return;
+      const businessId = req.user?.branchId;
+      if (!businessId) {
+        return res.status(400).json({ success: false, error: 'Business ID not found' });
+      }
+
+      const { planId: rawPlanId, billingPeriod, promoCode } = req.body || {};
+      const planId = normalizePlanId(rawPlanId);
+      if (!rawPlanId || !isValidPlanId(rawPlanId)) {
+        return res.status(400).json({ success: false, error: 'Invalid planId' });
+      }
+      if (!['monthly', 'yearly'].includes(billingPeriod)) {
+        return res.status(400).json({ success: false, error: 'Invalid billingPeriod' });
+      }
+
+      const breakdown = await computeBreakdown(planId, billingPeriod);
+      if (!breakdown) {
+        return res.status(400).json({
+          success: false,
+          error: 'This plan does not have a self-service price.',
+        });
+      }
+
+      const resolved = await resolvePromoForCheckout({
+        code: promoCode,
+        businessId,
+        planId,
+        billingPeriod,
+        breakdown,
+      });
+      if (resolved.error) {
+        return res.status(400).json({ success: false, error: resolved.error });
+      }
+
+      const { promo } = resolved;
+      if (!promo) {
+        return res.status(400).json({ success: false, error: 'Enter a promo code' });
+      }
+
+      return res.json({
+        success: true,
+        data: {
+          promo: {
+            code: promo.code,
+            description: promo.description || '',
+            discountType: promo.discountType,
+            discountValue: promo.discountValue,
+            discountPaise: promo.discountPaise,
+            discountRupees: promo.discountRupees,
+            basePaise: promo.basePaise,
+            baseRupees: promo.baseRupees,
+            finalPaise: promo.finalPaise,
+            finalRupees: promo.finalRupees,
+          },
+          walletChargePaise: promo.finalPaise,
+          walletChargeRupees: promo.finalRupees,
+        },
+      });
+    } catch (err) {
+      logger.error('[plan-checkout] validate-promo failed:', err);
+      return res.status(500).json({
+        success: false,
+        error: err?.message || 'Failed to validate promo code',
+      });
+    }
+  }
+);
 
 async function activateFreePlan({ businessId, planId, billingPeriod }) {
   const { Business } = await getMainModels();
@@ -347,7 +469,7 @@ router.post('/checkout/order', authenticateToken, setupMainDatabase, async (req,
       return res.status(400).json({ success: false, error: 'Business ID not found' });
     }
 
-    const { planId: rawPlanId, billingPeriod } = req.body || {};
+    const { planId: rawPlanId, billingPeriod, promoCode } = req.body || {};
     const planId = normalizePlanId(rawPlanId);
     if (!rawPlanId || !isValidPlanId(rawPlanId)) {
       return res.status(400).json({ success: false, error: 'Invalid planId' });
@@ -362,17 +484,15 @@ router.post('/checkout/order', authenticateToken, setupMainDatabase, async (req,
       return res.status(404).json({ success: false, error: 'Business not found' });
     }
 
-    // Downgrades must go through /schedule-downgrade — they don't charge.
-    const currentPlanId = business?.plan?.planId || 'starter';
-    if (tierOf(planId) < tierOf(currentPlanId)) {
-      return res.status(400).json({
+    const downgradeCheck = await assertNotDowngrade(business, planId);
+    if (!downgradeCheck.ok) {
+      return res.status(downgradeCheck.status).json({
         success: false,
-        error:
-          'Downgrades are scheduled for your next renewal and do not require a payment. Use the schedule-downgrade endpoint instead.',
+        error: downgradeCheck.error,
       });
     }
 
-    const breakdown = await computeBreakdown(planId, billingPeriod);
+    let breakdown = await computeBreakdown(planId, billingPeriod);
     if (!breakdown) {
       return res.status(400).json({
         success: false,
@@ -380,6 +500,18 @@ router.post('/checkout/order', authenticateToken, setupMainDatabase, async (req,
           'This plan does not have a self-service price. Please contact sales.',
       });
     }
+
+    const promoResolved = await resolvePromoForCheckout({
+      code: promoCode,
+      businessId,
+      planId,
+      billingPeriod,
+      breakdown,
+    });
+    if (promoResolved.error) {
+      return res.status(400).json({ success: false, error: promoResolved.error });
+    }
+    breakdown = promoResolved.breakdown;
 
     if (breakdown.totalPaise === 0) {
       if (!business.plan) business.plan = {};
@@ -436,6 +568,13 @@ router.post('/checkout/order', authenticateToken, setupMainDatabase, async (req,
         gstPaise: breakdown.gstPaise,
         totalAmountPaise: breakdown.totalPaise,
         gstRate: breakdown.gstRate,
+        promo: promoResolved.promo
+          ? {
+              code: promoResolved.promo.code,
+              discountPaise: promoResolved.promo.discountPaise,
+              discountRupees: promoResolved.promo.discountRupees,
+            }
+          : null,
       },
     });
   } catch (err) {
@@ -464,6 +603,7 @@ router.post('/checkout/verify', authenticateToken, setupMainDatabase, async (req
       signature,
       planId: rawPlanId,
       billingPeriod,
+      promoCode,
     } = req.body || {};
 
     const planId = normalizePlanId(rawPlanId);
@@ -518,13 +658,24 @@ router.post('/checkout/verify', authenticateToken, setupMainDatabase, async (req
 
     // Cross-check the gateway-captured amount against what we expected to
     // charge. Tolerate ±1 paise of rounding slop.
-    const expected = await computeBreakdown(planId, billingPeriod);
+    let expected = await computeBreakdown(planId, billingPeriod);
     if (!expected) {
       return res.status(400).json({
         success: false,
         error: 'Selected plan does not have a self-service price',
       });
     }
+    const promoResolved = await resolvePromoForCheckout({
+      code: promoCode,
+      businessId,
+      planId,
+      billingPeriod,
+      breakdown: expected,
+    });
+    if (promoResolved.error) {
+      return res.status(400).json({ success: false, error: promoResolved.error });
+    }
+    expected = promoResolved.breakdown;
     const gatewayTotalPaise =
       Number.isInteger(verification.amountPaise) && verification.amountPaise > 0
         ? verification.amountPaise
@@ -544,6 +695,7 @@ router.post('/checkout/verify', authenticateToken, setupMainDatabase, async (req
       planId,
       billingPeriod,
       expected,
+      promo: promoResolved.promo,
       payment: {
         provider,
         providerOrderId: verification.providerOrderId || orderId || null,
@@ -577,7 +729,7 @@ router.post('/checkout/wallet', authenticateToken, setupMainDatabase, async (req
       return res.status(400).json({ success: false, error: 'Business ID not found' });
     }
 
-    const { planId: rawPlanId, billingPeriod } = req.body || {};
+    const { planId: rawPlanId, billingPeriod, promoCode } = req.body || {};
     const planId = normalizePlanId(rawPlanId);
     if (!rawPlanId || !isValidPlanId(rawPlanId)) {
       return res.status(400).json({ success: false, error: 'Invalid planId' });
@@ -592,16 +744,15 @@ router.post('/checkout/wallet', authenticateToken, setupMainDatabase, async (req
       return res.status(404).json({ success: false, error: 'Business not found' });
     }
 
-    const currentPlanId = business?.plan?.planId || 'starter';
-    if (tierOf(planId) < tierOf(currentPlanId)) {
-      return res.status(400).json({
+    const downgradeCheck = await assertNotDowngrade(business, planId);
+    if (!downgradeCheck.ok) {
+      return res.status(downgradeCheck.status).json({
         success: false,
-        error:
-          'Downgrades are scheduled for your next renewal and do not require a payment.',
+        error: downgradeCheck.error,
       });
     }
 
-    const expected = await computeBreakdown(planId, billingPeriod);
+    let expected = await computeBreakdown(planId, billingPeriod);
     if (!expected) {
       return res.status(400).json({
         success: false,
@@ -609,6 +760,18 @@ router.post('/checkout/wallet', authenticateToken, setupMainDatabase, async (req
           'This plan does not have a self-service price. Please contact sales.',
       });
     }
+
+    const promoResolved = await resolvePromoForCheckout({
+      code: promoCode,
+      businessId,
+      planId,
+      billingPeriod,
+      breakdown: expected,
+    });
+    if (promoResolved.error) {
+      return res.status(400).json({ success: false, error: promoResolved.error });
+    }
+    expected = promoResolved.breakdown;
 
     const walletChargePaise = expected.basePaise;
 
@@ -663,6 +826,7 @@ router.post('/checkout/wallet', authenticateToken, setupMainDatabase, async (req
         planId,
         billingPeriod,
         expected: walletExpected,
+        promo: promoResolved.promo,
         payment: {
           provider: 'system',
           providerPaymentId: String(deduct.walletTransactionId),
