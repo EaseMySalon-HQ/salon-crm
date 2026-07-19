@@ -31,6 +31,7 @@ export function BusinessSettings() {
     socialMedia: "",
     logo: "",
     gstNumber: "",
+    showGstOnClientReceipts: true,
   })
   const [isLoading, setIsLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
@@ -54,6 +55,7 @@ export function BusinessSettings() {
           ...d,
           googleReviewUrl: d.googleReviewUrl ?? "",
           allowFeedbackResubmission: d.allowFeedbackResubmission === true,
+          showGstOnClientReceipts: d.receiptTemplate?.showGstNumber !== false,
         }))
       }
     } catch (error) {
@@ -500,8 +502,28 @@ export function BusinessSettings() {
                 maxLength={15}
               />
               <p className="text-xs text-slate-500">
-                Enter your 15-character GST registration number. This will appear on receipts and invoices.
+                Enter your 15-character GST registration number.
               </p>
+            </div>
+
+            <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50/80 px-4 py-3">
+              <div className="space-y-0.5">
+                <Label htmlFor="showGstOnClientReceipts" className="text-sm font-medium text-slate-800">
+                  Show GST on client receipts
+                </Label>
+                <p className="text-xs text-slate-500">
+                  When enabled, this GST number appears on receipts for client services and products.
+                  When disabled, it is used only on tax invoices for wallet recharges.
+                </p>
+              </div>
+              <Switch
+                id="showGstOnClientReceipts"
+                checked={businessInfo.showGstOnClientReceipts !== false}
+                disabled={!canEdit}
+                onCheckedChange={(checked) =>
+                  setBusinessInfo({ ...businessInfo, showGstOnClientReceipts: checked })
+                }
+              />
             </div>
           </div>
         </div>

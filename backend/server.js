@@ -3042,7 +3042,7 @@ app.post(
   validate(createClientBodySchema),
   async (req, res) => {
   try {
-    const { name, email, phone, address, notes } = req.body;
+    const { name, email, phone, address, notes, gender, dob } = req.body;
 
     if (String(phone || '').trim() === WALK_IN_PHONE) {
       return res.status(400).json({
@@ -3083,12 +3083,17 @@ app.post(
       { actorType: 'staff', actorId: req.user._id }
     );
 
+    const { parseClientDobInput } = require('./lib/parse-client-dob');
+    const parsedDob = parseClientDobInput(dob);
+
     const newClient = new Client({
       name,
       email,
       phone,
       address,
       notes,
+      gender: gender || undefined,
+      dob: parsedDob,
       status: 'active',
       totalVisits: 0,
       totalSpent: 0,
@@ -3211,6 +3216,11 @@ app.put(
     updatePayload.promotionalWhatsappEnabled = communication.promotionalWhatsappEnabled;
     updatePayload.transactionalWhatsappEnabled = communication.transactionalWhatsappEnabled;
     updatePayload.transactionalSmsEnabled = communication.transactionalSmsEnabled;
+
+    if (Object.prototype.hasOwnProperty.call(req.body, 'dob')) {
+      const { parseClientDobInput } = require('./lib/parse-client-dob');
+      updatePayload.dob = parseClientDobInput(req.body.dob) ?? null;
+    }
 
     let consentResult = null;
     const previousPromo =
@@ -15665,7 +15675,8 @@ app.put("/api/settings/business", authenticateToken, setupBusinessDatabase, requ
       allowFeedbackResubmission,
       socialMedia,
       logo,
-      gstNumber
+      gstNumber,
+      showGstOnClientReceipts,
     } = req.body;
     
     logger.debug('🖼️ Logo data length:', logo ? logo.length : 0, 'characters');
@@ -15749,8 +15760,25 @@ app.put("/api/settings/business", authenticateToken, setupBusinessDatabase, requ
     settings.socialMedia = socialMedia || "@glamoursalon";
     settings.logo = logo || "";
     settings.gstNumber = gstNumber || "";
+    if (typeof showGstOnClientReceipts === "boolean") {
+      settings.receiptTemplate = settings.receiptTemplate || {};
+      settings.receiptTemplate.showGstNumber = showGstOnClientReceipts;
+      settings.markModified("receiptTemplate");
+    }
 
     await settings.save();
+
+    if (req.user?.branchId) {
+      try {
+        const mainConnection = await require('./config/database-manager').getMainConnection();
+        const BusinessModel = mainConnection.model('Business', require('./models/Business').schema);
+        await BusinessModel.findByIdAndUpdate(req.user.branchId, {
+          $set: { 'settings.gstNumber': settings.gstNumber || '' },
+        });
+      } catch (syncErr) {
+        logger.warn('Failed to sync GST number to main business record:', syncErr.message);
+      }
+    }
 
     const newLogo = settings.logo || '';
     if (prevLogo !== newLogo) {

@@ -1,6 +1,7 @@
 const puppeteer = require('puppeteer');
 const { formatReceiptItemStaffNames } = require('./receipt-staff-format');
 const { renderReceiptTotalsBreakdownHtml } = require('./receipt-totals-breakdown-html');
+const { shouldShowGstOnClientReceipt } = require('../lib/should-show-gst-on-client-receipt');
 
 function formatReceiptDiscountPercent(discount) {
   const n = Number(discount);
@@ -119,6 +120,7 @@ function generateReceiptHTML(receipt, businessSettings) {
 
   const correctTaxAmount = calculateCorrectTaxAmount();
   const correctTotal = calculateCorrectTotal();
+  const showGstOnReceipt = shouldShowGstOnClientReceipt(businessSettings);
 
   // Format address
   const addressLine = businessSettings.address 
@@ -237,7 +239,7 @@ function generateReceiptHTML(receipt, businessSettings) {
         ${addressLine ? `<div class="salon-info">${addressLine}</div>` : ''}
         ${businessSettings.phone ? `<div class="salon-info">Phone: ${businessSettings.phone}</div>` : ''}
         ${businessSettings.email ? `<div class="salon-info">Email: ${businessSettings.email}</div>` : ''}
-        ${businessSettings.gstNumber ? `<div class="salon-info" style="font-weight: bold;">GST: ${businessSettings.gstNumber}</div>` : ''}
+        ${showGstOnReceipt ? `<div class="salon-info" style="font-weight: bold;">GST: ${businessSettings.gstNumber}</div>` : ''}
       </div>
 
       <div class="receipt-info">
