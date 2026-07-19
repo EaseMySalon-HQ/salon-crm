@@ -359,6 +359,9 @@ export function InvoiceSettings({
                 placeholder="billing@example.com"
                 onChange={(e) => updateSeller("email", e.target.value)}
               />
+              <p className="text-xs text-slate-500">
+                Shown on invoices and receives a copy when wallet or plan invoices are emailed.
+              </p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="invoice-seller-phone">Phone</Label>

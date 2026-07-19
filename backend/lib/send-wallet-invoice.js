@@ -3,8 +3,7 @@
  *
  * Entry point: `sendWalletRechargeInvoice({ transactionId })`.
  *
- * Loads the WalletTransaction + Business (+ optionally the admin user who
- * triggered the recharge), assembles a tax-invoice context, generates a PDF
+ * Loads the WalletTransaction + Business, assembles a tax-invoice context, generates a PDF
  * via `utils/wallet-invoice-pdf`, emails it via the shared EmailService, and
  * stamps the emitted `invoiceNumber` onto the transaction.
  *
@@ -102,6 +101,17 @@ async function getPlanInvoicePrefix() {
       invoiceSettings.planInvoicePrefix,
       process.env.INVOICE_PLAN_PREFIX
     ) || 'EMS/SUB'
+  );
+}
+
+/** Buyer + platform billing email (AdminSettings → Invoice & GST). */
+function resolveTaxInvoiceEmailRecipients(business, billingEmail) {
+  return Array.from(
+    new Set(
+      [business?.contact?.email, billingEmail]
+        .map(s => (s || '').trim().toLowerCase())
+        .filter(Boolean)
+    )
   );
 }
 
@@ -310,9 +320,6 @@ function buildEmailBody({ buyer, invoice, amounts, payment }) {
  *
  * @param {Object} opts
  * @param {string|ObjectId} opts.transactionId - WalletTransaction _id (credit row).
- * @param {string} [opts.triggeredByEmail] - Optional second recipient (the
- *   logged-in user who initiated the recharge, if different from the
- *   business contact email).
  * @returns {Promise<{ success: boolean, invoiceNumber?: string, error?: string }>}
  */
 /**
@@ -439,7 +446,7 @@ async function buildInvoicePDFForTransaction({
   return { pdfBuffer, invoiceNumber, context, txDoc, business };
 }
 
-async function sendWalletRechargeInvoice({ transactionId, triggeredByEmail } = {}) {
+async function sendWalletRechargeInvoice({ transactionId } = {}) {
   try {
     let built;
     try {
@@ -457,12 +464,9 @@ async function sendWalletRechargeInvoice({ transactionId, triggeredByEmail } = {
       return { success: true, skippedEmail: true, invoiceNumber };
     }
 
-    const recipients = Array.from(
-      new Set(
-        [business?.contact?.email, triggeredByEmail]
-          .map(s => (s || '').trim().toLowerCase())
-          .filter(Boolean)
-      )
+    const recipients = resolveTaxInvoiceEmailRecipients(
+      business,
+      context?.seller?.email
     );
 
     if (recipients.length === 0) {
@@ -529,9 +533,11 @@ module.exports = {
   getOrAllocateInvoiceNumber,
   // Shared helpers re-used by sibling orchestrators (plan invoices, etc.)
   // so the seller-context / FY-counter logic stays in one place.
+  resolveTaxInvoiceEmailRecipients,
   _shared: {
     getSellerContext,
     buildBuyerContext,
+    resolveTaxInvoiceEmailRecipients,
     getInvoicePrefix,
     getPlanInvoicePrefix,
     fiscalYearContext,

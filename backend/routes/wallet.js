@@ -311,13 +311,12 @@ router.post('/recharge/verify', authenticateToken, setupMainDatabase, async (req
     });
 
     // Fire-and-forget: generate GST invoice PDF and email it to the
-    // business owner (+ the user who initiated the recharge, if different).
+    // business contact + platform billing email (AdminSettings → Invoice & GST).
     // Any failure is logged inside the orchestrator and must never block
     // the recharge success response or roll back the credit.
     setImmediate(() => {
       sendWalletRechargeInvoice({
         transactionId: creditTxn._id,
-        triggeredByEmail: req.user?.email || null,
       }).catch(err => {
         logger.error(
           '[wallet-invoice] fire-and-forget send failed:',
