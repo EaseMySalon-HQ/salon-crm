@@ -919,7 +919,15 @@ router.post(
         'WalletTransaction',
         require('../models/WalletTransaction').schema,
       );
-      const { amountRupees, note } = req.body || {};
+      const {
+        amountRupees,
+        note,
+        creditKind,
+        paymentProvider,
+        paymentReference,
+        generateInvoice,
+        emailInvoice,
+      } = req.body || {};
 
       const result = await creditBusinessWalletFromAdmin({
         Business,
@@ -928,6 +936,11 @@ router.post(
         amountRupees,
         note,
         admin: req.admin,
+        creditKind,
+        paymentProvider,
+        paymentReference,
+        generateInvoice,
+        emailInvoice,
       });
 
       logAdminActivity({
@@ -938,9 +951,11 @@ router.post(
         resourceType: 'Business',
         details: {
           walletCredit: true,
+          creditKind: result.creditKind,
           amountRupees: result.amountRupees,
           newBalanceRupees: result.newBalanceRupees,
           transactionId: result.transactionId,
+          invoiceNumber: result.invoiceNumber,
           note: note != null ? String(note).trim() : '',
         },
         ipAddress: getClientIp(req),
@@ -950,7 +965,9 @@ router.post(
       res.json({
         success: true,
         data: result,
-        message: `Added ₹${result.amountRupees.toFixed(2)} to messaging wallet`,
+        message: result.invoiceGenerated
+          ? `Added ₹${result.amountRupees.toFixed(2)} to messaging wallet — invoice ${result.invoiceNumber} generated`
+          : `Added ₹${result.amountRupees.toFixed(2)} to messaging wallet`,
       });
     } catch (error) {
       if (error.status === 400 || error.status === 404) {
@@ -958,6 +975,52 @@ router.post(
       }
       logger.error('Admin wallet credit error:', error);
       res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+  },
+);
+
+router.get(
+  '/businesses/:id/wallet/transactions/:transactionId/invoice',
+  setupMainDatabase,
+  authenticateAdmin,
+  checkAdminPermission('businesses', 'view'),
+  async (req, res) => {
+    try {
+      const { transactionId } = req.params;
+      if (!/^[a-f\d]{24}$/i.test(String(transactionId))) {
+        return res.status(400).json({ success: false, error: 'Invalid transaction id' });
+      }
+
+      const { buildInvoicePDFForTransaction } = require('../lib/send-wallet-invoice');
+      let built;
+      try {
+        built = await buildInvoicePDFForTransaction({
+          transactionId,
+          businessIdScope: req.params.id,
+        });
+      } catch (err) {
+        const code = err?.code;
+        if (code === 'NOT_FOUND') {
+          return res.status(404).json({ success: false, error: err.message });
+        }
+        if (code === 'FORBIDDEN') {
+          return res.status(403).json({ success: false, error: err.message });
+        }
+        if (code === 'NOT_INVOICE_ELIGIBLE' || code === 'INVALID_TYPE') {
+          return res.status(400).json({ success: false, error: err.message });
+        }
+        throw err;
+      }
+
+      const { pdfBuffer, invoiceNumber } = built;
+      const safeFilename = `${String(invoiceNumber).replace(/[^A-Za-z0-9_-]+/g, '_')}.pdf`;
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
+      res.setHeader('Content-Length', pdfBuffer.length);
+      res.send(pdfBuffer);
+    } catch (error) {
+      logger.error('Admin wallet invoice download error:', error);
+      res.status(500).json({ success: false, error: 'Failed to generate invoice PDF' });
     }
   },
 );

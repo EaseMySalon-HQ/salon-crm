@@ -29,72 +29,71 @@ const INTENTS = Object.freeze({
 });
 
 /**
- * Provider policy:
- *   meta_only        — new module only; never falls back
- *   meta_then_msg91  — Meta when the salon's WABA is connected, else MSG91
- *   sms_first        — SMS provider first; WhatsApp authentication template optional
- *   service          — free-form, only inside CSW; Meta only
+ * Provider policy (interpreted by whatsapp-router.js):
+ *   gupshup_only       — Gupshup only (marketing/campaigns); no MSG91 fallback
+ *   gupshup_then_msg91 — Gupshup when available; MSG91 fallback for transactional
+ *   sms_first          — SMS provider first
  */
 const DESCRIPTORS = Object.freeze({
   [INTENTS.APPOINTMENT_CONFIRMATION]: {
     category: 'utility',
     cswFreeIfOpen: true,
     fallbackChannel: 'sms',
-    providerPolicy: 'meta_then_msg91',
+    providerPolicy: 'gupshup_then_msg91',
   },
   [INTENTS.APPOINTMENT_REMINDER]: {
     category: 'utility',
     cswFreeIfOpen: true,
     fallbackChannel: 'sms',
-    providerPolicy: 'meta_then_msg91',
+    providerPolicy: 'gupshup_then_msg91',
   },
   [INTENTS.APPOINTMENT_RESCHEDULE]: {
     category: 'utility',
     cswFreeIfOpen: true,
     fallbackChannel: 'sms',
-    providerPolicy: 'meta_then_msg91',
+    providerPolicy: 'gupshup_then_msg91',
   },
   [INTENTS.APPOINTMENT_CANCELLATION]: {
     category: 'utility',
     cswFreeIfOpen: true,
     fallbackChannel: 'sms',
-    providerPolicy: 'meta_then_msg91',
+    providerPolicy: 'gupshup_then_msg91',
   },
   [INTENTS.INVOICE]: {
     category: 'utility',
     cswFreeIfOpen: true,
     fallbackChannel: 'sms',
-    providerPolicy: 'meta_then_msg91',
+    providerPolicy: 'gupshup_then_msg91',
   },
   [INTENTS.PAYMENT_RECEIPT]: {
     category: 'utility',
     cswFreeIfOpen: true,
     fallbackChannel: 'sms',
-    providerPolicy: 'meta_then_msg91',
+    providerPolicy: 'gupshup_then_msg91',
   },
   [INTENTS.WALLET_UPDATE]: {
     category: 'utility',
     cswFreeIfOpen: true,
     fallbackChannel: 'sms',
-    providerPolicy: 'meta_then_msg91',
+    providerPolicy: 'gupshup_then_msg91',
   },
   [INTENTS.WALLET_EXPIRY]: {
     category: 'utility',
     cswFreeIfOpen: true,
     fallbackChannel: 'sms',
-    providerPolicy: 'meta_then_msg91',
+    providerPolicy: 'gupshup_then_msg91',
   },
   [INTENTS.PACKAGE_REMINDER]: {
     category: 'utility',
     cswFreeIfOpen: true,
     fallbackChannel: 'sms',
-    providerPolicy: 'meta_then_msg91',
+    providerPolicy: 'gupshup_then_msg91',
   },
   [INTENTS.MARKETING_CAMPAIGN]: {
     category: 'marketing',
     cswFreeIfOpen: false,
     fallbackChannel: null,
-    providerPolicy: 'meta_only',
+    providerPolicy: 'gupshup_only',
   },
   [INTENTS.OTP]: {
     category: 'authentication',
@@ -106,13 +105,13 @@ const DESCRIPTORS = Object.freeze({
     category: 'utility',
     cswFreeIfOpen: true,
     fallbackChannel: 'email',
-    providerPolicy: 'meta_then_msg91',
+    providerPolicy: 'gupshup_then_msg91',
   },
   [INTENTS.WELCOME]: {
     category: 'utility',
     cswFreeIfOpen: true,
     fallbackChannel: 'sms',
-    providerPolicy: 'meta_then_msg91',
+    providerPolicy: 'gupshup_then_msg91',
   },
 });
 

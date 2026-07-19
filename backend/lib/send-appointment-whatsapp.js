@@ -128,6 +128,7 @@ async function sendAppointmentWhatsAppAfterCreate(req, createdAppointments) {
         }
         const result = await whatsappService.sendAppointmentConfirmation({
           to: client.phone,
+          businessId: business._id,
           clientName: client.name || 'Client',
           appointmentData: {
             serviceName,
@@ -290,6 +291,7 @@ async function sendAppointmentRescheduleWhatsApp(req, appointment) {
     }
     const result = await whatsappService.sendAppointmentReschedule({
       to: client.phone,
+      businessId: business._id,
       clientName: client.name || 'Client',
       appointmentData: {
         serviceName,
@@ -430,6 +432,7 @@ async function sendAppointmentCancellationWhatsApp(req, appointment, reason) {
     }
     const result = await whatsappService.sendAppointmentCancellation({
       to: client.phone,
+      businessId: business._id,
       clientName: client.name || 'Client',
       appointmentData: {
         serviceName,

@@ -327,7 +327,7 @@ const FEATURES = {
   whatsapp_integration: {
     id: 'whatsapp_integration',
     name: 'WhatsApp Integration',
-    description: 'Meta WABA — templates, campaigns, inbox, and Business API connect',
+    description: 'Gupshup WABA — templates, campaigns, inbox, and WhatsApp connect',
     category: 'pro',
   },
   gmb: {

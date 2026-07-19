@@ -498,6 +498,7 @@ let adminSettingsFallback = {
         templateIncludesGoogleMapsBaseUrl: true, // MSG91 short link: base https://maps.app.goo.gl/ is in template; pass slug only
         templates: {
           welcomeMessage: "",
+          platformLeadWelcome: "",
           businessAccountCreated: "",
           receipt: "",
           receiptWithFeedback: "",

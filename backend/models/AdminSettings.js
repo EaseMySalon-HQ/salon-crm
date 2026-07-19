@@ -111,12 +111,31 @@ const adminSettingsSchema = new mongoose.Schema({
     },
     whatsapp: {
       enabled: { type: Boolean, default: false },
-      provider: { type: String, enum: ['msg91'], default: 'msg91' },
+      provider: { type: String, enum: ['msg91', 'gupshup'], default: 'msg91' },
       msg91ApiKey: { type: String, default: '' },
       msg91SenderId: { type: String, default: '' },
+      /**
+       * Shared platform Gupshup app used as the transactional fallback sender
+       * when a salon has not connected its own app. The partner credentials +
+       * app id live in env (GUPSHUP_*); these mirror the resolved values for
+       * admin display. Template slots below hold Gupshup template ids when
+       * provider === 'gupshup'.
+       */
+      gupshupAppId: { type: String, default: '' },
+      gupshupAppName: { type: String, default: '' },
+      gupshupSourceNumber: { type: String, default: '' },
+      /** Cached platform app token (encrypted) — avoids partner login on every send. */
+      gupshupAppTokenCipher: { type: String, default: '' },
+      /** Partner Portal login email (env GUPSHUP_EMAIL takes precedence). */
+      gupshupPartnerEmail: { type: String, default: '' },
+      /** Encrypted client secret (env GUPSHUP_CLIENT_SECRET takes precedence). */
+      gupshupClientSecretCipher: { type: String, default: '' },
+      /** Public delivery webhook URL registered with Gupshup (overrides auto-detect). */
+      gupshupWebhookUrl: { type: String, default: '' },
       // Template IDs for different notification types
       templates: {
         welcomeMessage: { type: String, default: '' }, // Welcome message
+        platformLeadWelcome: { type: String, default: '' }, // Platform lead welcome (prospect)
         businessAccountCreated: { type: String, default: '' }, // Business account created
         receipt: { type: String, default: '' }, // Sending bills/receipts (View Bill only)
         receiptWithFeedback: { type: String, default: '' }, // Receipt + Share Feedback buttons
@@ -158,6 +177,11 @@ const adminSettingsSchema = new mongoose.Schema({
         default: () => ({ enabled: true }),
       },
       clientWalletExpiryReminderNotifications: {
+        type: mongoose.Schema.Types.Mixed,
+        default: () => ({ enabled: true }),
+      },
+      /** Auto WhatsApp welcome to new platform leads (shared Gupshup app). */
+      platformLeadWelcomeNotifications: {
         type: mongoose.Schema.Types.Mixed,
         default: () => ({ enabled: true }),
       },
@@ -358,6 +382,7 @@ adminSettingsSchema.statics.getSettings = async function() {
       templateIncludesGoogleMapsBaseUrl: true,
       templates: {
         welcomeMessage: '',
+        platformLeadWelcome: '',
         businessAccountCreated: '',
         receipt: '',
         receiptWithFeedback: '',
@@ -474,6 +499,7 @@ adminSettingsSchema.statics.getSettings = async function() {
     if (settings.notifications.whatsapp) {
       const waDefaultTemplateIds = {
         welcomeMessage: '',
+        platformLeadWelcome: '',
         businessAccountCreated: '',
         receipt: '',
         receiptWithFeedback: '',
@@ -485,6 +511,7 @@ adminSettingsSchema.statics.getSettings = async function() {
         appointmentReschedule: '',
         clientWalletTransaction: '',
         clientWalletExpiryReminder: '',
+        platformLeadWelcome: '',
         default: '',
       };
       const tmpl = settings.notifications.whatsapp.templates || {};
@@ -502,6 +529,10 @@ adminSettingsSchema.statics.getSettings = async function() {
       }
       if (settings.notifications.whatsapp.clientWalletExpiryReminderNotifications == null) {
         settings.notifications.whatsapp.clientWalletExpiryReminderNotifications = { enabled: true };
+        waMerge = true;
+      }
+      if (settings.notifications.whatsapp.platformLeadWelcomeNotifications == null) {
+        settings.notifications.whatsapp.platformLeadWelcomeNotifications = { enabled: true };
         waMerge = true;
       }
       if (waMerge) {

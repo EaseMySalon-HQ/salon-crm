@@ -35,19 +35,35 @@ export const ST = {
   btnPrimaryMd:
     'rounded-full bg-[var(--site-accent)] px-5 py-3 text-sm font-semibold text-white hover:opacity-90',
   btnSecondary:
-    'rounded-full border border-[color-mix(in_srgb,var(--site-accent)_30%,#d6d3d1)] px-3 py-1.5 text-xs font-medium text-stone-700 hover:bg-[color-mix(in_srgb,var(--site-accent)_8%,white)]',
+    'rounded-full border border-[color-mix(in_srgb,var(--site-accent)_30%,var(--site-border))] px-3 py-1.5 text-xs font-medium text-[color:var(--site-text-primary)] hover:bg-[color-mix(in_srgb,var(--site-accent)_8%,var(--site-surface))]',
   btnSecondaryMd:
-    'rounded-full border border-[color-mix(in_srgb,var(--site-accent)_30%,#d6d3d1)] px-5 py-3 text-sm font-medium hover:bg-[color-mix(in_srgb,var(--site-accent)_8%,white)]',
-  hoverAccentSoft: 'hover:bg-[color-mix(in_srgb,var(--site-accent)_8%,white)]',
+    'rounded-full border border-[color-mix(in_srgb,var(--site-accent)_30%,var(--site-border))] px-5 py-3 text-sm font-medium text-[color:var(--site-text-primary)] hover:bg-[color-mix(in_srgb,var(--site-accent)_8%,var(--site-surface))]',
+  hoverAccentSoft: 'hover:bg-[color-mix(in_srgb,var(--site-accent)_8%,var(--site-surface))]',
   hoverAccentText: 'hover:text-[color:var(--site-accent)]',
-  iconSoft: 'bg-[color-mix(in_srgb,var(--site-accent)_12%,white)] text-[color:var(--site-accent)]',
+  iconSoft:
+    'bg-[color-mix(in_srgb,var(--site-accent)_12%,var(--site-surface))] text-[color:var(--site-accent)]',
+  card:
+    'rounded-2xl border border-[color:var(--site-border)] bg-[color:var(--site-surface)] shadow-sm',
   cardExplore:
     'border border-[color:var(--site-border)] bg-gradient-to-br from-[color-mix(in_srgb,var(--site-accent)_7%,var(--site-surface))] to-[color:var(--site-surface)] hover:border-[color-mix(in_srgb,var(--site-accent)_32%,var(--site-border))]',
   categoryHeading:
-    'border-b border-[color-mix(in_srgb,var(--site-accent)_25%,#d6d3d1)] pb-2 text-lg font-semibold uppercase tracking-wide text-stone-900',
+    'border-b border-[color-mix(in_srgb,var(--site-accent)_25%,var(--site-border))] pb-2 text-lg font-semibold uppercase tracking-wide text-[color:var(--site-text-primary)]',
   input:
-    'w-full rounded-lg border border-stone-300 px-3 py-2 focus:border-[var(--site-accent)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_srgb,var(--site-accent)_22%,transparent)]',
+    'w-full rounded-lg border border-[color:var(--site-border)] bg-[color:var(--site-surface)] px-3 py-2 text-[color:var(--site-text-primary)] placeholder:text-[color:var(--site-text-muted)] focus:border-[var(--site-accent)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_srgb,var(--site-accent)_22%,transparent)]',
+  selectTrigger:
+    'border-[color:var(--site-border)] bg-[color:var(--site-surface)] text-[color:var(--site-text-primary)] focus:ring-[color-mix(in_srgb,var(--site-accent)_22%,transparent)]',
+  selectContent:
+    'border-[color:var(--site-border)] bg-[color:var(--site-surface)] text-[color:var(--site-text-primary)]',
+  selectItem:
+    'focus:bg-[color-mix(in_srgb,var(--site-accent)_10%,var(--site-surface))] focus:text-[color:var(--site-text-primary)]',
+  listPanel:
+    'overflow-hidden rounded-xl border border-[color:var(--site-border)] bg-[color:var(--site-surface)]',
+  listHeader:
+    'border-b border-[color:var(--site-border)] bg-[color-mix(in_srgb,var(--site-text-muted)_8%,var(--site-surface))]',
+  listDivider: 'divide-[color:var(--site-border)]',
+  imagePlaceholder:
+    'bg-[color-mix(in_srgb,var(--site-text-muted)_12%,var(--site-surface))] text-[color:var(--site-text-muted)]',
   successBox:
-    'rounded-2xl border border-[color-mix(in_srgb,var(--site-accent)_25%,#86efac)] bg-[color-mix(in_srgb,var(--site-accent)_8%,#ecfdf5)] p-6 text-[color-mix(in_srgb,var(--site-accent)_65%,#14532d)]',
+    'rounded-2xl border border-[color-mix(in_srgb,var(--site-accent)_35%,var(--site-border))] bg-[color-mix(in_srgb,var(--site-accent)_10%,var(--site-surface))] p-6 text-[color:var(--site-text-primary)]',
   logoFallback: 'bg-[var(--site-accent)]',
 } as const

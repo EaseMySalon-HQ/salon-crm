@@ -8,7 +8,15 @@ const { getComplianceState } = require('./whatsapp-compliance');
 const { logEvent } = require('./whatsapp-audit');
 const { getAddonStatus } = require('./entitlements');
 const { logger } = require('../utils/logger');
-const { getBullConnection } = require('./redis');
+const {
+  buildAudienceClientQuery,
+  applyCustomPhoneList,
+  matchesSegmentFilters,
+  phonesWithOutstandingDues,
+  phonesWithPurchaseHistory,
+  hasPurchaseFilters,
+  clientPhoneMatchesDueSet,
+} = require('./whatsapp-campaign-audience');
 
 function isQueueEnabled() {
   return Boolean(getBullConnection());
@@ -41,37 +49,49 @@ function delay(ms) {
 }
 
 async function resolveAudience({ campaign, businessModels }) {
-  const { Client } = businessModels;
-  const filter = {
-    promotionalWhatsappEnabled: { $ne: false },
-    'whatsappConsent.waMarketingOptOut': { $ne: true },
-    phone: { $exists: true, $nin: [null, ''] },
-  };
-  const af = campaign.audienceFilters || {};
-  if (af.totalSpentMin) filter.totalSpent = { ...(filter.totalSpent || {}), $gte: Number(af.totalSpentMin) };
-  if (af.totalSpentMax) filter.totalSpent = { ...(filter.totalSpent || {}), $lte: Number(af.totalSpentMax) };
-  if (af.lastVisitFrom || af.lastVisitTo) {
-    filter.lastVisit = {};
-    if (af.lastVisitFrom) filter.lastVisit.$gte = new Date(af.lastVisitFrom);
-    if (af.lastVisitTo) filter.lastVisit.$lte = new Date(af.lastVisitTo);
-  }
-  if (af.gender) filter.gender = af.gender;
+  const { Client, Sale, BusinessSettings } = businessModels;
+  const settingsDoc = BusinessSettings
+    ? await BusinessSettings.findOne().select('clientSegmentRules').lean()
+    : null;
+  const { filter, af, segmentRules } = buildAudienceClientQuery(campaign, {
+    segmentRules: settingsDoc?.clientSegmentRules,
+  });
+
   if (campaign.audienceType === 'custom' && Array.isArray(af.phoneList) && af.phoneList.length > 0) {
-    const variants = new Set();
-    for (const raw of af.phoneList) {
-      const digits = String(raw || '').replace(/\D/g, '');
-      if (!digits) continue;
-      variants.add(digits);
-      if (digits.length === 12 && digits.startsWith('91')) variants.add(digits.slice(2));
-      if (digits.length === 11 && digits.startsWith('0')) {
-        variants.add(digits.slice(1));
-        variants.add('91' + digits.slice(1));
-      }
-      if (digits.length === 10) variants.add('91' + digits);
-    }
-    filter.phone = { $in: Array.from(variants) };
+    applyCustomPhoneList(filter, af.phoneList);
   }
-  const clients = await Client.find(filter).select('_id name phone email gender').lean();
+
+  let duePhones = null;
+  if (af.hasDues && Sale) {
+    duePhones = await phonesWithOutstandingDues(Sale);
+    if (duePhones.size === 0) return [];
+  }
+
+  let purchasePhones = null;
+  if (hasPurchaseFilters(af) && Sale) {
+    purchasePhones = await phonesWithPurchaseHistory(Sale, {
+      serviceIds: af.serviceIds,
+      productIds: af.productIds,
+    });
+    if (purchasePhones.size === 0) return [];
+  }
+
+  const segments = Array.isArray(af.segments) ? af.segments.map(String) : [];
+  const select =
+    '_id name phone email gender totalVisits totalSpent lastVisit status dob promotionalWhatsappEnabled whatsappConsent';
+
+  let clients = await Client.find(filter).select(select).lean();
+
+  if (segments.length > 0) {
+    clients = clients.filter((c) => matchesSegmentFilters(c, segments, segmentRules));
+  }
+  if (duePhones) {
+    clients = clients.filter((c) => clientPhoneMatchesDueSet(c, duePhones));
+  }
+  if (purchasePhones) {
+    clients = clients.filter((c) => clientPhoneMatchesDueSet(c, purchasePhones));
+  }
+
   return clients.map((c) => ({
     clientId: c._id,
     phone: String(c.phone || '').replace(/\D/g, ''),
@@ -80,15 +100,49 @@ async function resolveAudience({ campaign, businessModels }) {
 }
 
 async function countMetaOptedOut({ campaign, businessModels }) {
-  const { Client } = businessModels;
-  const filter = {
-    'whatsappConsent.optedIn': true,
-    'whatsappConsent.waMarketingOptOut': true,
-    phone: { $exists: true, $nin: [null, ''] },
-  };
-  const af = campaign.audienceFilters || {};
-  if (af.gender) filter.gender = af.gender;
-  return Client.countDocuments(filter);
+  const { Client, Sale, BusinessSettings } = businessModels;
+  const settingsDoc = BusinessSettings
+    ? await BusinessSettings.findOne().select('clientSegmentRules').lean()
+    : null;
+  const { filter, af, segmentRules } = buildAudienceClientQuery(campaign, {
+    segmentRules: settingsDoc?.clientSegmentRules,
+  });
+  filter['whatsappConsent.optedIn'] = true;
+  filter['whatsappConsent.waMarketingOptOut'] = true;
+
+  if (campaign.audienceType === 'custom' && Array.isArray(af.phoneList) && af.phoneList.length > 0) {
+    applyCustomPhoneList(filter, af.phoneList);
+  }
+
+  const segments = Array.isArray(af.segments) ? af.segments.map(String) : [];
+  let duePhones = null;
+  if (af.hasDues && Sale) {
+    duePhones = await phonesWithOutstandingDues(Sale);
+    if (duePhones.size === 0) return 0;
+  }
+
+  let purchasePhones = null;
+  if (hasPurchaseFilters(af) && Sale) {
+    purchasePhones = await phonesWithPurchaseHistory(Sale, {
+      serviceIds: af.serviceIds,
+      productIds: af.productIds,
+    });
+    if (purchasePhones.size === 0) return 0;
+  }
+
+  const select =
+    '_id phone totalVisits totalSpent lastVisit gender status dob promotionalWhatsappEnabled whatsappConsent';
+  let clients = await Client.find(filter).select(select).lean();
+  if (segments.length > 0) {
+    clients = clients.filter((c) => matchesSegmentFilters(c, segments, segmentRules));
+  }
+  if (duePhones) {
+    clients = clients.filter((c) => clientPhoneMatchesDueSet(c, duePhones));
+  }
+  if (purchasePhones) {
+    clients = clients.filter((c) => clientPhoneMatchesDueSet(c, purchasePhones));
+  }
+  return clients.length;
 }
 
 function resolveVariableValue(map, recipient) {

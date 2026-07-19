@@ -1745,46 +1745,83 @@ router.post('/send-monthly-summary', authenticateToken, setupMainDatabase, setup
 router.get('/whatsapp/status', authenticateToken, setupMainDatabase, async (req, res) => {
   try {
     const { Business, AdminSettings } = req.mainModels;
-    
-    // Get business to check addon status
-    const business = await Business.findById(req.user.branchId).select('plan.addons.whatsapp').lean();
-    
-    // Get admin WhatsApp configuration
+    const gupshupConfig = require('../lib/gupshup-config');
+
+    const business = await Business.findById(req.user.branchId)
+      .select('plan.addons.whatsapp plan.addons.waba')
+      .lean();
+
     const adminSettings = await AdminSettings.getSettings();
     const whatsappConfig = adminSettings.notifications?.whatsapp || {};
-    
-    // Check if admin has configured WhatsApp
-    const adminConfigured = !!(
+
+    const hasTemplateIds = Object.values(whatsappConfig.templates || {}).some(
+      (t) => t && String(t).trim() !== ''
+    );
+
+    const legacyMsg91Configured = !!(
       whatsappConfig.enabled &&
       whatsappConfig.msg91ApiKey &&
-      Object.values(whatsappConfig.templates || {}).some(t => t && t.trim() !== '')
+      hasTemplateIds
     );
-    
-    // Check business addon status
-    const addonStatus = business?.plan?.addons?.whatsapp || {};
-    const addonEnabled = addonStatus.enabled === true;
-    const addonQuota = addonStatus.quota || 0;
-    const addonUsed = addonStatus.used || 0;
+
+    const platformAvailable = await gupshupConfig.isPlatformConfiguredAsync();
+    const platformTemplatesReady = Boolean(
+      platformAvailable && whatsappConfig.enabled !== false && hasTemplateIds
+    );
+
+    const Account = req.mainConnection.model(
+      'WhatsAppAccount',
+      require('../models/WhatsAppAccount').schema
+    );
+    const account = await Account.findOne({ businessId: req.user.branchId }).lean();
+    const salonConnected = gupshupConfig.isBusinessAppUsable(account);
+
+    const adminConfigured = legacyMsg91Configured || platformTemplatesReady;
+
+    let senderMode = 'none';
+    if (salonConnected) senderMode = 'business';
+    else if (platformTemplatesReady) senderMode = 'platform';
+    else if (legacyMsg91Configured) senderMode = 'msg91';
+
+    const legacyWhatsappAddon = business?.plan?.addons?.whatsapp || {};
+    const wabaAddon = business?.plan?.addons?.waba || {};
+    const legacyWhatsappAddonEnabled = legacyWhatsappAddon.enabled === true;
+    const wabaAddonEnabled = wabaAddon.enabled === true;
+    /** Gupshup (WABA) or legacy MSG91 WhatsApp add-on — matches whatsapp-router gating. */
+    const messagingAddonEnabled = legacyWhatsappAddonEnabled || wabaAddonEnabled;
+    const addonQuota = legacyWhatsappAddon.quota || 0;
+    const addonUsed = legacyWhatsappAddon.used || 0;
     const addonRemaining = Math.max(0, addonQuota - addonUsed);
-    
+
+    const canConfigure = messagingAddonEnabled && adminConfigured;
+
     res.json({
       success: true,
       data: {
         adminConfigured,
         adminEnabled: whatsappConfig.enabled || false,
-        addonEnabled,
+        platformAvailable,
+        platformTemplatesReady,
+        salonConnected,
+        senderMode,
+        wabaAddonEnabled,
+        legacyWhatsappAddonEnabled,
+        addonEnabled: messagingAddonEnabled,
+        messagingAddonEnabled,
         addonQuota,
         addonUsed,
         addonRemaining,
-        canUse: adminConfigured && addonEnabled,
-        provider: whatsappConfig.provider || 'msg91'
-      }
+        canConfigure,
+        /** @deprecated use canConfigure */
+        canUse: canConfigure,
+        provider: platformTemplatesReady || salonConnected ? 'gupshup' : whatsappConfig.provider || 'msg91',
+      },
     });
   } catch (error) {
     logger.error('Error fetching WhatsApp status:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch WhatsApp status'
+      error: 'Failed to fetch WhatsApp status',
     });
   }
 });

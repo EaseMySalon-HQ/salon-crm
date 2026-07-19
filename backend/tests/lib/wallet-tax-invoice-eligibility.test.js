@@ -13,7 +13,7 @@ describe('wallet-tax-invoice-eligibility', () => {
     ).toBe(true);
   });
 
-  test('platform admin credits are not invoice-eligible', () => {
+  test('platform admin promo credits are not invoice-eligible', () => {
     expect(
       isWalletTaxInvoiceEligible({
         type: 'credit',
@@ -28,6 +28,16 @@ describe('wallet-tax-invoice-eligibility', () => {
         provider: 'system',
       }),
     ).toBe(false);
+  });
+
+  test('admin paid credits with taxInvoiceEligible true are invoice-eligible', () => {
+    expect(
+      isWalletTaxInvoiceEligible({
+        type: 'credit',
+        provider: 'manual',
+        taxInvoiceEligible: true,
+      }),
+    ).toBe(true);
   });
 
   test('wallet-funded plan payments remain invoice-eligible', () => {

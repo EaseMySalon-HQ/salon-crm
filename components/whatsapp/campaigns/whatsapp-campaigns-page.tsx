@@ -32,7 +32,19 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { useToast } from "@/components/ui/use-toast"
-import { WhatsAppCampaignsAPI, WhatsAppMetaAPI, WhatsAppTemplatesAPI } from "@/lib/api"
+import { WhatsAppCampaignsAPI, WhatsAppGupshupAPI, WhatsAppTemplatesAPI, ClientSegmentRulesAPI, ServicesAPI, ProductsAPI } from "@/lib/api"
+import {
+  CampaignAudienceFiltersPanel,
+  DEFAULT_CAMPAIGN_AUDIENCE_FILTERS,
+  campaignAudienceFiltersToPayload,
+  normalizeCampaignAudienceFilters,
+  type CampaignAudienceFilters,
+  type CatalogOption,
+} from "@/components/whatsapp/campaigns/campaign-audience-filters"
+import {
+  DEFAULT_CLIENT_SEGMENT_RULES,
+  type ClientSegmentRules,
+} from "@/lib/client-segments"
 import {
   AlertCircle,
   ArrowLeft,
@@ -417,11 +429,10 @@ function CampaignBuilder({
 
   // Step 1
   const [audienceType, setAudienceType] = useState<"all_optin" | "segment" | "custom">("all_optin")
-  const [filters, setFilters] = useState<{
-    totalSpentMin?: string
-    totalSpentMax?: string
-    gender?: string
-  }>({})
+  const [filters, setFilters] = useState<CampaignAudienceFilters>(DEFAULT_CAMPAIGN_AUDIENCE_FILTERS)
+  const [segmentRules, setSegmentRules] = useState<ClientSegmentRules>(DEFAULT_CLIENT_SEGMENT_RULES)
+  const [catalogServices, setCatalogServices] = useState<CatalogOption[]>([])
+  const [catalogProducts, setCatalogProducts] = useState<CatalogOption[]>([])
   const [customPhones, setCustomPhones] = useState("")
 
   // Step 2
@@ -455,7 +466,7 @@ function CampaignBuilder({
     setName("")
     setDescription("")
     setAudienceType("all_optin")
-    setFilters({})
+    setFilters(DEFAULT_CAMPAIGN_AUDIENCE_FILTERS)
     setCustomPhones("")
     setTemplateId("")
     setVariableMapping({})
@@ -463,8 +474,36 @@ function CampaignBuilder({
     setSavedCampaign(null)
     setSendMode("now")
     setScheduleAt("")
-    WhatsAppMetaAPI.getCompliance()
+    WhatsAppGupshupAPI.getCompliance()
       .then((r) => r.success && setCompliance(r.data))
+      .catch(() => {})
+    ClientSegmentRulesAPI.get()
+      .then((r) => {
+        if (r.success && r.data) setSegmentRules(r.data)
+      })
+      .catch(() => {})
+    Promise.all([
+      ServicesAPI.getAll({ limit: 2000 }),
+      ProductsAPI.getAll({ limit: 2000 }),
+    ])
+      .then(([servicesRes, productsRes]) => {
+        if (servicesRes.success && Array.isArray(servicesRes.data)) {
+          setCatalogServices(
+            servicesRes.data
+              .map((s: any) => ({ _id: String(s._id), name: String(s.name || "").trim() }))
+              .filter((s: CatalogOption) => s._id && s.name)
+              .sort((a, b) => a.name.localeCompare(b.name)),
+          )
+        }
+        if (productsRes.success && Array.isArray(productsRes.data)) {
+          setCatalogProducts(
+            productsRes.data
+              .map((p: any) => ({ _id: String(p._id), name: String(p.name || "").trim() }))
+              .filter((p: CatalogOption) => p._id && p.name)
+              .sort((a, b) => a.name.localeCompare(b.name)),
+          )
+        }
+      })
       .catch(() => {})
   }, [open])
 
@@ -509,7 +548,8 @@ function CampaignBuilder({
    * keep the campaign in `draft` status until the operator hits send.
    */
   const ensureSavedCampaign = async () => {
-    const audienceFilters: any = { ...filters }
+    const audienceFilters: Record<string, unknown> =
+      audienceType === "segment" ? campaignAudienceFiltersToPayload(filters) : {}
     if (audienceType === "custom") {
       const list = customPhones
         .split(/[\n,]+/)
@@ -735,7 +775,14 @@ function CampaignBuilder({
               <Label>Audience source</Label>
               <Select
                 value={audienceType}
-                onValueChange={(v: any) => setAudienceType(v)}
+                onValueChange={(v: "all_optin" | "segment" | "custom") => {
+                  setAudienceType(v)
+                  if (v === "segment") {
+                    setFilters((prev) => normalizeCampaignAudienceFilters(prev))
+                  } else {
+                    setFilters(DEFAULT_CAMPAIGN_AUDIENCE_FILTERS)
+                  }
+                }}
               >
                 <SelectTrigger>
                   <SelectValue />
@@ -746,52 +793,23 @@ function CampaignBuilder({
                   <SelectItem value="custom">Custom phone list</SelectItem>
                 </SelectContent>
               </Select>
+              <p className="text-xs text-slate-500 mt-1">
+                {audienceType === "all_optin"
+                  ? "Every client with WhatsApp promo enabled and no marketing opt-out."
+                  : audienceType === "segment"
+                  ? "Narrow the list with CRM filters — segments, spend, visits, purchase history, and more."
+                  : "Upload a specific list of phone numbers."}
+              </p>
             </div>
 
             {audienceType === "segment" && (
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div>
-                  <Label>Min total spent (₹)</Label>
-                  <Input
-                    type="number"
-                    value={filters.totalSpentMin || ""}
-                    onChange={(e) =>
-                      setFilters({ ...filters, totalSpentMin: e.target.value })
-                    }
-                    placeholder="0"
-                  />
-                </div>
-                <div>
-                  <Label>Max total spent (₹)</Label>
-                  <Input
-                    type="number"
-                    value={filters.totalSpentMax || ""}
-                    onChange={(e) =>
-                      setFilters({ ...filters, totalSpentMax: e.target.value })
-                    }
-                    placeholder=""
-                  />
-                </div>
-                <div>
-                  <Label>Gender</Label>
-                  <Select
-                    value={filters.gender || "any"}
-                    onValueChange={(v) =>
-                      setFilters({ ...filters, gender: v === "any" ? undefined : v })
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="any">Any</SelectItem>
-                      <SelectItem value="female">Female</SelectItem>
-                      <SelectItem value="male">Male</SelectItem>
-                      <SelectItem value="other">Other</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
+              <CampaignAudienceFiltersPanel
+                filters={filters}
+                onChange={setFilters}
+                segmentRules={segmentRules}
+                services={catalogServices}
+                products={catalogProducts}
+              />
             )}
 
             {audienceType === "custom" && (

@@ -140,6 +140,7 @@ async function runAppointmentReminders() {
         try {
           const result = await whatsappService.sendAppointmentReminder({
             to: client.phone,
+            businessId: business._id,
             clientName: client.name || 'Customer',
             appointmentData: {
               serviceName: service?.name || 'Service',

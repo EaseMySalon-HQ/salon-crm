@@ -4,6 +4,7 @@ import { fetchSiteMemberships, formatInr } from '@/lib/public-site-api'
 import { loadSiteProfile, siteMetadata } from '@/lib/mini-site-server'
 import { ST } from '@/lib/mini-site-theme'
 import { miniSiteBasePath } from '@/lib/mini-site-path'
+import { cn } from '@/lib/utils'
 
 export async function generateMetadata({
   params,
@@ -21,22 +22,22 @@ export default async function MembershipsPage({ params }: { params: Promise<{ sl
   if (!profile.visibility.showMemberships) {
     return (
       <div className="mx-auto max-w-6xl px-4 py-12">
-        <h1 className="text-3xl font-semibold">Memberships</h1>
-        <p className="mt-2 text-stone-500">Memberships are not listed on this website.</p>
+        <h1 className={cn('text-3xl font-semibold', ST.textPrimary)}>Memberships</h1>
+        <p className={cn('mt-2', ST.textMuted)}>Memberships are not listed on this website.</p>
       </div>
     )
   }
   const memberships = await fetchSiteMemberships(profile.slug).catch(() => [])
   return (
     <div className="mx-auto max-w-6xl px-4 py-12">
-      <h1 className="text-3xl font-semibold">Memberships</h1>
+      <h1 className={cn('text-3xl font-semibold', ST.textPrimary)}>Memberships</h1>
       <div className="mt-8 grid gap-4 md:grid-cols-3">
         {memberships.map((m) => (
-          <article key={m.id} className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
-            <h2 className="text-lg font-medium">{m.name}</h2>
-            <p className="mt-2 text-sm text-stone-600">{m.shortDescription || m.description}</p>
+          <article key={m.id} className={cn('p-5 transition hover:shadow-md', ST.card)}>
+            <h2 className={cn('text-lg font-medium', ST.textPrimary)}>{m.name}</h2>
+            <p className={cn('mt-2 text-sm', ST.textMuted)}>{m.shortDescription || m.description}</p>
             {profile.visibility.showPrices && m.price != null ? (
-              <p className="mt-3 font-semibold">{formatInr(m.price)}</p>
+              <p className={cn('mt-3 font-semibold', ST.textPrimary)}>{formatInr(m.price)}</p>
             ) : null}
             <Link
               href={miniSiteBasePath(profile.slug, `enquiry/membership?id=${encodeURIComponent(m.id)}`)}
@@ -47,7 +48,9 @@ export default async function MembershipsPage({ params }: { params: Promise<{ sl
           </article>
         ))}
       </div>
-      {!memberships.length ? <p className="mt-8 text-stone-500">No public memberships yet.</p> : null}
+      {!memberships.length ? (
+        <p className={cn('mt-8', ST.textMuted)}>No public memberships yet.</p>
+      ) : null}
     </div>
   )
 }

@@ -9,6 +9,7 @@ import {
 import { useSiteTrack } from '@/components/mini-site/mini-site-shell'
 import { ST } from '@/lib/mini-site-theme'
 import { miniSiteBasePath } from '@/lib/mini-site-path'
+import { cn } from '@/lib/utils'
 
 export function ServiceRateList({
   slug,
@@ -24,14 +25,20 @@ export function ServiceRateList({
   const { track } = useSiteTrack(slug)
 
   return (
-    <div className="overflow-hidden rounded-xl border border-stone-200 bg-white">
-      <div className="hidden border-b border-stone-200 bg-stone-50 px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-stone-500 sm:grid sm:grid-cols-[minmax(0,1fr)_5rem_6rem_5.5rem] sm:gap-4">
+    <div className={ST.listPanel}>
+      <div
+        className={cn(
+          'hidden px-4 py-2.5 text-xs font-medium uppercase tracking-wide sm:grid sm:grid-cols-[minmax(0,1fr)_5rem_6rem_5.5rem] sm:gap-4',
+          ST.listHeader,
+          ST.textMuted
+        )}
+      >
         <span>Service</span>
         <span className="text-right">Duration</span>
         <span className="text-right">{showPrices ? 'Price' : ''}</span>
         <span className="sr-only">Action</span>
       </div>
-      <ul className="divide-y divide-stone-100">
+      <ul className={cn('divide-y', ST.listDivider)}>
         {services.map((service) => {
           const price = showPrices ? formatInr(service.price) : null
           const detailHref = miniSiteBasePath(slug, `services/${service.slug}`)
@@ -46,24 +53,24 @@ export function ServiceRateList({
               <div className="min-w-0">
                 <Link
                   href={detailHref}
-                  className={`font-medium text-stone-900 ${ST.hoverLinkTitle}`}
+                  className={cn('font-medium', ST.textPrimary, ST.hoverLinkTitle)}
                 >
                   {service.name}
                 </Link>
                 {service.shortDescription ? (
-                  <p className="mt-0.5 line-clamp-1 text-xs text-stone-500">{service.shortDescription}</p>
+                  <p className={cn('mt-0.5 line-clamp-1 text-xs', ST.textMuted)}>{service.shortDescription}</p>
                 ) : null}
                 <div className="mt-2 flex items-center justify-between gap-3 sm:hidden">
-                  <span className="text-sm text-stone-500">{service.duration} min</span>
-                  {price ? <span className="text-sm font-semibold text-stone-900">{price}</span> : null}
+                  <span className={cn('text-sm', ST.textMuted)}>{service.duration} min</span>
+                  {price ? <span className={cn('text-sm font-semibold', ST.textPrimary)}>{price}</span> : null}
                 </div>
               </div>
 
-              <span className="hidden text-right text-sm text-stone-600 sm:block">
+              <span className={cn('hidden text-right text-sm sm:block', ST.textMuted)}>
                 {service.duration} min
               </span>
 
-              <span className="hidden text-right text-sm font-semibold text-stone-900 sm:block">
+              <span className={cn('hidden text-right text-sm font-semibold sm:block', ST.textPrimary)}>
                 {price || '—'}
               </span>
 

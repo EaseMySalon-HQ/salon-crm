@@ -1,6 +1,28 @@
 const axios = require('axios');
 const databaseManager = require('../config/database-manager');
 const { logger } = require('../utils/logger');
+const gupshupConfig = require('../lib/gupshup-config');
+const { loadBusinessWhatsAppTemplateConfig } = require('../lib/business-whatsapp-template-config');
+
+/**
+ * Flatten an MSG91-style variable map ({ body_1, body_2, button_1 } or numeric
+ * { 1, 2 }) into Gupshup's ordered positional params array. Body variables come
+ * before button variables; within each, numeric order. Values are stringified
+ * and empties preserved so positional count matches the approved template.
+ */
+function buildOrderedParamsFromVariables(variables) {
+  const keys = Object.keys(variables || {});
+  if (!keys.length) return [];
+  const named = keys.filter((k) => k.startsWith('body_') || k.startsWith('button_'));
+  const source = named.length ? named : keys;
+  const sorted = source.sort((a, b) => {
+    const at = a.startsWith('button_') ? 1 : 0;
+    const bt = b.startsWith('button_') ? 1 : 0;
+    if (at !== bt) return at - bt;
+    return (parseInt(a.replace(/\D/g, ''), 10) || 0) - (parseInt(b.replace(/\D/g, ''), 10) || 0);
+  });
+  return sorted.map((k) => String(variables[k] ?? ''));
+}
 
 class WhatsAppService {
   constructor() {
@@ -159,7 +181,7 @@ class WhatsAppService {
   /**
    * Send WhatsApp message via MSG91
    */
-  async sendMessage({ to, message, templateId, flowId, variables = {} }) {
+  async sendMessage({ to, message, templateId, flowId, variables = {}, businessId = null }) {
     if (!this.initialized) {
       await this.initialize();
     }
@@ -182,7 +204,8 @@ class WhatsAppService {
         return await this.sendTemplateMessage({
           to: phoneNumber,
           templateId: templateId || this.config.msg91TemplateId,
-          variables
+          variables,
+          businessId,
         });
       } else {
         return { success: false, error: 'Template ID is required' };
@@ -194,10 +217,51 @@ class WhatsAppService {
   }
 
   /**
+   * Gupshup transactional send (migration path). Reuses the already-mapped
+   * MSG91 variable map: the AdminSettings template slot now holds a Gupshup
+   * template id, and the body_/button_ map is flattened to ordered params.
+   * Sender resolution (salon's own app first, shared platform fallback) is done
+   * inside the Gupshup service via businessId. Returns an MSG91-shaped result so
+   * every existing caller (logging + wallet) keeps working unchanged.
+   */
+  async sendViaGupshup({ to, templateId, variables, businessId = null }) {
+    try {
+      const gupshup = require('./gupshup-whatsapp-service');
+      const destination = this.formatPhoneNumber(to) || String(to || '').replace(/\D/g, '');
+      if (!destination) return { success: false, error: 'Invalid phone number format' };
+      if (!templateId || !String(templateId).trim()) {
+        return { success: false, error: 'Gupshup template id not configured for this notification' };
+      }
+      const params = buildOrderedParamsFromVariables(variables || {});
+      const result = await gupshup.sendTemplate({
+        businessId: businessId || undefined,
+        to: destination,
+        templateId: String(templateId).trim(),
+        params,
+      });
+      if (result.success) {
+        return { success: true, data: result.data, requestId: result.messageId || null, provider: 'gupshup' };
+      }
+      return { success: false, error: result.error || 'Gupshup send failed', responseData: result.error };
+    } catch (err) {
+      logger.error('❌ [Gupshup] transactional send failed:', err?.message || err);
+      return { success: false, error: err?.message || 'Gupshup send failed' };
+    }
+  }
+
+  /**
    * Send template message via MSG91
    * Uses MSG91's bulk WhatsApp API format
    */
-  async sendTemplateMessage({ to, templateId, variables }) {
+  async sendTemplateMessage({ to, templateId, variables, businessId = null }) {
+    const gupshupAvailable =
+      (await gupshupConfig.isPlatformConfiguredAsync()) ||
+      (businessId &&
+        gupshupConfig.isBusinessAppUsable(await gupshupConfig.loadAccount(businessId)));
+    if (gupshupAvailable) {
+      return this.sendViaGupshup({ to, templateId, variables, businessId });
+    }
+
     const apiKey = this.config.msg91ApiKey;
     const integratedNumber = this.config.msg91SenderId;
     const templateName = templateId || this.config.msg91TemplateId;
@@ -553,6 +617,63 @@ class WhatsAppService {
   }
 
   /**
+   * Resolve template slots for a send: connected salons with mapped business
+   * templates use Business.settings; shared-number salons use AdminSettings.
+   */
+  async getEffectiveTemplateConfig(businessId) {
+    if (businessId) {
+      try {
+        const account = await gupshupConfig.loadAccount(businessId);
+        if (gupshupConfig.isBusinessAppUsable(account)) {
+          const bizCfg = await loadBusinessWhatsAppTemplateConfig(businessId);
+          if (bizCfg) {
+            return {
+              templates: bizCfg.templates || {},
+              templateVariables: bizCfg.templateVariables || {},
+              scope: 'business',
+            };
+          }
+          return { templates: {}, templateVariables: {}, scope: 'business' };
+        }
+      } catch (err) {
+        logger.warn('[WhatsApp] business template config load failed, using admin:', err?.message);
+      }
+    }
+    return {
+      templates: this.config?.templates || {},
+      templateVariables: this.config?.templateVariables || {},
+      scope: 'admin',
+    };
+  }
+
+  async resolveTemplateId(templateType, businessId = null) {
+    const cfg = await this.getEffectiveTemplateConfig(businessId);
+    const id =
+      cfg.templates[templateType] ||
+      cfg.templates.default ||
+      (cfg.scope === 'admin' ? this.config?.msg91TemplateId : '') ||
+      '';
+    return String(id || '').trim();
+  }
+
+  async resolveVariableMapping(templateType, businessId = null) {
+    const cfg = await this.getEffectiveTemplateConfig(businessId);
+    return cfg.templateVariables[templateType] || {};
+  }
+
+  async mapDataToTemplateVariablesForBusiness(templateType, data, businessId = null) {
+    const variableMapping = await this.resolveVariableMapping(templateType, businessId);
+    const mappedVariables = {};
+    Object.keys(variableMapping).forEach((templateVar) => {
+      const dataField = variableMapping[templateVar];
+      const value =
+        data[dataField] !== undefined && data[dataField] !== null ? String(data[dataField]) : '';
+      mappedVariables[templateVar] = value;
+    });
+    return mappedVariables;
+  }
+
+  /**
    * Map data object to template variables based on configuration
    * @param {string} templateType - The template type (e.g., 'receipt', 'appointmentConfirmation')
    * @param {object} data - The data object with actual values (e.g., { clientName: 'John', businessName: 'Salon' })
@@ -697,11 +818,11 @@ class WhatsAppService {
   /**
    * After mapDataToTemplateVariables, ensure button/body slots mapped to googleMapsUrl get path vs full URL correctly.
    */
-  applyGoogleMapsVariableOverrides(templateType, variables, processedBody, processedButton) {
-    const variableMapping = this.getTemplateVariableMapping(templateType);
-    if (Object.keys(variableMapping).length === 0) return;
-    Object.keys(variableMapping).forEach((varName) => {
-      if (variableMapping[varName] !== 'googleMapsUrl') return;
+  applyGoogleMapsVariableOverrides(templateType, variables, processedBody, processedButton, variableMapping = null) {
+    const mapping = variableMapping || this.getTemplateVariableMapping(templateType);
+    if (Object.keys(mapping).length === 0) return;
+    Object.keys(mapping).forEach((varName) => {
+      if (mapping[varName] !== 'googleMapsUrl') return;
       if (varName.startsWith('button_')) {
         variables[varName] = processedButton;
       } else if (varName.startsWith('body_')) {
@@ -710,8 +831,10 @@ class WhatsAppService {
     });
   }
 
-  resolveReceiptTemplateType(feedbackLink) {
-    const feedbackTemplateId = this.getTemplateId('receiptWithFeedback');
+  async resolveReceiptTemplateType(feedbackLink, businessId = null) {
+    const feedbackTemplateId = businessId
+      ? await this.resolveTemplateId('receiptWithFeedback', businessId)
+      : this.getTemplateId('receiptWithFeedback');
     const hasFeedbackTemplate = Boolean(
       feedbackTemplateId && String(feedbackTemplateId).trim()
     );
@@ -721,8 +844,10 @@ class WhatsAppService {
     return 'receipt';
   }
 
-  async sendReceipt({ to, clientName, receiptNumber, receiptData, receiptLink, feedbackLink }) {
-    const templateType = this.resolveReceiptTemplateType(feedbackLink);
+  async sendReceipt({ to, clientName, receiptNumber, receiptData, receiptLink, feedbackLink, businessId = null }) {
+    const templateType = await this.resolveReceiptTemplateType(feedbackLink, businessId);
+    const templateId = await this.resolveTemplateId(templateType, businessId);
+    const variableMapping = await this.resolveVariableMapping(templateType, businessId);
 
     logger.debug('📱 [sendReceipt] Starting receipt send:', {
       to,
@@ -732,7 +857,7 @@ class WhatsAppService {
       receiptLink,
       feedbackLink: feedbackLink ? `${String(feedbackLink).substring(0, 48)}…` : '',
       templateType,
-      templateId: this.getTemplateId(templateType),
+      templateId,
       hasConfig: !!this.config
     });
     
@@ -772,10 +897,10 @@ class WhatsAppService {
     
     logger.debug('📱 [sendReceipt] Data object:', data);
     
-    const variables = this.mapDataToTemplateVariables(templateType, data);
+    const variables = await this.mapDataToTemplateVariablesForBusiness(templateType, data, businessId);
     
     logger.debug('📱 [sendReceipt] Mapped variables:', variables);
-    logger.debug('📱 [sendReceipt] Variable mapping config:', this.getTemplateVariableMapping(templateType));
+    logger.debug('📱 [sendReceipt] Variable mapping config:', variableMapping);
     
     // If no mapping configured, use default mapping
     if (Object.keys(variables).length === 0) {
@@ -789,7 +914,6 @@ class WhatsAppService {
     } else {
       // Check if button variables are mapped and add receiptLink
       // CRITICAL: Use full URL for button variables, extracted path for body variables
-      const variableMapping = this.getTemplateVariableMapping(templateType);
       Object.keys(variableMapping).forEach(varName => {
         if (varName.startsWith('button_') && variableMapping[varName] === 'receiptLink') {
           // Template includes base URL, so send just the path part
@@ -809,12 +933,13 @@ class WhatsAppService {
     }
 
     logger.debug('📱 [sendReceipt] Final variables before send:', variables);
-    logger.debug('📱 [sendReceipt] Template ID:', this.getTemplateId(templateType));
+    logger.debug('📱 [sendReceipt] Template ID:', templateId);
 
     const result = await this.sendMessage({
       to,
-      templateId: this.getTemplateId(templateType),
-      variables
+      templateId,
+      variables,
+      businessId,
     });
     
     logger.debug('📱 [sendReceipt] Send result:', result);
@@ -825,7 +950,7 @@ class WhatsAppService {
   /**
    * Send receipt cancellation via WhatsApp
    */
-  async sendReceiptCancellation({ to, clientName, receiptNumber, receiptData, cancellationReason }) {
+  async sendReceiptCancellation({ to, clientName, receiptNumber, receiptData, cancellationReason, businessId = null }) {
     const data = {
       clientName: clientName || 'Customer',
       receiptNumber: receiptNumber || '',
@@ -833,7 +958,7 @@ class WhatsAppService {
       cancellationReason: cancellationReason || 'Cancelled'
     };
     
-    const variables = this.mapDataToTemplateVariables('receiptCancellation', data);
+    const variables = await this.mapDataToTemplateVariablesForBusiness('receiptCancellation', data, businessId);
     
     if (Object.keys(variables).length === 0) {
       variables.body_1 = data.clientName;
@@ -844,15 +969,16 @@ class WhatsAppService {
 
     return await this.sendMessage({
       to,
-      templateId: this.getTemplateId('receiptCancellation'),
-      variables
+      templateId: await this.resolveTemplateId('receiptCancellation', businessId),
+      variables,
+      businessId,
     });
   }
 
   /**
    * Send appointment scheduling via WhatsApp
    */
-  async sendAppointmentScheduling({ to, clientName, appointmentData }) {
+  async sendAppointmentScheduling({ to, clientName, appointmentData, businessId = null }) {
     const { processedBody: gmapsBody, processedButton: gmapsBtn } = this.prepareGoogleMapsTemplateParts(
       appointmentData?.googleMapsUrl
     );
@@ -865,8 +991,9 @@ class WhatsAppService {
       googleMapsUrl: gmapsBody
     };
     
-    const variables = this.mapDataToTemplateVariables('appointmentScheduling', data);
-    this.applyGoogleMapsVariableOverrides('appointmentScheduling', variables, gmapsBody, gmapsBtn);
+    const variables = await this.mapDataToTemplateVariablesForBusiness('appointmentScheduling', data, businessId);
+    const variableMapping = await this.resolveVariableMapping('appointmentScheduling', businessId);
+    this.applyGoogleMapsVariableOverrides('appointmentScheduling', variables, gmapsBody, gmapsBtn, variableMapping);
     
     if (Object.keys(variables).length === 0) {
       variables.body_1 = data.clientName;
@@ -878,15 +1005,16 @@ class WhatsAppService {
 
     return await this.sendMessage({
       to,
-      templateId: this.getTemplateId('appointmentScheduling'),
-      variables
+      templateId: await this.resolveTemplateId('appointmentScheduling', businessId),
+      variables,
+      businessId,
     });
   }
 
   /**
    * Send appointment confirmation via WhatsApp
    */
-  async sendAppointmentConfirmation({ to, clientName, appointmentData }) {
+  async sendAppointmentConfirmation({ to, clientName, appointmentData, businessId = null }) {
     const { processedBody: gmapsBody, processedButton: gmapsBtn } = this.prepareGoogleMapsTemplateParts(
       appointmentData?.googleMapsUrl
     );
@@ -901,8 +1029,9 @@ class WhatsAppService {
       googleMapsUrl: gmapsBody
     };
     
-    const variables = this.mapDataToTemplateVariables('appointmentConfirmation', data);
-    this.applyGoogleMapsVariableOverrides('appointmentConfirmation', variables, gmapsBody, gmapsBtn);
+    const variables = await this.mapDataToTemplateVariablesForBusiness('appointmentConfirmation', data, businessId);
+    const variableMapping = await this.resolveVariableMapping('appointmentConfirmation', businessId);
+    this.applyGoogleMapsVariableOverrides('appointmentConfirmation', variables, gmapsBody, gmapsBtn, variableMapping);
     
     if (Object.keys(variables).length === 0) {
       variables.body_1 = data.clientName;
@@ -914,23 +1043,24 @@ class WhatsAppService {
       variables.body_7 = data.businessPhone;
     }
 
-    const templateId = this.getTemplateId('appointmentConfirmation');
+    const templateId = await this.resolveTemplateId('appointmentConfirmation', businessId);
     if (!templateId || !String(templateId).trim()) {
-      logger.error('📱 [WhatsApp] appointmentConfirmation: no template ID in admin settings (templates.appointmentConfirmation or templates.default)');
-      return { success: false, error: 'Appointment confirmation template ID is not configured in Admin → Notifications → WhatsApp' };
+      logger.error('📱 [WhatsApp] appointmentConfirmation: no template ID configured');
+      return { success: false, error: 'Appointment confirmation template is not configured. Map an approved template in WhatsApp → Templates.' };
     }
 
     return await this.sendMessage({
       to,
       templateId,
-      variables
+      variables,
+      businessId,
     });
   }
 
   /**
    * Send appointment cancellation via WhatsApp
    */
-  async sendAppointmentCancellation({ to, clientName, appointmentData, cancellationReason }) {
+  async sendAppointmentCancellation({ to, clientName, appointmentData, cancellationReason, businessId = null }) {
     const { processedBody: gmapsBody, processedButton: gmapsBtn } = this.prepareGoogleMapsTemplateParts(
       appointmentData?.googleMapsUrl
     );
@@ -944,8 +1074,9 @@ class WhatsAppService {
       googleMapsUrl: gmapsBody
     };
     
-    const variables = this.mapDataToTemplateVariables('appointmentCancellation', data);
-    this.applyGoogleMapsVariableOverrides('appointmentCancellation', variables, gmapsBody, gmapsBtn);
+    const variables = await this.mapDataToTemplateVariablesForBusiness('appointmentCancellation', data, businessId);
+    const variableMapping = await this.resolveVariableMapping('appointmentCancellation', businessId);
+    this.applyGoogleMapsVariableOverrides('appointmentCancellation', variables, gmapsBody, gmapsBtn, variableMapping);
     
     if (Object.keys(variables).length === 0) {
       variables.body_1 = data.clientName;
@@ -958,15 +1089,16 @@ class WhatsAppService {
 
     return await this.sendMessage({
       to,
-      templateId: this.getTemplateId('appointmentCancellation'),
-      variables
+      templateId: await this.resolveTemplateId('appointmentCancellation', businessId),
+      variables,
+      businessId,
     });
   }
 
   /**
    * Send appointment reschedule notification via WhatsApp
    */
-  async sendAppointmentReschedule({ to, clientName, appointmentData }) {
+  async sendAppointmentReschedule({ to, clientName, appointmentData, businessId = null }) {
     const { processedBody: gmapsBody, processedButton: gmapsBtn } = this.prepareGoogleMapsTemplateParts(
       appointmentData?.googleMapsUrl
     );
@@ -981,8 +1113,9 @@ class WhatsAppService {
       googleMapsUrl: gmapsBody
     };
 
-    const variables = this.mapDataToTemplateVariables('appointmentReschedule', data);
-    this.applyGoogleMapsVariableOverrides('appointmentReschedule', variables, gmapsBody, gmapsBtn);
+    const variables = await this.mapDataToTemplateVariablesForBusiness('appointmentReschedule', data, businessId);
+    const variableMapping = await this.resolveVariableMapping('appointmentReschedule', businessId);
+    this.applyGoogleMapsVariableOverrides('appointmentReschedule', variables, gmapsBody, gmapsBtn, variableMapping);
 
     if (Object.keys(variables).length === 0) {
       variables.body_1 = data.clientName;
@@ -994,19 +1127,19 @@ class WhatsAppService {
       variables.body_7 = data.businessPhone;
     }
 
-    const templateId = this.getTemplateId('appointmentReschedule');
+    const templateId = await this.resolveTemplateId('appointmentReschedule', businessId);
     if (!templateId || !String(templateId).trim()) {
       logger.error('📱 [WhatsApp] appointmentReschedule: no template ID configured');
-      return { success: false, error: 'Appointment reschedule template ID is not configured in Admin → Notifications → WhatsApp' };
+      return { success: false, error: 'Appointment reschedule template is not configured. Map an approved template in WhatsApp → Templates.' };
     }
 
-    return await this.sendMessage({ to, templateId, variables });
+    return await this.sendMessage({ to, templateId, variables, businessId });
   }
 
   /**
    * Send appointment reminder via WhatsApp
    */
-  async sendAppointmentReminder({ to, clientName, appointmentData, reminderHours }) {
+  async sendAppointmentReminder({ to, clientName, appointmentData, reminderHours, businessId = null }) {
     const { processedBody: gmapsBody, processedButton: gmapsBtn } = this.prepareGoogleMapsTemplateParts(
       appointmentData?.googleMapsUrl
     );
@@ -1021,8 +1154,9 @@ class WhatsAppService {
       googleMapsUrl: gmapsBody
     };
     
-    const variables = this.mapDataToTemplateVariables('appointmentReminder', data);
-    this.applyGoogleMapsVariableOverrides('appointmentReminder', variables, gmapsBody, gmapsBtn);
+    const variables = await this.mapDataToTemplateVariablesForBusiness('appointmentReminder', data, businessId);
+    const variableMapping = await this.resolveVariableMapping('appointmentReminder', businessId);
+    this.applyGoogleMapsVariableOverrides('appointmentReminder', variables, gmapsBody, gmapsBtn, variableMapping);
     
     if (Object.keys(variables).length === 0) {
       variables.body_1 = data.clientName;
@@ -1036,8 +1170,9 @@ class WhatsAppService {
 
     return await this.sendMessage({
       to,
-      templateId: this.getTemplateId('appointmentReminder'),
-      variables
+      templateId: await this.resolveTemplateId('appointmentReminder', businessId),
+      variables,
+      businessId,
     });
   }
 
@@ -1048,7 +1183,7 @@ class WhatsAppService {
    * amountFormatted, balanceAfterFormatted, description (optional extra mapping only)
    */
   async sendClientWalletTransaction(payload) {
-    const { to, ...rest } = payload || {};
+    const { to, businessId = null, ...rest } = payload || {};
     const data = {
       clientName: rest.clientName || 'Customer',
       businessName: rest.businessName || 'Salon',
@@ -1061,7 +1196,7 @@ class WhatsAppService {
     };
 
     const templateType = 'clientWalletTransaction';
-    let variables = this.mapDataToTemplateVariables(templateType, data);
+    let variables = await this.mapDataToTemplateVariablesForBusiness(templateType, data, businessId);
     if (!variables || Object.keys(variables).length === 0) {
       variables = {
         body_1: data.clientName,
@@ -1073,12 +1208,12 @@ class WhatsAppService {
       };
     }
 
-    const templateId = this.getTemplateId(templateType);
+    const templateId = await this.resolveTemplateId(templateType, businessId);
     if (!templateId || !String(templateId).trim()) {
-      return { success: false, error: 'clientWalletTransaction template not configured in Admin Settings' };
+      return { success: false, error: 'clientWalletTransaction template not configured. Map an approved template in WhatsApp → Templates.' };
     }
 
-    return this.sendMessage({ to, templateId, variables });
+    return this.sendMessage({ to, templateId, variables, businessId });
   }
 
   /**
@@ -1086,7 +1221,7 @@ class WhatsAppService {
    * Template type: clientWalletExpiryReminder
    */
   async sendClientWalletExpiryReminder(payload) {
-    const { to, ...rest } = payload || {};
+    const { to, businessId = null, ...rest } = payload || {};
     const data = {
       clientName: rest.clientName || 'Customer',
       businessName: rest.businessName || 'Salon',
@@ -1097,7 +1232,7 @@ class WhatsAppService {
     };
 
     const templateType = 'clientWalletExpiryReminder';
-    let variables = this.mapDataToTemplateVariables(templateType, data);
+    let variables = await this.mapDataToTemplateVariablesForBusiness(templateType, data, businessId);
     if (!variables || Object.keys(variables).length === 0) {
       variables = {
         body_1: data.clientName,
@@ -1109,12 +1244,12 @@ class WhatsAppService {
       };
     }
 
-    const templateId = this.getTemplateId(templateType);
+    const templateId = await this.resolveTemplateId(templateType, businessId);
     if (!templateId || !String(templateId).trim()) {
-      return { success: false, error: 'clientWalletExpiryReminder template not configured in Admin Settings' };
+      return { success: false, error: 'clientWalletExpiryReminder template not configured. Map an approved template in WhatsApp → Templates.' };
     }
 
-    return this.sendMessage({ to, templateId, variables });
+    return this.sendMessage({ to, templateId, variables, businessId });
   }
 
   /**

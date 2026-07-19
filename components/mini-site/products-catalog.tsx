@@ -14,6 +14,7 @@ import {
 import { formatInr, type SiteProduct } from '@/lib/public-site-api'
 import { ST } from '@/lib/mini-site-theme'
 import { miniSiteBasePath } from '@/lib/mini-site-path'
+import { cn } from '@/lib/utils'
 import { Search } from 'lucide-react'
 
 function uncategorized(category: string | undefined) {
@@ -71,13 +72,13 @@ export function ProductsCatalog({
     <div className="mt-8 space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
         <div className="relative max-w-md flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
+          <Search className={cn('pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2', ST.textMuted)} />
           <Input
             type="search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search products…"
-            className="pl-9"
+            className={cn('pl-9', ST.input)}
             aria-label="Search products"
           />
         </div>
@@ -88,13 +89,15 @@ export function ProductsCatalog({
               Category
             </Label>
             <Select value={category} onValueChange={setCategory}>
-              <SelectTrigger id="product-category-filter" className="w-full">
+              <SelectTrigger id="product-category-filter" className={cn('w-full', ST.selectTrigger)}>
                 <SelectValue placeholder="All categories" />
               </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All categories</SelectItem>
+              <SelectContent className={ST.selectContent}>
+                <SelectItem value="all" className={ST.selectItem}>
+                  All categories
+                </SelectItem>
                 {categories.map((cat) => (
-                  <SelectItem key={cat} value={cat}>
+                  <SelectItem key={cat} value={cat} className={ST.selectItem}>
                     {cat}
                   </SelectItem>
                 ))}
@@ -105,22 +108,17 @@ export function ProductsCatalog({
       </div>
 
       {total === 0 ? (
-        <p className="py-8 text-stone-500">
+        <p className={cn('py-8', ST.textMuted)}>
           {search || category !== 'all' ? 'No products match your search.' : 'No public products yet.'}
         </p>
       ) : (
         <div className="space-y-10">
           {byCategory.map(([cat, items]) => (
             <section key={cat}>
-              <h2 className={ST.categoryHeading}>
-                {cat}
-              </h2>
+              <h2 className={ST.categoryHeading}>{cat}</h2>
               <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 {items.map((p) => (
-                  <article
-                    key={p.id}
-                    className="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm"
-                  >
+                  <article key={p.id} className={cn('overflow-hidden transition hover:shadow-md', ST.card)}>
                     {showImages ? (
                       p.imageUrl ? (
                         // eslint-disable-next-line @next/next/no-img-element
@@ -130,13 +128,13 @@ export function ProductsCatalog({
                           className="h-40 w-full object-cover"
                         />
                       ) : (
-                        <div className="flex h-40 items-center justify-center bg-stone-100 text-sm text-stone-400">
+                        <div className={cn('flex h-40 items-center justify-center text-sm', ST.imagePlaceholder)}>
                           {cat}
                         </div>
                       )
                     ) : null}
                     <div className="p-4">
-                      <h3 className="font-medium">
+                      <h3 className={cn('font-medium', ST.textPrimary)}>
                         <Link
                           href={miniSiteBasePath(slug, `products/${p.slug}`)}
                           className={ST.hoverLinkTitle}
@@ -144,11 +142,11 @@ export function ProductsCatalog({
                           {p.name}
                         </Link>
                       </h3>
-                      <p className="mt-1 line-clamp-2 text-sm text-stone-600">
+                      <p className={cn('mt-1 line-clamp-2 text-sm', ST.textMuted)}>
                         {p.shortDescription || p.description}
                       </p>
                       {showPrices && p.price != null ? (
-                        <p className="mt-2 font-semibold">{formatInr(p.price)}</p>
+                        <p className={cn('mt-2 font-semibold', ST.textPrimary)}>{formatInr(p.price)}</p>
                       ) : null}
                       <Link
                         href={miniSiteBasePath(slug, `enquiry/product?id=${encodeURIComponent(p.id)}`)}

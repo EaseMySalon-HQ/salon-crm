@@ -13,6 +13,7 @@ import {
 import { ServiceRateList } from '@/components/mini-site/service-rate-list'
 import type { SiteService } from '@/lib/public-site-api'
 import { ST } from '@/lib/mini-site-theme'
+import { cn } from '@/lib/utils'
 import { Search } from 'lucide-react'
 
 function uncategorized(category: string | undefined) {
@@ -70,13 +71,13 @@ export function ServicesCatalog({
     <div className="mt-8 space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
         <div className="relative max-w-md flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
+          <Search className={cn('pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2', ST.textMuted)} />
           <Input
             type="search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search services…"
-            className="pl-9"
+            className={cn('pl-9', ST.input)}
             aria-label="Search services"
           />
         </div>
@@ -87,13 +88,15 @@ export function ServicesCatalog({
               Category
             </Label>
             <Select value={category} onValueChange={setCategory}>
-              <SelectTrigger id="service-category-filter" className="w-full">
+              <SelectTrigger id="service-category-filter" className={cn('w-full', ST.selectTrigger)}>
                 <SelectValue placeholder="All categories" />
               </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All categories</SelectItem>
+              <SelectContent className={ST.selectContent}>
+                <SelectItem value="all" className={ST.selectItem}>
+                  All categories
+                </SelectItem>
                 {categories.map((cat) => (
-                  <SelectItem key={cat} value={cat}>
+                  <SelectItem key={cat} value={cat} className={ST.selectItem}>
                     {cat}
                   </SelectItem>
                 ))}
@@ -104,16 +107,14 @@ export function ServicesCatalog({
       </div>
 
       {total === 0 ? (
-        <p className="py-8 text-stone-500">
+        <p className={cn('py-8', ST.textMuted)}>
           {search || category !== 'all' ? 'No services match your search.' : 'No public services yet.'}
         </p>
       ) : (
         <div className="space-y-8">
           {byCategory.map(([cat, items]) => (
             <section key={cat}>
-              <h2 className={ST.categoryHeading}>
-                {cat}
-              </h2>
+              <h2 className={ST.categoryHeading}>{cat}</h2>
               <div className="mt-3">
                 <ServiceRateList
                   slug={slug}

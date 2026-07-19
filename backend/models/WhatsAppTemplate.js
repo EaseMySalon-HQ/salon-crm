@@ -78,6 +78,13 @@ const whatsappTemplateSchema = new mongoose.Schema(
     metaTemplateId: { type: String, default: null, index: true },
     metaTemplateName: { type: String, default: null },
 
+    /**
+     * Gupshup Partner Portal template id (provider === 'gupshup'). Set when the
+     * template is applied/synced on the salon's Gupshup app. Used by the send
+     * pipeline to address the template on `/template/msg`.
+     */
+    gupshupTemplateId: { type: String, default: null, index: true },
+
     status: {
       type: String,
       /**
@@ -131,6 +138,15 @@ const whatsappTemplateSchema = new mongoose.Schema(
     createdBy: { type: mongoose.Schema.Types.ObjectId, default: null },
     /** Set by the migration script when a template was lifted from BusinessMarketingTemplate. */
     legacyMsg91TemplateId: { type: String, default: null },
+
+    /**
+     * Transactional notification slot this template maps to (e.g. receipt,
+     * appointmentConfirmation). One slot per business at a time.
+     */
+    slotKey: { type: String, default: null, index: true },
+
+    /** PlatformWhatsAppTemplate _id when imported from the admin-published library. */
+    sourcePlatformTemplateId: { type: String, default: null, index: true },
   },
   { timestamps: true }
 );

@@ -117,6 +117,20 @@ export function MiniSiteShell({
     document.head.appendChild(s)
   }, [profile.externalAnalytics?.plausibleDomain])
 
+  useEffect(() => {
+    const root = document.documentElement
+    const vars = siteTheme.vars
+    for (const [key, value] of Object.entries(vars)) {
+      root.style.setProperty(key, value)
+    }
+    return () => {
+      for (const key of Object.keys(vars)) {
+        root.style.removeProperty(key)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- vars derived from themeColor
+  }, [profile.themeColor])
+
   return (
     <div
       className="min-h-screen bg-[color:var(--site-surface-muted)] text-[color:var(--site-text-primary)]"
