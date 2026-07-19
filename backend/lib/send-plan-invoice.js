@@ -18,6 +18,7 @@ const { writeInvoiceRow } = require('./invoice-ledger');
 const {
   getSellerContext,
   buildBuyerContext,
+  resolveTaxInvoiceEmailRecipients,
   fiscalYearContext,
   formatInvoiceNumber,
   fallbackInvoiceNumber,
@@ -272,7 +273,7 @@ async function buildPlanInvoicePDFForTransaction({
   };
 }
 
-async function sendPlanRenewalInvoice({ transactionId, triggeredByEmail } = {}) {
+async function sendPlanRenewalInvoice({ transactionId } = {}) {
   try {
     if (!transactionId) {
       return { success: false, error: 'transactionId is required' };
@@ -306,13 +307,8 @@ async function sendPlanRenewalInvoice({ transactionId, triggeredByEmail } = {}) 
       return { success: true, skippedEmail: true };
     }
 
-    const recipients = Array.from(
-      new Set(
-        [business?.contact?.email, triggeredByEmail]
-          .map(s => (s || '').trim().toLowerCase())
-          .filter(Boolean)
-      )
-    );
+    const seller = await getSellerContext();
+    const recipients = resolveTaxInvoiceEmailRecipients(business, seller.email);
 
     if (recipients.length === 0) {
       logger.warn(

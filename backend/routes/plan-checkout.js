@@ -267,7 +267,6 @@ async function finalizePlanCheckout({
   setImmediate(() => {
     sendPlanRenewalInvoice({
       transactionId: planTxn._id,
-      triggeredByEmail: req.user?.email || null,
     }).catch(err => {
       logger.error(
         '[plan-renewal-email] fire-and-forget send failed:',

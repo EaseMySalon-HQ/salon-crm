@@ -149,7 +149,6 @@ async function creditBusinessWalletFromAdmin({
       if (emailInvoice) {
         const sendResult = await sendWalletRechargeInvoice({
           transactionId: txn._id,
-          triggeredByEmail: admin?.email || null,
         });
         invoiceEmailed = Boolean(sendResult?.success && !sendResult?.skippedEmail);
         if (!sendResult?.success && sendResult?.error) {
