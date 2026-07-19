@@ -69,6 +69,7 @@ import {
   communicationConsentPayload,
 } from "@/lib/client-communication-consent"
 import { ClientCommunicationConsentFields } from "@/components/clients/client-communication-consent-fields"
+import { ClientBirthdateField } from "@/components/clients/client-birthdate-field"
 import { ClientGenderRadioField, isClientGenderSelected } from "@/components/clients/client-gender-radio-field"
 import { ClientsAPI, ServicesAPI, StaffAPI, AppointmentsAPI, UsersAPI, StaffDirectoryAPI, SalesAPI, SettingsAPI, StaffAttendanceAPI, type ApiResponse } from "@/lib/api"
 import type { Receipt as InvoiceReceipt } from "@/lib/data"
@@ -595,6 +596,7 @@ export function AppointmentForm({
     lastName: "",
     phone: "",
     email: "",
+    birthdate: "",
     gender: "" as "" | "male" | "female",
     ...DEFAULT_CLIENT_COMMUNICATION_CONSENT,
   })
@@ -1753,6 +1755,7 @@ export function AppointmentForm({
       lastName: "",
       phone: customerSearch,
       email: "",
+      birthdate: "",
       gender: "",
       ...DEFAULT_CLIENT_COMMUNICATION_CONSENT,
     })
@@ -1797,6 +1800,7 @@ export function AppointmentForm({
         name: newClient.lastName ? `${newClient.firstName} ${newClient.lastName}` : newClient.firstName,
         phone: phoneNumber,
         email: newClient.email,
+        birthdate: newClient.birthdate.trim() || undefined,
         gender: newClient.gender,
         status: "active" as const,
         ...communicationConsentPayload(newClient),
@@ -1821,6 +1825,7 @@ export function AppointmentForm({
           lastName: "",
           phone: "",
           email: "",
+          birthdate: "",
           gender: "",
           ...DEFAULT_CLIENT_COMMUNICATION_CONSENT,
         })
@@ -3575,15 +3580,26 @@ export function AppointmentForm({
                 onChange={(gender) => setNewClient({ ...newClient, gender })}
               />
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                value={newClient.email}
-                onChange={(e) => setNewClient({ ...newClient, email: e.target.value })}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={newClient.email}
+                  onChange={(e) => setNewClient({ ...newClient, email: e.target.value })}
+                />
+              </div>
+              <ClientBirthdateField
+                id="appointment-new-client-birthday"
+                value={newClient.birthdate}
+                onChange={(birthdate) => setNewClient({ ...newClient, birthdate })}
+                showDescription={false}
               />
             </div>
+            <p className="text-xs text-muted-foreground -mt-2">
+              Birthday is optional and used for birthday WhatsApp messages and offers.
+            </p>
             <ClientCommunicationConsentFields
               variant="compact"
               value={{
