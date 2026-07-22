@@ -1,6 +1,10 @@
 'use strict';
 
 const { normalizePlatformLeadPhone } = require('./send-platform-lead-welcome-whatsapp');
+const {
+  buildPlatformCampaignSendPayload,
+  resolveLeadField,
+} = require('./platform-template-send-payload');
 
 function buildPlatformLeadAudienceQuery(campaign) {
   const af = campaign.audienceFilters || {};
@@ -62,55 +66,8 @@ async function resolvePlatformLeadAudience({ campaign, PlatformLead }) {
     .filter((r) => r.phone && r.phone.length >= 12);
 }
 
-function resolveLeadField(recipient, field) {
-  switch (field) {
-    case 'firstName':
-      return recipient.firstName || recipient.name?.split(/\s+/)[0] || 'there';
-    case 'lastName':
-      return recipient.lastName || '';
-    case 'name':
-      return recipient.name || recipient.firstName || 'there';
-    case 'salonName':
-      return recipient.salonName || '';
-    case 'city':
-      return recipient.city || '';
-    case 'phone':
-      return recipient.phone || '';
-    case 'email':
-      return recipient.email || '';
-    case 'source':
-      return recipient.source || '';
-    case 'status':
-      return recipient.status || '';
-    default:
-      return recipient.name || recipient.firstName || '';
-  }
-}
-
 function buildTemplateParams(template, variableMapping, recipient) {
-  const bodyText = template?.components?.body?.text || '';
-  const matches = bodyText.match(/\{\{(\d+)\}\}/g) || [];
-  const maxIndex = matches.reduce((max, token) => {
-    const n = parseInt(token.replace(/\D/g, ''), 10);
-    return Number.isFinite(n) && n > max ? n : max;
-  }, 0);
-  if (!maxIndex) return [];
-
-  const params = [];
-  for (let i = 1; i <= maxIndex; i += 1) {
-    const key = `body_${i}`;
-    const map = variableMapping?.[key];
-    if (map && typeof map === 'object' && map.source === 'literal') {
-      params.push(String(map.value ?? ''));
-    } else if (typeof map === 'string') {
-      params.push(resolveLeadField(recipient, map));
-    } else if (map && typeof map === 'object' && map.field) {
-      params.push(resolveLeadField(recipient, map.field));
-    } else {
-      params.push(resolveLeadField(recipient, 'firstName'));
-    }
-  }
-  return params;
+  return buildPlatformCampaignSendPayload(template, variableMapping, recipient).params;
 }
 
 module.exports = {

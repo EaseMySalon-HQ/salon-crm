@@ -272,7 +272,7 @@ export function PlatformWhatsAppInboxPage() {
         </div>
       ) : null}
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[320px_1fr] lg:overflow-hidden">
+      <div className="mx-auto grid min-h-0 w-full max-w-6xl flex-1 grid-cols-1 gap-4 lg:grid-cols-[400px_minmax(0,1fr)] lg:overflow-hidden">
         <Card className="flex min-h-0 flex-col overflow-hidden lg:h-full">
           <div className="shrink-0 p-3 border-b space-y-3">
             <div className="relative">
@@ -285,7 +285,7 @@ export function PlatformWhatsAppInboxPage() {
                 onKeyDown={(e) => e.key === "Enter" && refreshList()}
               />
             </div>
-            <div className="flex flex-wrap gap-1">
+            <div className="flex flex-nowrap gap-1">
               {FILTERS.map((f) => (
                 <Button
                   key={f.id}

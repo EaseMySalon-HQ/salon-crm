@@ -5,8 +5,8 @@ const { logger } = require('../utils/logger');
 const { sendPlatformTemplateMessage } = require('./platform-whatsapp-send');
 const {
   resolvePlatformLeadAudience,
-  buildTemplateParams,
 } = require('./platform-whatsapp-campaign-audience');
+const { buildPlatformCampaignSendPayload } = require('./platform-template-send-payload');
 const { reconcileCampaignCounts } = require('./platform-whatsapp-campaign-report');
 
 const BATCH_SIZE = parseInt(process.env.PLATFORM_WHATSAPP_CAMPAIGN_BATCH_SIZE, 10) || 50;
@@ -86,12 +86,26 @@ async function runPlatformCampaign(campaignId, { createdBy = null } = {}) {
 
     const batch = recipients.slice(i, i + BATCH_SIZE);
     for (const recipient of batch) {
-      const params = buildTemplateParams(template, campaign.variableMapping, recipient);
+      const { params, message } = buildPlatformCampaignSendPayload(
+        template,
+        campaign.variableMapping,
+        recipient
+      );
+      if (message === null) {
+        failed += 1;
+        logger.warn(
+          '[platform-campaign] missing header media URL for template %s',
+          template.name
+        );
+        continue;
+      }
       try {
         const result = await sendPlatformTemplateMessage({
           to: recipient.phone,
           templateId: template.gupshupTemplateId,
           params,
+          message,
+          templateDoc: template,
           campaignId: campaign._id,
           platformLeadId: recipient.platformLeadId,
           platformTemplateId: template._id,

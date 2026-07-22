@@ -60,6 +60,7 @@ export function GupshupConfigSettings() {
   const [form, setForm] = useState({ businessId: "", appId: "", appName: "", sourceNumber: "" })
   const [subscriptionStatus, setSubscriptionStatus] = useState<SubscriptionStatus | null>(null)
   const [registerCooldownSec, setRegisterCooldownSec] = useState(0)
+  const [reconciling, setReconciling] = useState(false)
 
   const loadSubscriptionStatus = async () => {
     try {
@@ -251,6 +252,49 @@ export function GupshupConfigSettings() {
       })
     } finally {
       setRegisteringWebhook(false)
+    }
+  }
+
+  const onReconcileAllSubscriptions = async () => {
+    setReconciling(true)
+    try {
+      const res = await fetch(`${API_URL}/admin/gupshup/webhook/reconcile`, {
+        method: "POST",
+        credentials: "include",
+        headers: adminRequestHeaders(),
+      })
+      const json = await res.json()
+      if (!res.ok || !json?.success) {
+        throw new Error(json?.error || "Reconcile failed")
+      }
+      const data = json.data || {}
+      const results: Array<{ scope: string; ok?: boolean; action?: string; error?: string }> =
+        Array.isArray(data.results) ? data.results : []
+      const updated = results.filter((r) => r.ok && (r.action === "updated" || r.action === "created")).length
+      const noop = results.filter((r) => r.ok && r.action === "noop").length
+      const failed = results.filter((r) => !r.ok).length
+      await loadSubscriptionStatus()
+      toast({
+        title: failed > 0 ? "Reconcile completed with errors" : "Subscriptions reconciled",
+        description: [
+          data.targetUrl ? `Target: ${data.targetUrl}` : null,
+          `${updated} updated, ${noop} already up to date${failed > 0 ? `, ${failed} failed` : ""}`,
+          data.skipped === "localhost"
+            ? "Skipped — resolved URL points at localhost."
+            : null,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        variant: failed > 0 ? "destructive" : "default",
+      })
+    } catch (err: any) {
+      toast({
+        title: "Reconcile failed",
+        description: err?.message || "",
+        variant: "destructive",
+      })
+    } finally {
+      setReconciling(false)
     }
   }
 
@@ -602,10 +646,28 @@ export function GupshupConfigSettings() {
                     ? "Refresh webhook registration"
                     : "Register webhook on platform app"}
               </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onReconcileAllSubscriptions}
+                disabled={reconciling}
+                title="Push the current webhook URL to every connected tenant + platform app on Gupshup"
+              >
+                {reconciling ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Link2 className="mr-2 h-4 w-4" />
+                )}
+                Reconcile all tenant subscriptions
+              </Button>
               <p className="text-xs text-muted-foreground">
                 Inbound WhatsApp replies require this step after saving the webhook URL and platform app. Gupshup
                 limits subscription API to <strong>5 calls per minute</strong> — wait 60s if you see &quot;Too Many
                 Requests&quot;. Outbound templates work without it; the inbox does not.
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Use <strong>Reconcile all tenant subscriptions</strong> after rotating a Cloudflare tunnel — it
+                updates every connected salon app so delivery / template webhooks stop pointing at the dead URL.
               </p>
             </div>
 

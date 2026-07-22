@@ -1,7 +1,11 @@
 import { describe, it, expect } from "vitest"
-import { buildReceiptPaymentsWithLegacyFallback } from "./sale-payment-lines"
+import {
+  buildReceiptPaymentsWithLegacyFallback,
+  getSalePaymentLinesWithDates,
+} from "./sale-payment-lines"
 
 const saleDate = "2026-05-25T21:00:00.000Z"
+const dueDate = "2026-07-22T10:30:00.000Z"
 
 describe("buildReceiptPaymentsWithLegacyFallback", () => {
   it("returns empty for unpaid bills without payments array", () => {
@@ -49,5 +53,36 @@ describe("buildReceiptPaymentsWithLegacyFallback", () => {
     })
     expect(lines).toHaveLength(1)
     expect(lines[0]?.type).toBe("card")
+  })
+})
+
+describe("getSalePaymentLinesWithDates", () => {
+  it("uses sale date for checkout and paymentHistory date for due collection", () => {
+    const lines = getSalePaymentLinesWithDates({
+      date: saleDate,
+      payments: [
+        { mode: "Cash", amount: 4100 },
+        { mode: "Cash", amount: 11 },
+      ],
+      paymentHistory: [{ date: dueDate, amount: 11, method: "Cash" }],
+    })
+    expect(lines).toHaveLength(2)
+    expect(lines[0]?.amount).toBe(4100)
+    expect(lines[0]?.recordedAt.toISOString()).toBe(new Date(saleDate).toISOString())
+    expect(lines[1]?.amount).toBe(11)
+    expect(lines[1]?.recordedAt.toISOString()).toBe(new Date(dueDate).toISOString())
+  })
+
+  it("falls back to lastPaymentDate when due collection has no paymentHistory row", () => {
+    const lines = getSalePaymentLinesWithDates({
+      date: saleDate,
+      payments: [
+        { mode: "Cash", amount: 4100 },
+        { mode: "Cash", amount: 11 },
+      ],
+      paymentHistory: [],
+      paymentStatus: { lastPaymentDate: dueDate },
+    })
+    expect(lines[1]?.recordedAt.toISOString()).toBe(new Date(dueDate).toISOString())
   })
 })

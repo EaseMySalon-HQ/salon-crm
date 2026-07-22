@@ -4,7 +4,10 @@ const databaseManager = require('../config/database-manager');
 const gupshupConfig = require('./gupshup-config');
 const gupshupWhatsApp = require('../services/gupshup-whatsapp-service');
 const { normalizePlatformLeadPhone } = require('./send-platform-lead-welcome-whatsapp');
-const { logger } = require('../utils/logger');
+const {
+  buildPlatformCampaignSendPayload,
+  buildGupshupMessageEnvelope,
+} = require('./platform-template-send-payload');
 
 async function getPlatformWhatsAppModels() {
   const main = await databaseManager.getMainConnection();
@@ -156,6 +159,8 @@ async function sendPlatformTemplateMessage({
   to,
   templateId,
   params = [],
+  message = null,
+  templateDoc = null,
   conversationId = null,
   campaignId = null,
   platformLeadId = null,
@@ -195,11 +200,23 @@ async function sendPlatformTemplateMessage({
     timestamp: now,
   });
 
+  const envelope =
+    message ||
+    (templateDoc ? buildGupshupMessageEnvelope(templateDoc) : { type: 'text', text: '' });
+  if (envelope === null) {
+    return {
+      success: false,
+      error: 'Template header media URL is missing',
+      code: 'GUPSHUP_HEADER_MEDIA_MISSING',
+    };
+  }
+
   const result = await gupshupWhatsApp.sendTemplate({
     businessId: null,
     to: recipientPhone,
     templateId,
     params: params.map((p) => String(p ?? '')),
+    message: envelope,
   });
 
   if (!result.success) {

@@ -17,6 +17,7 @@ const {
   hasPurchaseFilters,
   clientPhoneMatchesDueSet,
 } = require('./whatsapp-campaign-audience');
+const { getBullConnection } = require('./redis');
 
 function isQueueEnabled() {
   return Boolean(getBullConnection());

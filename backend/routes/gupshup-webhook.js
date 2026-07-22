@@ -63,7 +63,27 @@ async function getModels() {
     Business: main.model('Business', require('../models/Business').schema),
     WalletTransaction: main.model('WalletTransaction', require('../models/WalletTransaction').schema),
     PlatformLead: main.model('PlatformLead', require('../models/PlatformLead').schema),
+    Template: main.model('WhatsAppTemplate', require('../models/WhatsAppTemplate').schema),
   };
+}
+
+// Gupshup template statuses → local WhatsAppTemplate.status enum.
+const TEMPLATE_STATUS_MAP = {
+  approved: 'approved',
+  rejected: 'rejected',
+  paused: 'paused',
+  disabled: 'disabled',
+  deleted: 'disabled',
+  in_appeal: 'in_appeal',
+  pending: 'pending',
+  submitted: 'pending',
+  pending_deletion: 'in_appeal',
+  flagged: 'flagged',
+};
+
+function mapTemplateStatus(remote) {
+  const s = String(remote || '').toLowerCase();
+  return TEMPLATE_STATUS_MAP[s] || null;
 }
 
 /** Parse the allowlisted Gupshup inbound IPs from env (CSV). */
@@ -102,17 +122,35 @@ function pushWebhookEvent(entry) {
 }
 
 function summarizeWebhookBody(body) {
-  if (!body || typeof body !== 'object') return { shape: 'empty' };
+  if (body == null) return { shape: 'empty' };
+  if (typeof body === 'string') {
+    return { shape: 'string', length: body.length, preview: body.slice(0, 200) };
+  }
+  if (typeof body !== 'object') return { shape: typeof body };
+  if (Array.isArray(body)) {
+    return { shape: 'array', length: body.length, keys: body[0] ? Object.keys(body[0]).slice(0, 12) : [] };
+  }
   if (body.object === 'whatsapp_business_account') {
     let messages = 0;
     let statuses = 0;
+    let templateEvents = 0;
     for (const entry of body.entry || []) {
       for (const change of entry.changes || []) {
+        const field = String(change.field || '').toLowerCase();
         messages += (change.value?.messages || []).length;
         statuses += (change.value?.statuses || []).length;
+        if (
+          field === 'message_template_status_update' ||
+          field === 'template_status_update' ||
+          field === 'message_template_quality_update' ||
+          field === 'template_category_update' ||
+          field === 'message_template_category_update'
+        ) {
+          templateEvents += 1;
+        }
       }
     }
-    return { shape: 'v3', messages, statuses };
+    return { shape: 'v3', messages, statuses, templateEvents };
   }
   return {
     shape: 'legacy',
@@ -423,13 +461,40 @@ async function isInboundForPlatformApp(ctx, platformCfg) {
 }
 
 /**
- * Route inbound to platform inbox when webhook metadata is ambiguous but we
- * already messaged this phone from the platform app (template/campaign/inbox).
+ * Route inbound to platform inbox when the webhook is for the shared platform
+ * app, OR (only when app identity is ambiguous) when we already have a platform
+ * conversation / recent platform outbound for this phone.
+ *
+ * Critical: if the webhook clearly belongs to a tenant's own connected app
+ * (different from the platform app), NEVER steal it to the platform inbox
+ * just because that phone also exists in PlatformConversation — that is how
+ * tenant WhatsApp Chat loses "Hi" / customer replies.
  */
 async function shouldRouteInboundToPlatform(recipientPhone, ctx, platformCfg) {
   if (await isInboundForPlatformApp(ctx, platformCfg)) return true;
   if (!platformCfg?.appId) return false;
 
+  // Prefer explicit tenant-app identity over phone-history heuristics.
+  const tenantBusinessId = await resolveBusinessIdForApp(ctx);
+  if (tenantBusinessId) {
+    const account = await gupshupConfig.loadAccount(tenantBusinessId);
+    if (
+      gupshupConfig.isBusinessAppUsable(account) &&
+      account.gupshupAppId &&
+      String(account.gupshupAppId) !== String(platformCfg.appId)
+    ) {
+      return false;
+    }
+    // Tenant is literally using the shared platform app as their "own" link.
+    if (
+      account?.gupshupAppId &&
+      String(account.gupshupAppId) === String(platformCfg.appId)
+    ) {
+      return true;
+    }
+  }
+
+  // Ambiguous webhook (no appId/appName/phone match) — fall back to phone history.
   const normalized = normalizePlatformLeadPhone(recipientPhone);
   if (!normalized) return false;
 
@@ -449,28 +514,33 @@ async function shouldRouteInboundToPlatform(recipientPhone, ctx, platformCfg) {
     .lean();
   if (outbound) return true;
 
-  const businessId = await resolveBusinessIdForApp(ctx);
-  if (businessId) {
-    const account = await gupshupConfig.loadAccount(businessId);
-    if (
-      account?.gupshupAppId &&
-      String(account.gupshupAppId) === String(platformCfg.appId)
-    ) {
-      return true;
-    }
-  }
-
   return false;
 }
 
-async function resolveBusinessIdForApp({ appId, appName, phoneNumberId }) {
+async function resolveBusinessIdForApp({ appId, appName, phoneNumberId, displayPhoneNumber }) {
   const { Account } = await getModels();
   const or = [];
   if (appId) or.push({ gupshupAppId: String(appId) });
   if (appName) or.push({ gupshupAppName: String(appName) });
   if (phoneNumberId) or.push({ gupshupPhoneNumberId: String(phoneNumberId) });
+  const displayDigits = normalizePhoneDigits(displayPhoneNumber);
+  if (displayDigits) {
+    or.push({ sourceNumber: displayDigits });
+    or.push({ phoneE164: displayDigits });
+    const last10 = displayDigits.slice(-10);
+    if (last10.length === 10) {
+      or.push({ sourceNumber: { $regex: `${last10}$` } });
+      or.push({ phoneE164: { $regex: `${last10}$` } });
+    }
+  }
   if (!or.length) return null;
-  const acc = await Account.findOne({ provider: 'gupshup', $or: or }).select('businessId').lean();
+  const acc = await Account.findOne({
+    provider: 'gupshup',
+    status: 'connected',
+    $or: or,
+  })
+    .select('businessId')
+    .lean();
   return acc?.businessId || null;
 }
 
@@ -544,7 +614,14 @@ async function handleInbound(evt, ctx) {
   }
 
   const platformCfg = await gupshupConfig.loadPlatformConfig();
-  if (await shouldRouteInboundToPlatform(recipientPhone, ctx, platformCfg)) {
+  const routeToPlatform = await shouldRouteInboundToPlatform(recipientPhone, ctx, platformCfg);
+  if (routeToPlatform) {
+    logger.info(
+      '[gupshup-webhook] routing inbound to PLATFORM inbox phone=%s appId=%s appName=%s',
+      recipientPhone,
+      ctx.appId || '(none)',
+      ctx.appName || '(none)'
+    );
     await handlePlatformInbound(evt, { ...ctx, recipientPhone });
     return;
   }
@@ -571,6 +648,14 @@ async function handleInbound(evt, ctx) {
     );
     return;
   }
+
+  logger.info(
+    '[gupshup-webhook] routing inbound to TENANT inbox business=%s phone=%s appId=%s appName=%s',
+    String(businessId),
+    recipientPhone,
+    ctx.appId || '(none)',
+    ctx.appName || '(none)'
+  );
 
   const text = extractInboundText(evt);
   const preview = text || `[${evt.type || 'message'}]`;
@@ -640,24 +725,42 @@ async function markClientOptOut(businessId, recipientPhone) {
 /** Process v3 Meta-shaped passthrough webhook (subscription version=3). */
 async function handleV3Payload(body) {
   if (!body || body.object !== 'whatsapp_business_account' || !Array.isArray(body.entry)) {
-    return { inbound: 0, statuses: 0 };
+    return { inbound: 0, statuses: 0, templateEvents: 0 };
   }
 
   let inbound = 0;
   let statuses = 0;
+  let templateEvents = 0;
 
   for (const entry of body.entry) {
     const wabaId = entry.id || null;
     for (const change of entry.changes || []) {
       const value = change.value || {};
       const metadata = value.metadata || {};
+      const field = String(change.field || '').toLowerCase();
       const ctx = {
-        appId: value.appId || body.appId || null,
+        appId: value.appId || body.appId || body.gs_app_id || null,
         appName: body.app || value.app || null,
         phoneNumberId: metadata.phone_number_id || null,
         displayPhoneNumber: metadata.display_phone_number || null,
         wabaId,
       };
+
+      // Meta template status webhooks: `message_template_status_update`.
+      // Category migrations: `message_template_quality_update`,
+      // `template_category_update`. Route them all through applyTemplateEvent.
+      if (
+        field === 'message_template_status_update' ||
+        field === 'template_status_update' ||
+        field === 'message_template_quality_update' ||
+        field === 'template_category_update' ||
+        field === 'message_template_category_update'
+      ) {
+        templateEvents += 1;
+        const result = await applyTemplateEvent(value, ctx);
+        pushWebhookEvent({ phase: 'template-event', field, ...result });
+        continue;
+      }
 
       for (const st of value.statuses || []) {
         statuses += 1;
@@ -673,7 +776,194 @@ async function handleV3Payload(body) {
       }
     }
   }
-  return { inbound, statuses };
+  return { inbound, statuses, templateEvents };
+}
+
+/**
+ * Apply a template status/category update to the matching WhatsAppTemplate row.
+ * Accepts the legacy Gupshup `template-event` payload as well as the v3
+ * Meta-shaped `message_template_status_update` value shape.
+ *
+ * Legacy payload example (see partner-docs/system-events):
+ *   { id, elementName, languageCode, status: "approved|rejected|paused|...",
+ *     rejectedReason, type?: "status-update|category-update|quality-update" }
+ * v3 value example:
+ *   { event: "APPROVED|REJECTED|...", message_template_id,
+ *     message_template_name, message_template_language, reason }
+ *
+ * Returns { matched: boolean, businessId?, templateId?, newStatus? } for
+ * webhook diagnostics.
+ */
+async function applyTemplateEvent(payloadOrValue, ctx = {}) {
+  if (!payloadOrValue || typeof payloadOrValue !== 'object') {
+    return { matched: false, reason: 'empty payload' };
+  }
+  const { Template, Account } = await getModels();
+
+  const subType = String(payloadOrValue.type || '').toLowerCase();
+  const rawStatus =
+    payloadOrValue.status ||
+    payloadOrValue.event ||
+    payloadOrValue.templateStatus ||
+    null;
+  const remoteId = String(
+    payloadOrValue.id ||
+      payloadOrValue.message_template_id ||
+      payloadOrValue.templateId ||
+      ''
+  ).trim();
+  const elementName = String(
+    payloadOrValue.elementName ||
+      payloadOrValue.name ||
+      payloadOrValue.message_template_name ||
+      ''
+  ).trim();
+  const language = String(
+    payloadOrValue.languageCode ||
+      payloadOrValue.language ||
+      payloadOrValue.message_template_language ||
+      ''
+  )
+    .replace('-', '_')
+    .trim();
+  const rejectedReason =
+    payloadOrValue.rejectedReason ||
+    payloadOrValue.rejected_reason ||
+    payloadOrValue.reason ||
+    null;
+
+  // For category-update / quality-update events without a top-level status,
+  // fall back to the sub-type so we at least log something useful.
+  const newStatus = mapTemplateStatus(rawStatus);
+
+  // Locate the template row. Prefer id, then fall back to (businessId, name, lang).
+  let tpl = null;
+  if (remoteId) {
+    tpl = await Template.findOne({
+      $or: [{ gupshupTemplateId: remoteId }, { metaTemplateId: remoteId }],
+    });
+  }
+  if (!tpl && elementName) {
+    const businessId = await resolveBusinessIdForApp({
+      appId: ctx.appId,
+      appName: ctx.appName,
+    });
+    if (businessId) {
+      const query = { businessId, name: elementName };
+      if (language) query.language = language;
+      tpl = await Template.findOne(query);
+    }
+  }
+
+  if (!tpl) {
+    logger.warn(
+      '[gupshup-webhook] template-event for unknown template id=%s name=%s lang=%s (app=%s/%s)',
+      remoteId || '(none)',
+      elementName || '(none)',
+      language || '(none)',
+      ctx.appId || '(none)',
+      ctx.appName || '(none)'
+    );
+    return {
+      matched: false,
+      reason: 'template not found',
+      remoteId,
+      elementName,
+      language,
+    };
+  }
+
+  // Always store the remote id if we didn't have one yet (helps future syncs).
+  if (remoteId && !tpl.gupshupTemplateId) {
+    tpl.gupshupTemplateId = remoteId;
+  }
+  if (remoteId && !tpl.metaTemplateId) {
+    tpl.metaTemplateId = remoteId;
+  }
+  tpl.lastSyncedAt = new Date();
+
+  if (subType === 'category-update' && payloadOrValue.category) {
+    const oldCat = payloadOrValue.category.old || payloadOrValue.category.current || null;
+    const newCat = payloadOrValue.category.new || payloadOrValue.category.correct || null;
+    if (oldCat) tpl.previousCategory = String(oldCat).toUpperCase();
+    if (newCat && payloadOrValue.category.new) {
+      tpl.category = String(newCat).toUpperCase();
+    }
+    if (newCat && payloadOrValue.category.correct && !payloadOrValue.category.new) {
+      tpl.detectedCorrectCategory = String(newCat).toUpperCase();
+      tpl.detectedCorrectCategoryAt = new Date();
+    }
+    await tpl.save();
+    logger.info(
+      '[gupshup-webhook] template category-update template=%s/%s %s → %s (business=%s)',
+      tpl.name,
+      tpl.language,
+      oldCat || payloadOrValue.category.current || '?',
+      newCat || '?',
+      tpl.businessId
+    );
+    return {
+      matched: true,
+      templateId: String(tpl._id),
+      businessId: String(tpl.businessId),
+      subType: 'category-update',
+    };
+  }
+
+  if (subType === 'quality-update' && payloadOrValue.quality) {
+    tpl.qualityScore = String(payloadOrValue.quality).toUpperCase();
+    await tpl.save();
+    return {
+      matched: true,
+      templateId: String(tpl._id),
+      businessId: String(tpl.businessId),
+      subType: 'quality-update',
+    };
+  }
+
+  if (!newStatus) {
+    logger.warn(
+      '[gupshup-webhook] template-event with unknown status "%s" for template %s/%s',
+      rawStatus,
+      tpl.name,
+      tpl.language
+    );
+    await tpl.save();
+    return {
+      matched: true,
+      templateId: String(tpl._id),
+      businessId: String(tpl.businessId),
+      note: 'unknown status',
+    };
+  }
+
+  tpl.status = newStatus;
+  if (newStatus === 'approved') {
+    if (!tpl.approvedAt) tpl.approvedAt = new Date();
+    tpl.rejectionReason = null;
+  } else if (newStatus === 'rejected') {
+    tpl.rejectionReason = rejectedReason ? String(rejectedReason) : tpl.rejectionReason || 'Rejected by Meta';
+  } else if (newStatus === 'paused' && payloadOrValue.description) {
+    tpl.rejectionReason = String(payloadOrValue.description).slice(0, 500);
+  }
+
+  await tpl.save();
+
+  logger.info(
+    '[gupshup-webhook] template %s/%s → %s (business=%s, remote=%s)',
+    tpl.name,
+    tpl.language,
+    newStatus,
+    tpl.businessId,
+    remoteId || '(none)'
+  );
+
+  return {
+    matched: true,
+    templateId: String(tpl._id),
+    businessId: String(tpl.businessId),
+    newStatus,
+  };
 }
 
 /** Normalize legacy Gupshup envelope into a flat event we can dispatch. */
@@ -683,9 +973,14 @@ async function handleLegacyPayload(body) {
   const appName = body.app || null;
   const payload = body.payload || {};
   const ctx = {
-    appId: payload.appId || body.appId || null,
+    appId: payload.appId || body.appId || body.gs_app_id || null,
     appName,
-    displayPhoneNumber: payload.destination || payload.phone || null,
+    // For inbound, destination is often the business number the customer wrote to.
+    displayPhoneNumber:
+      payload.destination ||
+      body.phone ||
+      payload.phone ||
+      null,
   };
 
   if (type === 'message-event' || type === 'message-status') {
@@ -695,6 +990,11 @@ async function handleLegacyPayload(body) {
       ...ctx,
       recipientPhone: payload.source || payload.sender?.phone || payload.from || null,
     });
+  } else if (type === 'template-event') {
+    const result = await applyTemplateEvent(payload, ctx);
+    pushWebhookEvent({ phase: 'template-event', ...result });
+  } else if (type === 'account-event') {
+    logger.debug('[gupshup-webhook] account-event:', payload?.type || 'unknown');
   } else if (type === 'user-event') {
     logger.debug('[gupshup-webhook] user-event:', payload?.type || 'unknown');
   } else {
@@ -707,18 +1007,35 @@ async function handlePayload(body) {
     const summary = summarizeWebhookBody(body);
     pushWebhookEvent({ phase: 'received', summary });
 
-    let v3 = { inbound: 0, statuses: 0 };
+    let v3 = { inbound: 0, statuses: 0, templateEvents: 0 };
     if (body?.object === 'whatsapp_business_account') {
       v3 = await handleV3Payload(body);
     }
 
     const legacyType = String(body?.type || '').toLowerCase();
-    // Gupshup often sends legacy `{ type: "message" }` even with version=3 subscriptions.
-    if (legacyType === 'message' || legacyType === 'message-event' || legacyType === 'message-status') {
+    // Gupshup often sends legacy `{ type: "message" }` even with version=3
+    // subscriptions. Template/account events always arrive in the legacy shape.
+    if (
+      legacyType === 'message' ||
+      legacyType === 'message-event' ||
+      legacyType === 'message-status' ||
+      legacyType === 'template-event' ||
+      legacyType === 'account-event' ||
+      legacyType === 'user-event'
+    ) {
       await handleLegacyPayload(body);
-    } else if (v3.inbound === 0 && v3.statuses === 0 && !body?.object) {
-      logger.warn('[gupshup-webhook] unrecognized payload shape:', summary);
-      pushWebhookEvent({ phase: 'unrecognized', summary });
+    } else if (v3.inbound === 0 && v3.statuses === 0 && v3.templateEvents === 0 && !body?.object) {
+      // Log a redacted preview so we can diagnose empty tunnel probes vs real
+      // events we fail to parse (common with Cloudflare tunnel health checks).
+      const previewKeys =
+        body && typeof body === 'object' && !Array.isArray(body) ? Object.keys(body).slice(0, 20) : [];
+      logger.warn('[gupshup-webhook] unrecognized payload shape:', {
+        summary,
+        keys: previewKeys,
+        contentType: null,
+        bodyPreview: JSON.stringify(body).slice(0, 500),
+      });
+      pushWebhookEvent({ phase: 'unrecognized', summary, keys: previewKeys });
     }
 
     pushWebhookEvent({
@@ -726,6 +1043,7 @@ async function handlePayload(body) {
       summary,
       v3Inbound: v3.inbound,
       v3Statuses: v3.statuses,
+      v3TemplateEvents: v3.templateEvents,
       legacyType: legacyType || null,
     });
   } catch (err) {

@@ -41,6 +41,8 @@ const platformWhatsAppTemplateSchema = new mongoose.Schema(
     },
     /** Optional link to AdminSettings.notifications.whatsapp.templates slot on sync. */
     slotKey: { type: String, default: null },
+    /** When false, hidden from tenant library browse (admin can unpublish test templates). */
+    publishedToTenantLibrary: { type: Boolean, default: true, index: true },
     components: { type: componentSchema, default: () => ({}) },
     gupshupTemplateId: { type: String, default: null, index: true },
     status: {

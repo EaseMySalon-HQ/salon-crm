@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
+import Link from "next/link"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -14,6 +15,7 @@ import {
   XCircle,
   Loader2,
   Phone,
+  Info,
 } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import {
@@ -24,7 +26,22 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { csrfHeadersObject, getCsrfToken } from "@/lib/csrf"
+
+interface ApprovedTemplateOption {
+  id: string
+  name: string
+  language: string
+  gupshupTemplateId: string
+  category: string
+}
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001/api"
 
@@ -77,6 +94,8 @@ export function WhatsAppGupshupConnectCard() {
   const [sourceNumber, setSourceNumber] = useState("")
   const [testTo, setTestTo] = useState("")
   const [testTemplateId, setTestTemplateId] = useState("")
+  const [approvedTemplates, setApprovedTemplates] = useState<ApprovedTemplateOption[]>([])
+  const [loadingTemplates, setLoadingTemplates] = useState(false)
 
   const loadStatus = useCallback(async () => {
     setLoading(true)
@@ -125,7 +144,14 @@ export function WhatsAppGupshupConnectCard() {
       }
       setStatus(data.data)
       setConnectOpen(false)
-      toast({ title: "WhatsApp connected", description: "Your Gupshup app is now linked to this business." })
+      const resetCount = Number(data.data?.templatesReset?.templatesReset || 0)
+      toast({
+        title: "WhatsApp connected",
+        description:
+          resetCount > 0
+            ? `Your Gupshup app is linked. ${resetCount} template(s) were reset to draft — re-submit them on your new number.`
+            : "Your Gupshup app is now linked to this business.",
+      })
     } catch (err: unknown) {
       toast({
         title: "Connect failed",
@@ -186,9 +212,49 @@ export function WhatsAppGupshupConnectCard() {
     }
   }
 
+  const loadApprovedTemplates = useCallback(async () => {
+    setLoadingTemplates(true)
+    try {
+      await ensureCsrfBootstrapped()
+      const res = await fetch(`${API_URL}/whatsapp/gupshup/templates?origin=own`, {
+        credentials: "include",
+      })
+      const data = await res.json()
+      if (!data.success) return
+      const rows = Array.isArray(data.data) ? data.data : []
+      const approved: ApprovedTemplateOption[] = rows
+        .filter((t: { status?: string; gupshupTemplateId?: string | null }) =>
+          t.status === "approved" && t.gupshupTemplateId
+        )
+        .map((t: {
+          _id: string
+          name: string
+          language: string
+          gupshupTemplateId: string
+          category?: string
+        }) => ({
+          id: String(t._id),
+          name: t.name,
+          language: t.language,
+          gupshupTemplateId: t.gupshupTemplateId,
+          category: t.category || "",
+        }))
+      setApprovedTemplates(approved)
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setLoadingTemplates(false)
+    }
+  }, [])
+
+  async function openTestDialog() {
+    setTestOpen(true)
+    await loadApprovedTemplates()
+  }
+
   async function handleTestSend() {
     if (!testTo.trim() || !testTemplateId.trim()) {
-      toast({ title: "Missing fields", description: "Recipient and template id are required.", variant: "destructive" })
+      toast({ title: "Missing fields", description: "Recipient and template are required.", variant: "destructive" })
       return
     }
     setBusy(true)
@@ -203,7 +269,24 @@ export function WhatsAppGupshupConnectCard() {
       const data = await res.json()
       if (!data.success) throw new Error(data.error || "Test send failed")
       setTestOpen(false)
-      toast({ title: "Test sent", description: "Check the recipient device for the message." })
+      const finalStatus = String(data.finalStatus || data.data?.status || "sent")
+      if (finalStatus === "delivered" || finalStatus === "read") {
+        toast({
+          title: "Test delivered",
+          description: `WhatsApp confirmed delivery to ${testTo.trim()}.`,
+        })
+      } else if (finalStatus === "sent") {
+        toast({
+          title: "Test sent",
+          description:
+            "Submitted to Gupshup. Delivery confirmation will arrive via webhook — refresh the inbox in a moment.",
+        })
+      } else {
+        toast({
+          title: "Test submitted",
+          description: `Current status: ${finalStatus}.`,
+        })
+      }
     } catch (err: unknown) {
       toast({
         title: "Test failed",
@@ -359,7 +442,7 @@ export function WhatsAppGupshupConnectCard() {
               <RefreshCw className="h-4 w-4 mr-2" />
               Refresh
             </Button>
-            <Button variant="outline" onClick={() => setTestOpen(true)} disabled={busy}>
+            <Button variant="outline" onClick={() => void openTestDialog()} disabled={busy}>
               <Send className="h-4 w-4 mr-2" />
               Test message
             </Button>
@@ -374,28 +457,71 @@ export function WhatsAppGupshupConnectCard() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Send test message</DialogTitle>
-            <DialogDescription>Send an approved Gupshup template to verify delivery.</DialogDescription>
+            <DialogDescription>
+              Send one of your approved WhatsApp templates from your connected number to verify delivery.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-2">
               <Label htmlFor="test-to">Recipient phone</Label>
               <Input id="test-to" value={testTo} onChange={(e) => setTestTo(e.target.value)} placeholder="91XXXXXXXXXX" />
+              <p className="text-xs text-slate-500">Include country code, no spaces or +.</p>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="test-template">Gupshup template ID</Label>
-              <Input
-                id="test-template"
-                value={testTemplateId}
-                onChange={(e) => setTestTemplateId(e.target.value)}
-                placeholder="Approved template id from Gupshup"
-              />
+              <Label htmlFor="test-template">Approved template</Label>
+              {loadingTemplates ? (
+                <div className="flex items-center gap-2 text-sm text-slate-500">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Loading templates…
+                </div>
+              ) : approvedTemplates.length > 0 ? (
+                <Select value={testTemplateId} onValueChange={setTestTemplateId}>
+                  <SelectTrigger id="test-template">
+                    <SelectValue placeholder="Pick an approved template" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {approvedTemplates.map((t) => (
+                      <SelectItem key={t.id} value={t.gupshupTemplateId}>
+                        {t.name} · {t.language}
+                        {t.category ? ` · ${t.category}` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 flex gap-2">
+                  <Info className="h-4 w-4 shrink-0 mt-0.5" />
+                  <div>
+                    You don&apos;t have any approved templates on this app yet. Meta approval usually takes 15 minutes to a few hours after submitting.
+                    <div className="mt-2">
+                      <Link
+                        href="/whatsapp/templates"
+                        className="text-primary underline underline-offset-2"
+                      >
+                        Manage templates →
+                      </Link>
+                    </div>
+                  </div>
+                </div>
+              )}
+              <details className="text-xs text-slate-500">
+                <summary className="cursor-pointer select-none">Paste a Gupshup template ID instead</summary>
+                <Input
+                  className="mt-2"
+                  value={testTemplateId}
+                  onChange={(e) => setTestTemplateId(e.target.value)}
+                  placeholder="Approved Gupshup template id"
+                />
+              </details>
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setTestOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleTestSend} disabled={busy}>
+            <Button
+              onClick={handleTestSend}
+              disabled={busy || !testTemplateId.trim() || !testTo.trim()}
+            >
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Send test"}
             </Button>
           </DialogFooter>

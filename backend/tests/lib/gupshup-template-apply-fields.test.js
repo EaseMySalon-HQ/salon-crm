@@ -6,6 +6,7 @@ const {
   buildGupshupApplyFields,
   buildUrlButtonPayload,
   hasDynamicUrlPlaceholders,
+  normalizeGupshupTemplateRecord,
 } = require('../../lib/gupshup-template-apply-fields');
 
 describe('gupshup-template-apply-fields', () => {
@@ -48,5 +49,29 @@ describe('gupshup-template-apply-fields', () => {
     });
     const buttons = JSON.parse(fields.buttons);
     assert.equal(buttons[0].example[0], 'https://www.easemysalon.in/receipt/public/INV-000001/abc123');
+  });
+
+  it('normalizeGupshupTemplateRecord unwraps success envelope from GET template', () => {
+    const normalized = normalizeGupshupTemplateRecord({
+      status: 'success',
+      template: {
+        id: 'tpl-123',
+        elementName: 'ems_receipt',
+        status: 'APPROVED',
+      },
+    });
+    assert.equal(normalized.status, 'APPROVED');
+    assert.equal(normalized.id, 'tpl-123');
+    assert.equal(normalized.elementName, 'ems_receipt');
+  });
+
+  it('normalizeGupshupTemplateRecord keeps flat list item shape', () => {
+    const normalized = normalizeGupshupTemplateRecord({
+      id: 'tpl-456',
+      elementName: 'ems_receipt',
+      status: 'PENDING',
+    });
+    assert.equal(normalized.status, 'PENDING');
+    assert.equal(normalized.id, 'tpl-456');
   });
 });

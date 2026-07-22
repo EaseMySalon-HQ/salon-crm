@@ -26,6 +26,7 @@ import {
 } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { getAdminAuthToken } from "@/lib/admin-auth-storage"
+import { AdminPlatformWhatsAppInboxAPI } from "@/lib/admin-platform-whatsapp-api"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -882,35 +883,14 @@ export function WhatsAppAdminSettings({ settings: propSettings, onSettingsChange
   const loadTrackingData = async () => {
     setIsLoadingTracking(true)
     try {
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
-      const token = getAdminAuthToken()
-      
-      if (!token) {
+      if (!getAdminAuthToken()) {
         console.warn('No admin token found, skipping tracking data load')
-        setIsLoadingTracking(false)
+        setTrackingData(null)
         return
       }
-      
-      const response = await fetch(`${API_URL}/whatsapp/tracking/admin`, {
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        }
-      })
 
-      if (response.ok) {
-        const data = await response.json()
-        if (data.success) {
-          setTrackingData(data.data)
-        }
-      } else if (response.status === 401 || response.status === 403) {
-        // Don't redirect - just log and show empty state
-        console.warn('Unauthorized access to admin tracking - admin token may be invalid')
-        setTrackingData(null)
-      } else {
-        console.error('Error loading tracking data:', response.status, response.statusText)
-        setTrackingData(null)
-      }
+      const data = await AdminPlatformWhatsAppInboxAPI.messagesTracking()
+      setTrackingData(data)
     } catch (error) {
       console.error('Error loading tracking data:', error)
       setTrackingData(null)

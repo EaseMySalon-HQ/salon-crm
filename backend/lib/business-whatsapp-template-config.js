@@ -51,6 +51,85 @@ async function shouldUseBusinessTemplateConfig(businessId) {
 /**
  * Write approved template id + auto variable mapping onto the business document.
  */
+/**
+ * Whether linking a Gupshup app should clear tenant template provider state.
+ * True when the app id or sender number changes, or when migrating off legacy Meta.
+ *
+ * @param {object|null|undefined} previousAccount
+ * @param {string|{ appId?: string, sourceNumber?: string }} newAppIdOrOpts
+ */
+function shouldResetBusinessWhatsAppTemplatesOnAppLink(previousAccount, newAppIdOrOpts) {
+  const opts =
+    typeof newAppIdOrOpts === 'object' && newAppIdOrOpts !== null
+      ? newAppIdOrOpts
+      : { appId: newAppIdOrOpts };
+  const prevAppId = String(previousAccount?.gupshupAppId || '').trim();
+  const nextAppId = String(opts.appId || '').trim();
+  const prevSource = String(previousAccount?.sourceNumber || previousAccount?.phoneE164 || '')
+    .replace(/\D/g, '');
+  const nextSource = String(opts.sourceNumber || '').replace(/\D/g, '');
+  if (prevAppId && nextAppId && prevAppId !== nextAppId) return true;
+  if (prevSource && nextSource && prevSource !== nextSource) return true;
+  if (previousAccount?.provider === 'meta') return true;
+  return false;
+}
+
+/**
+ * Clear Gupshup/Meta template ids, slot mappings, and notification config for a
+ * business after a new WABA app is linked. Keeps local draft content/components.
+ */
+async function resetBusinessWhatsAppTemplatesForNewApp(businessId) {
+  if (!businessId) return { templatesReset: 0, notificationSlotsCleared: false };
+
+  const main = await databaseManager.getMainConnection();
+  const Template = main.model('WhatsAppTemplate', require('../models/WhatsAppTemplate').schema);
+  const Business = await getBusinessModel();
+
+  const templateResult = await Template.updateMany(
+    { businessId },
+    {
+      $set: {
+        status: 'draft',
+        gupshupTemplateId: null,
+        metaTemplateId: null,
+        slotKey: null,
+        rejectionReason: null,
+        qualityScore: null,
+        previousCategory: null,
+        detectedCorrectCategory: null,
+        submittedAt: null,
+        approvedAt: null,
+        lastSyncedAt: null,
+        detectedCorrectCategoryAt: null,
+        lastComponentsUpdateAt: null,
+      },
+    }
+  );
+
+  const biz = await Business.findById(businessId);
+  let notificationSlotsCleared = false;
+  if (biz) {
+    biz.settings = biz.settings || {};
+    biz.settings.whatsappNotificationSettings = biz.settings.whatsappNotificationSettings || {};
+    const ws = biz.settings.whatsappNotificationSettings;
+    const hadSlots =
+      (ws.templates && Object.keys(ws.templates).length > 0) ||
+      (ws.templateVariables && Object.keys(ws.templateVariables).length > 0);
+    ws.templates = {};
+    ws.templateVariables = {};
+    if (hadSlots) {
+      biz.markModified('settings.whatsappNotificationSettings');
+      await biz.save();
+      notificationSlotsCleared = true;
+    }
+  }
+
+  return {
+    templatesReset: templateResult.modifiedCount || 0,
+    notificationSlotsCleared,
+  };
+}
+
 async function applyApprovedTemplateToBusinessNotificationSlot(businessId, slotKey, tpl) {
   if (!businessId || !slotKey || !tpl || tpl.status !== 'approved' || !tpl.gupshupTemplateId) {
     return {
@@ -88,5 +167,7 @@ async function applyApprovedTemplateToBusinessNotificationSlot(businessId, slotK
 module.exports = {
   loadBusinessWhatsAppTemplateConfig,
   shouldUseBusinessTemplateConfig,
+  shouldResetBusinessWhatsAppTemplatesOnAppLink,
+  resetBusinessWhatsAppTemplatesForNewApp,
   applyApprovedTemplateToBusinessNotificationSlot,
 };

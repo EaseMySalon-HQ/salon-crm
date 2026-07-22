@@ -233,6 +233,46 @@ async function resolveGupshupTemplateId({ businessId, gupshupTemplateId, templat
 }
 
 /**
+ * Resolve display fields for the inbox bubble (name + body text) so outbound
+ * template sends don't render as a blank "(message)" placeholder.
+ */
+async function resolveTemplateDisplay({
+  businessId,
+  gupshupTemplateId,
+  templateId,
+  templateName,
+  language,
+}) {
+  const { Template } = await getMainModels();
+  let tpl = null;
+  if (templateId) {
+    tpl = await Template.findById(templateId)
+      .select('name gupshupTemplateId components.body.text')
+      .lean();
+  }
+  if (!tpl && gupshupTemplateId) {
+    tpl = await Template.findOne({ businessId, gupshupTemplateId: String(gupshupTemplateId) })
+      .select('name gupshupTemplateId components.body.text')
+      .lean();
+  }
+  if (!tpl && templateName) {
+    tpl = await Template.findOne({
+      businessId,
+      name: templateName,
+      language: language || 'en_US',
+    })
+      .select('name gupshupTemplateId components.body.text')
+      .lean();
+  }
+  const bodyText = tpl?.components?.body?.text ? String(tpl.components.body.text) : null;
+  return {
+    name: tpl?.name || templateName || null,
+    bodyPreview: bodyText,
+    gupshupTemplateId: tpl?.gupshupTemplateId || gupshupTemplateId || null,
+  };
+}
+
+/**
  * Send via the Gupshup Partner Portal. Session (free-form) messages use the v3
  * endpoint; templates use /template/msg with the resolved Gupshup template id
  * and ordered params. Sender (per-salon vs shared platform) is resolved inside
@@ -422,6 +462,29 @@ async function sendWhatsApp(args) {
     freeWindow: routing.useFreeWindow,
   });
 
+  // Resolve Gupshup template id + inbox display text before persisting so the
+  // conversation bubble shows the template body (not a blank "(message)").
+  let resolvedTemplateId = null;
+  let templateDisplay = { name: templateName, bodyPreview: null, gupshupTemplateId: null };
+  if (!isService && (routing.provider === 'gupshup' || gupshupTemplateId || templateId || templateName)) {
+    resolvedTemplateId = await resolveGupshupTemplateId({
+      businessId,
+      gupshupTemplateId,
+      templateId,
+      templateName,
+      language,
+    });
+    templateDisplay = await resolveTemplateDisplay({
+      businessId,
+      gupshupTemplateId: resolvedTemplateId || gupshupTemplateId,
+      templateId,
+      templateName,
+      language,
+    });
+  }
+
+  const gsParams = !isService ? params || buildGupshupParams(components) : null;
+
   const messageDoc = await Message.create({
     businessId,
     provider: routing.provider,
@@ -437,7 +500,17 @@ async function sendWhatsApp(args) {
     freeWindow: routing.useFreeWindow,
     status: 'queued',
     statusEvents: [{ status: 'queued', at: new Date(), raw: null }],
-    payload: { templateName, language, components, variables, isService, serviceText },
+    payload: {
+      templateName: templateDisplay.name || templateName,
+      language,
+      components,
+      variables,
+      isService,
+      serviceText,
+      gupshupTemplateId: resolvedTemplateId || gupshupTemplateId || null,
+      bodyPreview: isService ? serviceText || null : templateDisplay.bodyPreview,
+      params: gsParams,
+    },
     costPaise: routing.useFreeWindow || desc.category === 'service' ? 0 : expectedCost,
     priceListVersion: routing.priceListVersion,
     countryCode,
@@ -449,16 +522,6 @@ async function sendWhatsApp(args) {
   // Provider call.
   let providerResult = { success: false, error: 'Unsupported provider in send pipeline' };
   if (routing.provider === 'gupshup') {
-    let resolvedTemplateId = null;
-    if (!isService) {
-      resolvedTemplateId = await resolveGupshupTemplateId({
-        businessId,
-        gupshupTemplateId,
-        templateId,
-        templateName,
-        language,
-      });
-    }
     if (!isService && !resolvedTemplateId) {
       providerResult = {
         success: false,
@@ -466,14 +529,13 @@ async function sendWhatsApp(args) {
         error: `No Gupshup template id mapped for "${templateName || templateId || 'unknown'}"`,
       };
     } else {
-      const gsParams = params || buildGupshupParams(components);
       providerResult = await sendViaGupshup({
         businessId,
         recipientPhone: normalizedRecipient,
         isService,
         serviceText,
         gupshupTemplateId: resolvedTemplateId,
-        params: gsParams,
+        params: gsParams || [],
         requireBusinessSender: requireTenantApp,
       });
     }

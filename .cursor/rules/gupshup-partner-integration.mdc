@@ -128,6 +128,11 @@ meta={"headers":{"Authorization":"Bearer <shared-secret>"}}   # sent back as req
 - **Verify authenticity**: check the custom header you set via `meta`, AND allowlist Gupshup IPs (§8). Do not trust the payload blind.
 - Status names: `sent`, `delivered`, `read`, `failed` (includes reason), `deleted`, `warning`. Map to the existing `WhatsAppMessage`/`WhatsAppMessageLog` status enum.
 
+**Template lifecycle events (mandatory — Meta approval is async):**
+- Legacy shape (`version=2` or default): `{ app, type: "template-event", payload: { id, elementName, languageCode, status, rejectedReason, type?: "status-update"|"category-update"|"quality-update" } }`. Statuses: `approved`, `rejected`, `paused`, `deleted`, `disabled`, `in_appeal`.
+- v3 passthrough: `{ object: "whatsapp_business_account", entry: [{ changes: [{ field: "message_template_status_update", value: { event, message_template_id, message_template_name, message_template_language, reason } }] }] }`. Also handles `message_template_quality_update`, `template_category_update`, `message_template_category_update`.
+- Our handler in `backend/routes/gupshup-webhook.js` (`applyTemplateEvent`) matches by `gupshupTemplateId`/`metaTemplateId`, then by `(businessId, elementName, languageCode)` when the id is unknown. Updates the local `WhatsAppTemplate` row (status / rejectionReason / approvedAt / previousCategory / detectedCorrectCategory / qualityScore). Without this handler tenant templates stay `pending` forever even after Meta approves — that is a common tenant-facing bug; always keep template-event handling wired.
+
 ## 8. Gupshup inbound IP allowlist
 
 Allowlist these at the edge/CORS/firewall for the webhook route (verify current list in docs before shipping):
@@ -181,6 +186,24 @@ Salons with **their own connected app** use **WhatsApp → Templates** in the te
 - Authorize mutating admin/config routes (who may connect/disconnect a WABA), not just authenticate.
 
 ## 12. Fitting this codebase
+
+**Tenant CRM API routes (Gupshup WABA — primary paths):**
+
+| Feature | Primary route | Legacy alias |
+|---------|---------------|--------------|
+| Connect / status | `/api/whatsapp/gupshup/*` | — |
+| Templates | `/api/whatsapp/gupshup/templates/*` | `/api/whatsapp/v2/templates/*` |
+| Campaigns | `/api/whatsapp/gupshup/campaigns/*` | `/api/whatsapp/v2/campaigns/*` |
+| Inbox | `/api/whatsapp/gupshup/inbox/*` | `/api/whatsapp/v2/inbox/*` |
+| Message reports | `/api/whatsapp/gupshup/messages/*` | `/api/whatsapp/v2/messages/*` |
+| Tracking (tenant) | `GET /api/whatsapp/gupshup/messages/tracking` | — |
+| Logs (tenant) | `GET /api/whatsapp/gupshup/messages/logs` | — |
+| Test send (tenant) | `POST /api/whatsapp/gupshup/test-message` | — |
+| Admin tracking | `GET /api/admin/gupshup/messages/tracking` | — |
+
+**Platform admin:** `/api/admin/gupshup/*` (templates, campaigns, inbox, webhooks).
+
+**MSG91 legacy** (transactional fallback analytics only): `/api/whatsapp/msg91/*` (alias `/api/whatsapp/*`).
 
 When implementing, follow existing conventions:
 - New provider client: `backend/services/gupshup-whatsapp-service.js` (token lookup, decrypt-at-use, axios, no plaintext logs).

@@ -121,14 +121,11 @@ async function resolvePlatformSender({ forceRefresh = false } = {}) {
       'Gupshup platform app not configured (set GUPSHUP_PLATFORM_* env or Admin → Gupshup shared app)'
     );
   }
-  let appToken = null;
-  if (!forceRefresh) {
-    appToken = await loadStoredPlatformAppToken(cfg.appId);
-  }
-  if (!appToken) {
-    appToken = await gupshupAuth.getAppToken(cfg.appId, { forceRefresh });
-    await persistPlatformAppToken(cfg.appId, appToken);
-  }
+  // Always resolve via Partner API (in-memory cache). AdminSettings-stored tokens
+  // can go stale while still decrypting successfully — Gupshup then returns opaque
+  // HTTP 400 on template/msg instead of 401.
+  const appToken = await gupshupAuth.getAppToken(cfg.appId, { forceRefresh });
+  await persistPlatformAppToken(cfg.appId, appToken);
   return {
     scope: 'platform',
     appId: cfg.appId,
@@ -139,18 +136,7 @@ async function resolvePlatformSender({ forceRefresh = false } = {}) {
 }
 
 async function resolveBusinessAppToken(account) {
-  let appToken = null;
-  if (account.appTokenCipher) {
-    try {
-      appToken = decrypt(account.appTokenCipher);
-    } catch (err) {
-      logger.warn('[gupshup-config] stored app token decrypt failed, refetching:', err?.message);
-    }
-  }
-  if (!appToken) {
-    appToken = await gupshupAuth.getAppToken(account.gupshupAppId);
-  }
-  return appToken;
+  return gupshupAuth.getAppToken(account.gupshupAppId);
 }
 
 function businessSenderFromAccount(account) {

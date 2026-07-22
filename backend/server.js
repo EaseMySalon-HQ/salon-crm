@@ -541,12 +541,22 @@ app.use('/api/admin/access', require('./routes/admin-access'));
 app.use('/api/admin/logs', require('./routes/admin-logs'));
 app.use('/api/admin/leads', require('./routes/admin-leads'));
 app.use('/api/email-notifications', require('./routes/email-notifications'));
-app.use('/api/whatsapp', require('./routes/whatsapp'));
+const whatsappMsg91Router = require('./routes/whatsapp');
 app.use('/api/whatsapp/gupshup', require('./routes/whatsapp-gupshup'));
-app.use('/api/whatsapp/v2/templates', require('./routes/whatsapp-templates'));
-app.use('/api/whatsapp/v2/campaigns', require('./routes/whatsapp-campaigns'));
-app.use('/api/whatsapp/v2/messages', require('./routes/whatsapp-messages'));
-app.use('/api/whatsapp/v2/inbox', require('./routes/whatsapp-inbox'));
+const whatsappTemplatesRouter = require('./routes/whatsapp-templates');
+const whatsappCampaignsRouter = require('./routes/whatsapp-campaigns');
+const whatsappMessagesRouter = require('./routes/whatsapp-messages');
+const whatsappInboxRouter = require('./routes/whatsapp-inbox');
+app.use('/api/whatsapp/gupshup/templates', whatsappTemplatesRouter);
+app.use('/api/whatsapp/v2/templates', whatsappTemplatesRouter);
+app.use('/api/whatsapp/gupshup/campaigns', whatsappCampaignsRouter);
+app.use('/api/whatsapp/v2/campaigns', whatsappCampaignsRouter);
+app.use('/api/whatsapp/gupshup/messages', whatsappMessagesRouter);
+app.use('/api/whatsapp/v2/messages', whatsappMessagesRouter);
+app.use('/api/whatsapp/gupshup/inbox', whatsappInboxRouter);
+app.use('/api/whatsapp/v2/inbox', whatsappInboxRouter);
+app.use('/api/whatsapp/msg91', whatsappMsg91Router);
+app.use('/api/whatsapp', whatsappMsg91Router);
 app.use('/api/webhooks/whatsapp/gupshup', require('./routes/gupshup-webhook'));
 app.use('/api/admin/gupshup', require('./routes/admin-gupshup'));
 app.use('/api/channel-usage', require('./routes/channel-usage'));
@@ -14092,6 +14102,7 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requirePermi
           notes: 'Payment collected via bill edit',
           collectedBy: req.user?.name || req.user?.firstName || 'Staff'
         });
+        existingSale.paymentStatus.lastPaymentDate = new Date();
         existingSale.markModified('paymentHistory');
       }
     } else {
