@@ -44,8 +44,7 @@ function buildGupshupParams(components) {
   );
   const params = [];
   for (const comp of ordered) {
-    if (!comp || comp.type === 'button') continue; // buttons handled separately
-    if (!Array.isArray(comp.parameters)) continue;
+    if (!comp || !Array.isArray(comp.parameters)) continue;
     for (const p of comp.parameters) {
       params.push(paramToText(p));
     }

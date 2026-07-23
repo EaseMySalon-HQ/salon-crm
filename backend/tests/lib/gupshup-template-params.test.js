@@ -26,12 +26,12 @@ describe('gupshup-template-params', () => {
     expect(buildGupshupParams(components)).toEqual(['H1', 'B1', 'B2']);
   });
 
-  it('excludes button component params', () => {
+  it('includes dynamic URL button params after body params', () => {
     const components = [
       { type: 'body', parameters: [{ type: 'text', text: 'B1' }] },
       { type: 'button', sub_type: 'url', index: 0, parameters: [{ type: 'text', text: 'ORDER123' }] },
     ];
-    expect(buildGupshupParams(components)).toEqual(['B1']);
+    expect(buildGupshupParams(components)).toEqual(['B1', 'ORDER123']);
   });
 
   it('resolves currency and date_time fallback values', () => {

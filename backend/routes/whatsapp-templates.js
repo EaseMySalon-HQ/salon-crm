@@ -1,19 +1,10 @@
 /**
- * WhatsApp templates (Gupshup).
- * Mounted at /api/whatsapp/v2/templates.
+ * Tenant Gupshup WhatsApp templates (Partner Portal).
+ * Primary mount: /api/whatsapp/gupshup/templates
+ * Legacy alias:  /api/whatsapp/v2/templates (Meta-era path; same router)
  *
- * Endpoints:
- *  - GET    /                — paginated list with status/search filters
- *  - GET    /:id             — single template
- *  - GET    /library            — admin-approved platform templates for tenant library
- *  - POST   /library/:id/import — add one library template as a local draft
- *  - POST   /import-catalog     — add all published library templates as drafts
- *  - POST   /                — create draft
- *  - PUT    /:id             — edit draft / rejected
- *  - POST   /:id/submit      — submit draft to Meta for approval
- *  - POST   /:id/sync        — pull latest state from Meta into local row
- *  - POST   /sync-all        — bulk pull every template Meta has on this WABA
- *  - DELETE /:id             — delete (calls Meta's DELETE first when applicable)
+ * Submit/sync call Gupshup Partner API POST/GET /partner/app/{appId}/templates
+ * on the salon's connected app (not the shared platform WABA).
  */
 
 'use strict';
@@ -57,6 +48,7 @@ const {
   remoteElementName,
   remoteTemplateId,
   remoteTemplateStatus,
+  normalizeGupshupTemplateRecord,
 } = require('../lib/gupshup-template-apply-fields');
 const {
   PLATFORM_TEMPLATE_CATALOG,
@@ -68,6 +60,11 @@ const { buildVariableMappingForSlot } = require('../lib/platform-template-variab
 const {
   applyApprovedTemplateToBusinessNotificationSlot,
 } = require('../lib/business-whatsapp-template-config');
+const {
+  submitTemplateForGupshupApproval,
+  gupshupSubmissionErrorMessage,
+  isGupshupTemplateDuplicateError,
+} = require('../lib/gupshup-template-submit');
 
 /**
  * Zod v4 exposes `.issues` (v3 was `.errors`). Support both so bumping the
@@ -166,7 +163,7 @@ async function getPlatformTemplateModel() {
 
 async function listApprovedPlatformLibraryTemplates(scope) {
   const PlatformTemplate = await getPlatformTemplateModel();
-  const filter = { status: 'approved' };
+  const filter = { status: 'approved', publishedToTenantLibrary: { $ne: false } };
   if (scope === 'promotional') {
     filter.category = 'MARKETING';
   } else if (scope === 'transactional') {
@@ -175,19 +172,168 @@ async function listApprovedPlatformLibraryTemplates(scope) {
   return PlatformTemplate.find(filter).sort({ slotKey: 1, name: 1 }).lean();
 }
 
-async function resolveGupshupAppId(businessId) {
-  const sender = await gupshupConfig.resolveSender(businessId);
-  return sender.appId;
+function scopeCategoryFilter(scope) {
+  if (scope === 'promotional') return 'MARKETING';
+  if (scope === 'transactional') return 'UTILITY';
+  return null;
+}
+
+/** Platform catalog rows the tenant has explicitly added to their library. */
+async function listTenantSelectedLibraryEntries(businessId, scope, { byName } = {}) {
+  const PlatformTemplate = await getPlatformTemplateModel();
+  const Template = await getModel();
+  const category = scopeCategoryFilter(scope);
+
+  const localQuery = { businessId, sourcePlatformTemplateId: { $ne: null } };
+  if (category) localQuery.category = category;
+
+  const locals = await Template.find(localQuery)
+    .select('name language status slotKey gupshupTemplateId category submittedAt sourcePlatformTemplateId')
+    .lean();
+  if (!locals.length) return [];
+
+  const platformIds = [...new Set(locals.map((l) => String(l.sourcePlatformTemplateId)).filter(Boolean))];
+  const platformRows = await PlatformTemplate.find({
+    _id: { $in: platformIds },
+    status: 'approved',
+    publishedToTenantLibrary: { $ne: false },
+  }).lean();
+  const platformById = new Map(platformRows.map((p) => [String(p._id), p]));
+
+  const nameMap =
+    byName ||
+    new Map(locals.map((t) => [`${t.name}:${t.language}`, t]));
+
+  const items = [];
+  for (const local of locals) {
+    const platformTpl = platformById.get(String(local.sourcePlatformTemplateId));
+    if (!platformTpl) continue;
+    items.push(platformLibraryItem(platformTpl, nameMap));
+  }
+
+  items.sort((a, b) => {
+    const slotA = a.slotKey || '';
+    const slotB = b.slotKey || '';
+    if (slotA !== slotB) return slotA.localeCompare(slotB);
+    return a.elementName.localeCompare(b.elementName);
+  });
+  return items;
+}
+
+function availableCatalogItem(platformTpl) {
+  return {
+    platformTemplateId: String(platformTpl._id),
+    slotKey: platformTpl.slotKey || null,
+    elementName: platformTpl.name,
+    category: platformTpl.category,
+    language: platformTpl.language,
+    content: platformTpl.components?.body?.text || '',
+    platformStatus: 'approved',
+  };
 }
 
 const TENANT_APP_REQUIRED_MSG = gupshupConfig.TENANT_APP_REQUIRED_MSG;
 
-async function resolveTenantConnectedGupshupAppId(businessId) {
+async function resolveTenantGupshupApp(businessId) {
   const account = await gupshupConfig.loadAccount(businessId);
   if (!gupshupConfig.isBusinessAppUsable(account)) {
-    return { connected: false, appId: null };
+    return { connected: false, appId: null, sourceNumber: null, appName: null };
   }
-  return { connected: true, appId: account.gupshupAppId };
+  const sourceNumber = String(account.sourceNumber || account.phoneE164 || '').replace(/\D/g, '') || null;
+  return {
+    connected: true,
+    appId: String(account.gupshupAppId),
+    sourceNumber,
+    appName: account.gupshupAppName || null,
+  };
+}
+
+/** @deprecated use resolveTenantGupshupApp */
+async function resolveTenantConnectedGupshupAppId(businessId) {
+  const tenantApp = await resolveTenantGupshupApp(businessId);
+  return { connected: tenantApp.connected, appId: tenantApp.appId };
+}
+
+/**
+ * Tenant template APIs must target the salon's connected Gupshup app — never the
+ * shared platform fallback used for transactional sends without a own WABA.
+ */
+async function requireTenantGupshupAppId(businessId) {
+  const tenantApp = await resolveTenantGupshupApp(businessId);
+  if (!tenantApp.connected || !tenantApp.appId) {
+    return { ok: false, appId: null, sourceNumber: null, appName: null };
+  }
+  return {
+    ok: true,
+    appId: tenantApp.appId,
+    sourceNumber: tenantApp.sourceNumber,
+    appName: tenantApp.appName,
+  };
+}
+
+function tenantAppRequiredResponse(res) {
+  return res.status(400).json({
+    success: false,
+    error: TENANT_APP_REQUIRED_MSG,
+    code: 'WHATSAPP_APP_NOT_CONNECTED',
+  });
+}
+
+function gupshupApiErrorMessage(error) {
+  if (typeof error === 'string') return error;
+  if (error?.message) return String(error.message);
+  return 'Gupshup API error';
+}
+
+function isInvalidGupshupTemplateIdError(error) {
+  return /invalid template id/i.test(gupshupApiErrorMessage(error));
+}
+
+/**
+ * Resolve a template on the tenant's connected Gupshup app. Falls back to
+ * list+elementName when the stored id belongs to another app (e.g. platform WABA).
+ */
+async function resolveTenantTemplateRemote({ appId, templateId, elementName, language }) {
+  if (templateId) {
+    const byId = await gupshupWhatsApp.getTemplate({ appId, templateId });
+    if (byId.success) return { success: true, data: byId.data };
+    if (!isInvalidGupshupTemplateIdError(byId.error)) return byId;
+  }
+
+  if (!elementName) {
+    return {
+      success: false,
+      error:
+        'Stored Gupshup template id is not valid on your connected app. Submit this template on your number again.',
+      code: 'GUPSHUP_TEMPLATE_ID_STALE',
+    };
+  }
+
+  const list = await gupshupWhatsApp.listTemplates({ appId });
+  if (!list.success) return list;
+
+  const wantLang = String(language || '').replace('-', '_');
+  const remote = extractTemplateList(list.data).find((raw) => {
+    const normalized = normalizeGupshupTemplateRecord(raw);
+    const name = remoteElementName(normalized);
+    const lang = String(normalized.language || '').replace('-', '_');
+    if (name !== elementName) return false;
+    return !wantLang || !lang || lang === wantLang;
+  });
+
+  if (!remote) {
+    return {
+      success: false,
+      error: `Template "${elementName}" is not on your connected WhatsApp app yet. Click Submit first.`,
+      code: 'GUPSHUP_TEMPLATE_NOT_ON_TENANT_APP',
+    };
+  }
+
+  return {
+    success: true,
+    data: remote,
+    staleIdReplaced: Boolean(templateId),
+  };
 }
 
 function statusAfterGupshupApply(submissionData) {
@@ -200,12 +346,6 @@ function statusAfterGupshupApply(submissionData) {
   if (mapped === 'approved') return 'approved';
   if (mapped === 'rejected') return 'rejected';
   return 'pending';
-}
-
-function gupshupSubmissionErrorMessage(submission) {
-  if (typeof submission.error === 'string') return submission.error;
-  if (submission.error?.message) return submission.error.message;
-  return 'Gupshup rejected the template submission';
 }
 
 /**
@@ -296,19 +436,22 @@ function adaptComponentsFromMeta(metaComponents) {
  * Used by both /:id/sync (single) and /sync-all (bulk).
  */
 function applyRemoteToLocal(tpl, remote) {
-  const mapped = mapGupshupStatus(remote.status);
+  const normalized = normalizeGupshupTemplateRecord(remote);
+  const mapped = mapGupshupStatus(normalized.status);
   if (mapped) {
     tpl.status = mapped;
     if (mapped === 'approved' && !tpl.approvedAt) tpl.approvedAt = new Date();
     if (mapped === 'rejected') {
-      tpl.rejectionReason = remote.rejected_reason || tpl.rejectionReason || null;
+      tpl.rejectionReason =
+        normalized.rejectedReason || normalized.rejected_reason || tpl.rejectionReason || null;
     }
   }
-  if (remote.id) {
-    tpl.metaTemplateId = String(remote.id);
-    tpl.gupshupTemplateId = String(remote.id);
+  if (normalized.id) {
+    tpl.metaTemplateId = String(normalized.id);
+    tpl.gupshupTemplateId = String(normalized.id);
   }
-  tpl.metaTemplateName = remote.name || tpl.metaTemplateName || tpl.name;
+  tpl.metaTemplateName =
+    normalized.elementName || normalized.name || tpl.metaTemplateName || tpl.name;
   if (remote.quality_score) {
     tpl.qualityScore =
       typeof remote.quality_score === 'string'
@@ -365,9 +508,125 @@ async function importPlatformTemplateToBusiness(businessId, platformTpl, created
   return { imported: true, template: doc };
 }
 
+/** Pull latest Gupshup approval state onto local tenant template rows. */
+function findRemoteTemplateByNameLang(remoteList, elementName, language) {
+  const wantLang = String(language || '').replace('-', '_');
+  return (
+    remoteList.find((raw) => {
+      const normalized = normalizeGupshupTemplateRecord(raw);
+      const name = remoteElementName(normalized);
+      const lang = String(normalized.language || '').replace('-', '_');
+      if (name !== elementName) return false;
+      return !wantLang || !lang || lang === wantLang;
+    }) || null
+  );
+}
+
+async function refreshLocalTemplatesFromRemoteList(businessId, remoteList) {
+  if (!remoteList?.length) return 0;
+  const Template = await getModel();
+  const locals = await Template.find({
+    businessId,
+    $or: [
+      { gupshupTemplateId: { $ne: null } },
+      { status: { $in: ['pending', 'in_appeal'] } },
+      { submittedAt: { $ne: null } },
+    ],
+  });
+  let updated = 0;
+  for (const tpl of locals) {
+    const remote = remoteList.find((r) => {
+      const id = remoteTemplateId(r);
+      const name = remoteElementName(r);
+      const lang = String(r.language || r.languageCode || '').replace('-', '_');
+      const tplLang = String(tpl.language || '').replace('-', '_');
+      if (id && (String(tpl.gupshupTemplateId || '') === id || String(tpl.metaTemplateId || '') === id)) {
+        return true;
+      }
+      if (!tpl.submittedAt && tpl.status !== 'pending' && tpl.status !== 'in_appeal') {
+        return false;
+      }
+      return Boolean(name && name === tpl.name && (!lang || !tplLang || lang === tplLang));
+    });
+    if (!remote) continue;
+    applyRemoteToLocal(tpl, remote);
+    tpl.lastSyncedAt = new Date();
+    await tpl.save();
+    updated += 1;
+  }
+  return updated;
+}
+
+/**
+ * Strip platform WABA template ids mistaken for tenant ids. Platform approval
+ * must not display as tenant "Your number" approval until submitted locally.
+ */
+async function reconcileTenantLibraryTemplates(businessId, approvedPlatform, remoteList) {
+  const Template = await getModel();
+  const locals = await Template.find({
+    businessId,
+    sourcePlatformTemplateId: { $ne: null },
+  });
+  if (!locals.length) return 0;
+
+  const platformByKey = new Map(
+    approvedPlatform.map((p) => [`${p.name}:${p.language}`, p])
+  );
+  let fixed = 0;
+
+  for (const tpl of locals) {
+    const platformTpl = platformByKey.get(`${tpl.name}:${tpl.language}`);
+    const platformId = platformTpl?.gupshupTemplateId
+      ? String(platformTpl.gupshupTemplateId)
+      : null;
+    const rawRemote = findRemoteTemplateByNameLang(remoteList, tpl.name, tpl.language);
+    const remote = rawRemote ? normalizeGupshupTemplateRecord(rawRemote) : null;
+    const remoteId = remote?.id ? String(remote.id) : null;
+    let dirty = false;
+
+    if (platformId && String(tpl.gupshupTemplateId || '') === platformId) {
+      tpl.gupshupTemplateId = remoteId;
+      tpl.metaTemplateId = remoteId;
+      dirty = true;
+      if (!remoteId) {
+        tpl.status = tpl.submittedAt ? 'pending' : 'draft';
+        tpl.approvedAt = null;
+        tpl.rejectionReason = null;
+      }
+    }
+
+    if (tpl.status === 'approved' && !remoteId) {
+      tpl.status = tpl.submittedAt ? 'pending' : 'draft';
+      tpl.approvedAt = null;
+      if (!tpl.submittedAt) {
+        tpl.gupshupTemplateId = null;
+        tpl.metaTemplateId = null;
+      }
+      dirty = true;
+    } else if (remote && tpl.submittedAt) {
+      applyRemoteToLocal(tpl, remote);
+      dirty = true;
+    }
+
+    if (dirty) {
+      tpl.lastSyncedAt = new Date();
+      await tpl.save();
+      fixed += 1;
+    }
+  }
+
+  return fixed;
+}
+
+function isLibraryLinkedLocal(platformTpl, local) {
+  if (!local?.sourcePlatformTemplateId) return false;
+  return String(local.sourcePlatformTemplateId) === String(platformTpl._id);
+}
+
 function platformLibraryItem(platformTpl, localByName) {
   const key = `${platformTpl.name}:${platformTpl.language}`;
   const local = localByName.get(key);
+  const linked = isLibraryLinkedLocal(platformTpl, local);
   return {
     platformTemplateId: String(platformTpl._id),
     slotKey: platformTpl.slotKey || null,
@@ -375,10 +634,13 @@ function platformLibraryItem(platformTpl, localByName) {
     category: platformTpl.category,
     language: platformTpl.language,
     content: platformTpl.components?.body?.text || '',
-    localTemplateId: local?._id ? String(local._id) : null,
-    localStatus: local?.status || null,
-    mappedSlotKey: local?.slotKey || null,
-    localTemplate: local
+    platformStatus: 'approved',
+    libraryLinked: linked,
+    tenantSubmitted: linked ? Boolean(local.submittedAt) : false,
+    localTemplateId: linked && local?._id ? String(local._id) : null,
+    localStatus: linked ? local.status : null,
+    mappedSlotKey: linked ? local.slotKey || null : null,
+    localTemplate: linked
       ? {
           _id: String(local._id),
           name: local.name,
@@ -393,7 +655,11 @@ function platformLibraryItem(platformTpl, localByName) {
 
 /* ----------------------------------------------------------------------- */
 
-router.get('/meta', authenticateToken, setupMainDatabase, requireWabaAddon, async (req, res) => {
+router.get('/catalog', authenticateToken, setupMainDatabase, requireWabaAddon, handleTemplateCatalog);
+/** @deprecated use GET /catalog */
+router.get('/meta', authenticateToken, setupMainDatabase, requireWabaAddon, handleTemplateCatalog);
+
+async function handleTemplateCatalog(req, res) {
   try {
     const approved = await listApprovedPlatformLibraryTemplates();
     return res.json({
@@ -411,12 +677,12 @@ router.get('/meta', authenticateToken, setupMainDatabase, requireWabaAddon, asyn
       },
     });
   } catch (err) {
-    logger.error('[whatsapp-templates] meta failed:', err);
+    logger.error('[whatsapp-templates] catalog failed:', err);
     res.status(500).json({ success: false, error: 'Failed to load template metadata' });
   }
-});
+}
 
-/** Admin-approved platform templates published to the tenant library. */
+/** Templates the tenant has added to their library (not the full platform catalog). */
 router.get('/library', authenticateToken, setupMainDatabase, requireWabaAddon, async (req, res) => {
   try {
     const parsed = whatsappTemplateLibraryQuerySchema.safeParse(req.query);
@@ -427,19 +693,111 @@ router.get('/library', authenticateToken, setupMainDatabase, requireWabaAddon, a
     const businessId = await tenantBusinessObjectId(req, res);
     if (!businessId) return;
     const Template = await getModel();
-    const [approvedPlatform, existing] = await Promise.all([
-      listApprovedPlatformLibraryTemplates(scope),
-      Template.find({ businessId })
-        .select('name language status slotKey gupshupTemplateId category')
-        .lean(),
-    ]);
+    const approvedPlatform = await listApprovedPlatformLibraryTemplates(scope);
+
+    const appCtx = await requireTenantGupshupAppId(businessId);
+    if (appCtx.ok) {
+      const listResult = await gupshupWhatsApp.listTemplates({ appId: appCtx.appId });
+      if (listResult.success) {
+        const remoteList = extractTemplateList(listResult.data);
+        await refreshLocalTemplatesFromRemoteList(businessId, remoteList);
+        await reconcileTenantLibraryTemplates(businessId, approvedPlatform, remoteList);
+      }
+    }
+
+    const existing = await Template.find({ businessId })
+      .select(
+        'name language status slotKey gupshupTemplateId category submittedAt sourcePlatformTemplateId'
+      )
+      .lean();
     const byName = new Map(existing.map((t) => [`${t.name}:${t.language}`, t]));
 
-    const items = approvedPlatform.map((entry) => platformLibraryItem(entry, byName));
+    const items = await listTenantSelectedLibraryEntries(businessId, scope, { byName });
     res.json({ success: true, data: items, scope });
   } catch (err) {
     logger.error('[whatsapp-templates] library failed:', err);
     res.status(500).json({ success: false, error: 'Failed to load template library' });
+  }
+});
+
+/** Published platform templates the tenant can add (not yet in their library). */
+router.get('/library/available', authenticateToken, setupMainDatabase, requireWabaAddon, async (req, res) => {
+  try {
+    const parsed = whatsappTemplateLibraryQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({ success: false, error: firstZodMessage(parsed.error, 'Invalid query') });
+    }
+    const { scope } = parsed.data;
+    const businessId = await tenantBusinessObjectId(req, res);
+    if (!businessId) return;
+
+    const Template = await getModel();
+    const approvedPlatform = await listApprovedPlatformLibraryTemplates(scope);
+    const added = await Template.find({
+      businessId,
+      sourcePlatformTemplateId: { $ne: null },
+    })
+      .select('sourcePlatformTemplateId')
+      .lean();
+    const addedIds = new Set(added.map((r) => String(r.sourcePlatformTemplateId)));
+
+    const items = approvedPlatform
+      .filter((p) => !addedIds.has(String(p._id)))
+      .map((p) => availableCatalogItem(p));
+
+    res.json({ success: true, data: items, scope });
+  } catch (err) {
+    logger.error('[whatsapp-templates] library/available failed:', err);
+    res.status(500).json({ success: false, error: 'Failed to load available templates' });
+  }
+});
+
+router.post('/library/import-batch', authenticateToken, requireManager, setupMainDatabase, requireWabaAddon, async (req, res) => {
+  try {
+    const businessId = await tenantBusinessObjectId(req, res);
+    if (!businessId) return;
+    const ids = Array.isArray(req.body?.platformTemplateIds)
+      ? req.body.platformTemplateIds.map((id) => String(id).trim()).filter(Boolean)
+      : [];
+    if (!ids.length) {
+      return res.status(400).json({ success: false, error: 'platformTemplateIds array is required' });
+    }
+
+    const PlatformTemplate = await getPlatformTemplateModel();
+    const platformRows = await PlatformTemplate.find({
+      _id: { $in: ids },
+      status: 'approved',
+      publishedToTenantLibrary: { $ne: false },
+    }).lean();
+    const byId = new Map(platformRows.map((p) => [String(p._id), p]));
+
+    const imported = [];
+    const skipped = [];
+    for (const id of ids) {
+      const platformTpl = byId.get(id);
+      if (!platformTpl) {
+        skipped.push({ id, reason: 'not_found_or_unpublished' });
+        continue;
+      }
+      const result = await importPlatformTemplateToBusiness(
+        businessId,
+        platformTpl,
+        req.user._id || req.user.id
+      );
+      if (result.imported) {
+        imported.push(String(result.template._id));
+      } else {
+        skipped.push({ id, reason: result.reason || 'already_exists', name: platformTpl.name });
+      }
+    }
+
+    res.json({
+      success: true,
+      data: { imported: imported.length, skipped, templateIds: imported },
+    });
+  } catch (err) {
+    logger.error('[whatsapp-templates] library import-batch failed:', err);
+    res.status(500).json({ success: false, error: 'Failed to add selected templates' });
   }
 });
 
@@ -451,6 +809,7 @@ router.post('/library/:platformTemplateId/import', authenticateToken, requireMan
     const platformTpl = await PlatformTemplate.findOne({
       _id: req.params.platformTemplateId,
       status: 'approved',
+      publishedToTenantLibrary: { $ne: false },
     }).lean();
     if (!platformTpl) {
       return res.status(404).json({ success: false, error: 'Approved library template not found' });
@@ -512,8 +871,9 @@ router.post('/sync-slots', authenticateToken, requireManager, setupMainDatabase,
   try {
     const businessId = await tenantBusinessObjectId(req, res);
     if (!businessId) return;
-    const appId = await resolveGupshupAppId(businessId);
-    const listResult = await gupshupWhatsApp.listTemplates({ appId });
+    const appCtx = await requireTenantGupshupAppId(businessId);
+    if (!appCtx.ok) return tenantAppRequiredResponse(res);
+    const listResult = await gupshupWhatsApp.listTemplates({ appId: appCtx.appId });
     if (!listResult.success) {
       return res.status(400).json({ success: false, error: 'Could not list Gupshup templates', details: listResult.error });
     }
@@ -535,7 +895,8 @@ router.post('/sync-slots', authenticateToken, requireManager, setupMainDatabase,
     const pending = [];
     const unmatched = [];
 
-    for (const remote of extractTemplateList(listResult.data)) {
+    for (const raw of extractTemplateList(listResult.data)) {
+      const remote = normalizeGupshupTemplateRecord(raw);
       const elementName = remoteElementName(remote);
       const slotKey = slotByElementName.get(elementName);
       if (!slotKey) continue;
@@ -625,8 +986,9 @@ router.get('/from-gupshup', authenticateToken, setupMainDatabase, requireWabaAdd
   try {
     const businessId = await tenantBusinessObjectId(req, res);
     if (!businessId) return;
-    const appId = await resolveGupshupAppId(businessId);
-    const result = await gupshupWhatsApp.listTemplates({ appId });
+    const appCtx = await requireTenantGupshupAppId(businessId);
+    if (!appCtx.ok) return tenantAppRequiredResponse(res);
+    const result = await gupshupWhatsApp.listTemplates({ appId: appCtx.appId });
     if (!result.success) {
       return res.status(400).json({ success: false, error: result.error });
     }
@@ -642,8 +1004,9 @@ router.get('/from-meta', authenticateToken, setupMainDatabase, requireWabaAddon,
   try {
     const businessId = await tenantBusinessObjectId(req, res);
     if (!businessId) return;
-    const appId = await resolveGupshupAppId(businessId);
-    const result = await gupshupWhatsApp.listTemplates({ appId });
+    const appCtx = await requireTenantGupshupAppId(businessId);
+    if (!appCtx.ok) return tenantAppRequiredResponse(res);
+    const result = await gupshupWhatsApp.listTemplates({ appId: appCtx.appId });
     if (!result.success) {
       return res.status(400).json({ success: false, error: result.error });
     }
@@ -839,7 +1202,7 @@ router.post('/:id/submit', authenticateToken, requireManager, setupMainDatabase,
       return res.status(400).json({ success: false, error: `Cannot submit a template in status "${tpl.status}"` });
     }
 
-    const tenantApp = await resolveTenantConnectedGupshupAppId(businessId);
+    const tenantApp = await resolveTenantGupshupApp(businessId);
     if (!tenantApp.connected || !tenantApp.appId) {
       tpl.status = 'rejected';
       tpl.rejectionReason = TENANT_APP_REQUIRED_MSG;
@@ -864,12 +1227,69 @@ router.post('/:id/submit', authenticateToken, requireManager, setupMainDatabase,
       });
     }
 
-    const submission = await gupshupWhatsApp.applyTemplate({
+    const {
+      partnerApiPath,
+      submission,
+      remoteId,
+      errorMessage: submitErrMsg,
+    } = await submitTemplateForGupshupApproval({ appId: tenantApp.appId, templateDoc: tpl });
+    logger.info(
+      '[whatsapp-templates] Gupshup submit POST %s appId=%s sourceNumber=%s template=%s/%s',
+      partnerApiPath,
+      tenantApp.appId,
+      tenantApp.sourceNumber || '(unknown)',
+      tpl.name,
+      tpl.language
+    );
+    const gupshupMeta = {
       appId: tenantApp.appId,
-      fields: buildGupshupApplyFields(tpl),
-    });
+      sourceNumber: tenantApp.sourceNumber,
+      appName: tenantApp.appName,
+      partnerApi: `POST ${partnerApiPath}`,
+    };
     if (!submission.success) {
-      const errMsg = gupshupSubmissionErrorMessage(submission);
+      const errMsg = submitErrMsg || gupshupSubmissionErrorMessage(submission);
+
+      // Name already registered on this WABA (common after app switch or a prior
+      // submit) — link the existing remote row instead of failing outright.
+      if (isGupshupTemplateDuplicateError(errMsg)) {
+        const existing = await resolveTenantTemplateRemote({
+          appId: tenantApp.appId,
+          templateId: null,
+          elementName: tpl.name,
+          language: tpl.language,
+        });
+        if (existing.success) {
+          applyRemoteToLocal(tpl, existing.data);
+          tpl.submittedAt = tpl.submittedAt || new Date();
+          tpl.rejectionReason = null;
+          await tpl.save();
+
+          await logEvent({
+            businessId,
+            actorType: 'user',
+            actorId: req.user._id,
+            event: 'template_submit',
+            summary: `Linked existing Gupshup template ${tpl.name}/${tpl.language} (${tpl.status})`,
+            metadata: {
+              templateId: String(tpl._id),
+              gupshupTemplateId: tpl.gupshupTemplateId,
+              status: tpl.status,
+              linkedExisting: true,
+            },
+          });
+
+          return res.json({
+            success: true,
+            data: tpl,
+            gupshup: gupshupMeta,
+            linkedExisting: true,
+            message:
+              'Template already exists on your WhatsApp account — linked to the existing submission.',
+          });
+        }
+      }
+
       tpl.status = 'rejected';
       tpl.rejectionReason = errMsg;
       tpl.submittedAt = new Date();
@@ -891,14 +1311,10 @@ router.post('/:id/submit', authenticateToken, requireManager, setupMainDatabase,
         code: submission.code,
         details: typeof submission.error === 'object' && submission.error !== null ? submission.error : undefined,
         data: tpl,
+        gupshup: gupshupMeta,
       });
     }
 
-    const remoteId =
-      submission.data?.template?.id ||
-      submission.data?.id ||
-      submission.data?.templateId ||
-      null;
     tpl.gupshupTemplateId = remoteId ? String(remoteId) : tpl.gupshupTemplateId;
     tpl.metaTemplateId = tpl.gupshupTemplateId;
     const nextStatus = statusAfterGupshupApply(submission.data);
@@ -920,7 +1336,7 @@ router.post('/:id/submit', authenticateToken, requireManager, setupMainDatabase,
       metadata: { templateId: String(tpl._id), gupshupTemplateId: tpl.gupshupTemplateId, status: nextStatus },
     });
 
-    res.json({ success: true, data: tpl });
+    res.json({ success: true, data: tpl, gupshup: gupshupMeta });
   } catch (err) {
     logger.error('[whatsapp-templates] submit failed:', err);
     res.status(500).json({ success: false, error: 'Failed to submit template' });
@@ -937,21 +1353,31 @@ router.post('/:id/sync', authenticateToken, requireManager, setupMainDatabase, r
     if (!tpl.gupshupTemplateId && !tpl.metaTemplateId) {
       return res.status(400).json({ success: false, error: 'Template has not been submitted to Gupshup yet' });
     }
-    const appId = await resolveGupshupAppId(businessId);
+    const appCtx = await requireTenantGupshupAppId(businessId);
+    if (!appCtx.ok) return tenantAppRequiredResponse(res);
     const templateId = tpl.gupshupTemplateId || tpl.metaTemplateId;
-    const result = await gupshupWhatsApp.getTemplate({ appId, templateId });
-    if (!result.success) {
-      return res.status(400).json({ success: false, error: result.error });
-    }
-    applyRemoteToLocal(tpl, {
-      ...result.data,
-      id: result.data?.id || templateId,
-      status: result.data?.status || result.data?.templateStatus,
-      name: result.data?.elementName || result.data?.name || tpl.name,
+    const result = await resolveTenantTemplateRemote({
+      appId: appCtx.appId,
+      templateId,
+      elementName: tpl.name,
+      language: tpl.language,
     });
-    if (result.data?.id || templateId) {
-      tpl.gupshupTemplateId = String(result.data?.id || templateId);
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        error: gupshupApiErrorMessage(result.error),
+        code: result.code,
+      });
     }
+    applyRemoteToLocal(tpl, result.data);
+    if (result.staleIdReplaced) {
+      logger.info(
+        '[whatsapp-templates] sync replaced stale gupshupTemplateId for %s/%s',
+        tpl.name,
+        tpl.language
+      );
+    }
+    tpl.lastSyncedAt = new Date();
     await tpl.save();
     res.json({ success: true, data: tpl });
   } catch (err) {
@@ -965,8 +1391,9 @@ router.post('/sync-all', authenticateToken, requireManager, setupMainDatabase, r
     const businessId = await tenantBusinessObjectId(req, res);
     if (!businessId) return;
     const Template = await getModel();
-    const appId = await resolveGupshupAppId(businessId);
-    const result = await gupshupWhatsApp.listTemplates({ appId });
+    const appCtx = await requireTenantGupshupAppId(businessId);
+    if (!appCtx.ok) return tenantAppRequiredResponse(res);
+    const result = await gupshupWhatsApp.listTemplates({ appId: appCtx.appId });
     if (!result.success) {
       return res.status(400).json({ success: false, error: result.error });
     }
@@ -984,33 +1411,26 @@ router.post('/sync-all', authenticateToken, requireManager, setupMainDatabase, r
       };
       const existing = await Template.findOne(filter);
       if (existing) {
-        applyRemoteToLocal(existing, {
-          ...remote,
-          id: remote.id || remote.templateId,
-          status: remote.status || remote.templateStatus,
-          name: remote.elementName || remote.name,
-        });
-        if (remote.id || remote.templateId) {
-          existing.gupshupTemplateId = String(remote.id || remote.templateId);
-        }
+        applyRemoteToLocal(existing, remote);
         await existing.save();
         updated += 1;
       } else {
+        const normalized = normalizeGupshupTemplateRecord(remote);
         // Import new template (Meta-managed or admin-created in Meta Manager).
         const adapted = adaptComponentsFromMeta(remote.components) || {};
         const created = new Template({
           businessId,
-          name: remote.elementName || remote.name,
-          language: remote.language || remote.languageCode || 'en_US',
+          name: normalized.elementName || normalized.name || remote.elementName || remote.name,
+          language: normalized.language || remote.language || remote.languageCode || 'en_US',
           category: String(remote.category || 'UTILITY').toUpperCase(),
-          status: mapGupshupStatus(remote.status || remote.templateStatus) || 'pending',
-          gupshupTemplateId: String(remote.id || remote.templateId || ''),
-          metaTemplateId: String(remote.id || remote.templateId || ''),
-          metaTemplateName: remote.elementName || remote.name,
+          status: mapGupshupStatus(normalized.status) || 'pending',
+          gupshupTemplateId: String(normalized.id || remote.id || remote.templateId || ''),
+          metaTemplateId: String(normalized.id || remote.id || remote.templateId || ''),
+          metaTemplateName: normalized.elementName || normalized.name || remote.elementName || remote.name,
           components: adapted,
           submittedAt: new Date(),
           lastSyncedAt: new Date(),
-          approvedAt: mapGupshupStatus(remote.status || remote.templateStatus) === 'approved' ? new Date() : null,
+          approvedAt: mapGupshupStatus(normalized.status) === 'approved' ? new Date() : null,
           previousCategory: remote.previous_category
             ? String(remote.previous_category).toUpperCase()
             : null,

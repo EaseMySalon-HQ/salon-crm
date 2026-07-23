@@ -24,6 +24,35 @@ const { INTENTS } = require('../lib/whatsapp-intents');
 const { getComplianceState } = require('../lib/whatsapp-compliance');
 const { logger } = require('../utils/logger');
 
+/**
+ * After a test send, briefly tail the WhatsAppMessage row waiting for a
+ * webhook-driven status flip (queued → sent → delivered / failed). Returns the
+ * latest snapshot after `timeoutMs` regardless.
+ */
+async function tailMessageStatus({ messageId, timeoutMs = 6000, pollMs = 400 }) {
+  if (!messageId) return null;
+  const main = await databaseManager.getMainConnection();
+  const Message = main.model('WhatsAppMessage', require('../models/WhatsAppMessage').schema);
+  const stopAt = Date.now() + timeoutMs;
+  const terminal = new Set(['delivered', 'read', 'failed', 'deleted']);
+  let latest = null;
+  while (Date.now() < stopAt) {
+    latest = await Message.findById(messageId)
+      .select({
+        _id: 1,
+        status: 1,
+        failureCode: 1,
+        failureReason: 1,
+        providerMessageId: 1,
+        metaMessageId: 1,
+      })
+      .lean();
+    if (latest?.status && terminal.has(latest.status)) return latest;
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+  return latest;
+}
+
 async function getAccountModel() {
   const main = await databaseManager.getMainConnection();
   return main.model('WhatsAppAccount', require('../models/WhatsAppAccount').schema);
@@ -79,6 +108,7 @@ async function buildPublicStatusView(account, addons) {
     platformConfigured: platformAvailable,
     gupshupAppId: account?.gupshupAppId || null,
     gupshupAppName: account?.gupshupAppName || null,
+    wabaId: account?.wabaId || null,
     sourceNumber: ownAppConnected ? account?.sourceNumber || account?.phoneE164 : platform.source,
     displayName: account?.displayName || account?.gupshupAppName || null,
     qualityRating: account?.qualityRating || null,
@@ -167,6 +197,7 @@ router.post(
         data: {
           ...(await buildPublicStatusView(account, addons)),
           subscription: result.subscription,
+          templatesReset: result.templatesReset,
         },
       });
     } catch (err) {
@@ -213,13 +244,24 @@ router.post(
       if (!account?.gupshupAppId || account.status !== 'connected') {
         return res.status(400).json({ success: false, error: 'No connected Gupshup app to refresh' });
       }
-      const health = await gupshupWhatsApp.getWabaHealth({ appId: account.gupshupAppId });
-      const ratings = await gupshupWhatsApp.getRatings({ appId: account.gupshupAppId });
+      const [health, ratings, wabaInfo] = await Promise.all([
+        gupshupWhatsApp.getWabaHealth({ appId: account.gupshupAppId }),
+        gupshupWhatsApp.getRatings({ appId: account.gupshupAppId }),
+        gupshupWhatsApp.getWabaInfo({ appId: account.gupshupAppId }),
+      ]);
       if (ratings?.data) {
         account.qualityRating =
           ratings.data?.ratings?.quality || ratings.data?.quality || account.qualityRating;
         account.messagingLimitTier =
-          ratings.data?.ratings?.limit || ratings.data?.messagingLimit || account.messagingLimitTier;
+          ratings.data?.currentLimit ||
+          ratings.data?.ratings?.limit ||
+          ratings.data?.messagingLimit ||
+          account.messagingLimitTier;
+      }
+      if (wabaInfo.success && wabaInfo.data) {
+        if (wabaInfo.data.wabaId) account.wabaId = String(wabaInfo.data.wabaId);
+        if (wabaInfo.data.phoneId) account.phoneNumberId = String(wabaInfo.data.phoneId);
+        if (wabaInfo.data.verifiedName) account.displayName = String(wabaInfo.data.verifiedName);
       }
       account.lastSyncAt = new Date();
       if (!health.success) {
@@ -256,6 +298,58 @@ router.post(
           error: 'gupshupTemplateId is required for test sends',
         });
       }
+
+      // Test sends must go through the tenant's connected app — never fall
+      // back to the shared platform sender, because the template id belongs
+      // to the tenant's WABA and the platform app would silently reject it.
+      const account = await gupshupConfig.loadAccount(businessId);
+      if (!gupshupConfig.isBusinessAppUsable(account)) {
+        return res.status(400).json({
+          success: false,
+          error: gupshupConfig.TENANT_APP_REQUIRED_MSG,
+          code: 'WHATSAPP_APP_NOT_CONNECTED',
+        });
+      }
+      if (!account.gupshupAppName) {
+        return res.status(400).json({
+          success: false,
+          error:
+            'Gupshup app name is missing on this connection. Disconnect and reconnect with the exact App Name from Partner Portal (required as src.name for template sends).',
+          code: 'GUPSHUP_APP_NAME_MISSING',
+        });
+      }
+
+      // Verify the template is APPROVED on THIS app before spending a send.
+      // Local status alone is not enough — leftover Meta-era rows and PENDING
+      // templates both cause "submitted" API responses that never deliver.
+      const remote = await gupshupWhatsApp.getTemplate({
+        appId: account.gupshupAppId,
+        templateId: String(gupshupTemplateId).trim(),
+      });
+      if (!remote.success) {
+        return res.status(400).json({
+          success: false,
+          error:
+            'That template id is not on your connected Gupshup app. Open WhatsApp → Templates, Sync from Meta, and pick an APPROVED template.',
+          code: 'GUPSHUP_TEMPLATE_NOT_ON_APP',
+          details: remote.error,
+        });
+      }
+      const remoteTpl = remote.data?.template || remote.data || {};
+      const remoteStatus = String(remoteTpl.status || '').toUpperCase();
+      if (remoteStatus !== 'APPROVED') {
+        return res.status(400).json({
+          success: false,
+          error: `Template is "${remoteStatus || 'UNKNOWN'}" on Gupshup — only APPROVED templates can be sent. Wait for Meta approval or Sync from Meta.`,
+          code: 'TEMPLATE_NOT_APPROVED',
+          gupshup: {
+            appId: account.gupshupAppId,
+            templateStatus: remoteStatus || null,
+            elementName: remoteTpl.elementName || remoteTpl.name || null,
+          },
+        });
+      }
+
       const result = await sendWhatsApp({
         businessId,
         intent: INTENTS.WELCOME,
@@ -263,11 +357,67 @@ router.post(
         gupshupTemplateId,
         params,
         allowUnapproved: true,
+        requireTenantApp: true,
       });
       if (!result.success) {
-        return res.status(400).json({ success: false, error: result.error || 'Send failed' });
+        logger.warn(
+          '[whatsapp-gupshup] test-message failed business=%s appId=%s to=%s template=%s error=%s',
+          String(businessId),
+          account.gupshupAppId,
+          to,
+          gupshupTemplateId,
+          typeof result.error === 'string' ? result.error : JSON.stringify(result.error)
+        );
+        return res.status(400).json({
+          success: false,
+          error: result.error || 'Send failed',
+          code: result.code || undefined,
+          gupshup: {
+            appId: account.gupshupAppId,
+            sourceNumber: account.sourceNumber || account.phoneE164 || null,
+            appName: account.gupshupAppName || null,
+          },
+        });
       }
-      return res.json({ success: true, data: result.message });
+      // Wait up to 6s for a delivery/failed webhook so the tenant sees the
+      // real provider outcome instead of just "sent" (which only means
+      // Gupshup accepted the API call).
+      const final = await tailMessageStatus({
+        messageId: result.message?._id,
+        timeoutMs: 6000,
+      });
+      if (final?.status === 'failed') {
+        logger.warn(
+          '[whatsapp-gupshup] test-message provider marked failed business=%s to=%s code=%s reason=%s',
+          String(businessId),
+          to,
+          final.failureCode || '(none)',
+          final.failureReason || '(none)'
+        );
+        return res.status(400).json({
+          success: false,
+          error:
+            final.failureReason ||
+            `Provider marked the message as failed${final.failureCode ? ` (${final.failureCode})` : ''}`,
+          code: final.failureCode || 'PROVIDER_FAILED',
+          data: final,
+          gupshup: {
+            appId: account.gupshupAppId,
+            sourceNumber: account.sourceNumber || account.phoneE164 || null,
+            appName: account.gupshupAppName || null,
+          },
+        });
+      }
+      return res.json({
+        success: true,
+        data: final || result.message,
+        finalStatus: final?.status || result.message?.status || 'sent',
+        gupshup: {
+          appId: account.gupshupAppId,
+          sourceNumber: account.sourceNumber || account.phoneE164 || null,
+          appName: account.gupshupAppName || null,
+        },
+      });
     } catch (err) {
       logger.error('[whatsapp-gupshup] /test-message failed:', err);
       return res.status(500).json({ success: false, error: 'Test send failed' });

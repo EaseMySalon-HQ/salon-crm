@@ -1,8 +1,7 @@
 /**
- * Express middleware that gates the new Meta Cloud API ("WABA Integration")
- * module on the per-business `waba` add-on flag. Routes mounted with this
- * middleware return HTTP 403 unless `business.plan.addons.waba.enabled` is
- * true for the authenticated user's business.
+ * Gates Gupshup WABA features (templates, campaigns, inbox) on the per-business
+ * `waba` add-on flag. Routes mounted with this middleware return HTTP 403 unless
+ * `business.plan.addons.waba.enabled` is true for the authenticated user's business.
  *
  * Usage:
  *   const requireWabaAddon = require('../middleware/waba-addon');

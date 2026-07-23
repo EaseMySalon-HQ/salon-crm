@@ -4,7 +4,7 @@
  * Reports → Messages tab.
  *
  * Surfaces every WhatsApp message routed through the salon CRM with full
- * filtering and at-a-glance usage cards. Built on /whatsapp/v2/messages
+ * filtering and at-a-glance usage cards. Built on /whatsapp/gupshup/messages
  * which now joins client name, template name and campaign name server-side.
  *
  * Key decisions:

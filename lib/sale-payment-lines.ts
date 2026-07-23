@@ -9,6 +9,9 @@ export type SalePaymentSource = {
     amount?: number
     method?: string
   } | null>
+  paymentStatus?: {
+    lastPaymentDate?: string | Date | null
+  }
   loyaltyPointsRedeemed?: number
   loyaltyDiscountAmount?: number
 }
@@ -41,6 +44,14 @@ function parseSaleDate(d: SalePaymentSource["date"]): Date {
   if (d == null) return new Date()
   const x = d instanceof Date ? d : new Date(d)
   return Number.isNaN(x.getTime()) ? new Date() : x
+}
+
+function amountsMatch(a: number, b: number): boolean {
+  return Math.abs(Number(a) - Number(b)) < 0.01
+}
+
+function modesMatch(a: string, b: string): boolean {
+  return normalizePaymentModeLabel(a).toLowerCase() === normalizePaymentModeLabel(b).toLowerCase()
 }
 
 /** Normalize mode/type to a display label (Cash, Card, Online). */
@@ -102,7 +113,8 @@ export function buildSalePaymentModeFromCheckout(opts: {
 
 /**
  * Maps `payments` + `paymentHistory` into one line per payment with the date it was recorded.
- * Checkout rows without history use `sale.date`; due collections use `paymentHistory[].date`.
+ * Checkout rows without a history match use `sale.date`; due collections use `paymentHistory[].date`
+ * matched by amount + method (not array index alone).
  */
 export function getSalePaymentLinesWithDates(sale: SalePaymentSource): SalePaymentLine[] {
   const saleDate = parseSaleDate(sale.date)
@@ -131,39 +143,45 @@ export function getSalePaymentLinesWithDates(sale: SalePaymentSource): SalePayme
     }))
   }
 
-  if (history.length === 0) {
-    return payments.map((p) => ({ ...p, recordedAt: saleDate }))
+  const usedHistory = new Set<number>()
+  const matchHistoryDate = (payment: { mode: string; amount: number }): Date | null => {
+    for (let i = 0; i < history.length; i++) {
+      if (usedHistory.has(i)) continue
+      const ph = history[i]
+      const histAmount = Number(ph.amount ?? 0)
+      const histMode = normalizePaymentModeLabel(ph.method)
+      if (amountsMatch(histAmount, payment.amount) && modesMatch(histMode, payment.mode)) {
+        usedHistory.add(i)
+        return ph.date ? parseSaleDate(ph.date) : saleDate
+      }
+    }
+    return null
   }
 
-  if (history.length > payments.length) {
-    return history.map((ph, i) => ({
-      mode: payments[i]?.mode ?? normalizePaymentModeLabel(ph.method),
-      amount: Number(ph.amount ?? payments[i]?.amount ?? 0),
-      recordedAt: ph.date ? parseSaleDate(ph.date) : saleDate,
-    }))
-  }
+  const lastPaymentDateRaw = sale.paymentStatus?.lastPaymentDate
+  const lastPaymentDate =
+    lastPaymentDateRaw != null ? parseSaleDate(lastPaymentDateRaw) : null
+  const saleHasLaterPayment =
+    lastPaymentDate != null &&
+    Math.abs(lastPaymentDate.getTime() - saleDate.getTime()) > 60_000
 
-  const nCheckout = Math.max(0, payments.length - history.length)
-  const lines: SalePaymentLine[] = []
+  return payments.map((p, idx) => {
+    const fromHistory = matchHistoryDate(p)
+    if (fromHistory) return { ...p, recordedAt: fromHistory }
 
-  for (let i = 0; i < nCheckout; i++) {
-    const p = payments[i]
-    if (!p) break
-    lines.push({ ...p, recordedAt: saleDate })
-  }
+    // Legacy rows: due collected but paymentHistory missing — use last payment timestamp.
+    if (
+      idx === payments.length - 1 &&
+      payments.length > 1 &&
+      history.length === 0 &&
+      saleHasLaterPayment &&
+      lastPaymentDate
+    ) {
+      return { ...p, recordedAt: lastPaymentDate }
+    }
 
-  for (let j = 0; j < history.length; j++) {
-    const ph = history[j]
-    const pi = nCheckout + j
-    const p = payments[pi]
-    lines.push({
-      mode: p?.mode ?? normalizePaymentModeLabel(ph.method),
-      amount: Number(ph.amount ?? p?.amount ?? 0),
-      recordedAt: ph.date ? parseSaleDate(ph.date) : saleDate,
-    })
-  }
-
-  return lines
+    return { ...p, recordedAt: saleDate }
+  })
 }
 
 export function formatPaymentRecordedDateLabel(d: Date): string {

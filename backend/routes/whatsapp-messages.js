@@ -1,7 +1,9 @@
 /**
- * Reports endpoints powered by `WhatsAppMessage`.
+ * Gupshup WhatsApp message reports, tracking, and logs (WhatsAppMessage collection).
+ * Primary mount: /api/whatsapp/gupshup/messages
+ * Legacy alias:  /api/whatsapp/v2/messages — Reports → Messages tab.
  *
- * Mounted at /api/whatsapp/v2/messages — Reports → Messages tab.
+ * Endpoints: GET / (list), GET /usage, GET /tracking, GET /logs
  */
 
 'use strict';
@@ -13,6 +15,11 @@ const { authenticateToken } = require('../middleware/auth');
 const { setupMainDatabase } = require('../middleware/business-db');
 const { logger } = require('../utils/logger');
 const databaseManager = require('../config/database-manager');
+const {
+  buildMessageFilter,
+  aggregateBusinessTracking,
+  listMessageLogs,
+} = require('../lib/gupshup-message-analytics');
 
 async function getModels() {
   const main = await databaseManager.getMainConnection();
@@ -248,6 +255,75 @@ router.get('/usage', authenticateToken, setupMainDatabase, async (req, res) => {
   } catch (err) {
     logger.error('[whatsapp-messages] usage failed:', err);
     res.status(500).json({ success: false, error: 'Failed to compute usage' });
+  }
+});
+
+/** Tenant tracking summary (Gupshup WhatsAppMessage). */
+router.get('/tracking', authenticateToken, setupMainDatabase, async (req, res) => {
+  try {
+    const businessId = req.user.branchId;
+    if (!businessId) {
+      return res.status(400).json({ success: false, error: 'Business ID not found' });
+    }
+    const { dateFrom, dateTo } = req.query;
+    const data = await aggregateBusinessTracking({
+      businessId,
+      dateFrom,
+      dateTo,
+    });
+    res.json({ success: true, data });
+  } catch (err) {
+    logger.error('[whatsapp-messages] tracking failed:', err);
+    res.status(500).json({ success: false, error: 'Failed to fetch tracking data' });
+  }
+});
+
+/** Legacy alias — same as GET /tracking */
+router.get('/tracking/business', authenticateToken, setupMainDatabase, async (req, res) => {
+  try {
+    const businessId = req.user.branchId;
+    if (!businessId) {
+      return res.status(400).json({ success: false, error: 'Business ID not found' });
+    }
+    const { dateFrom, dateTo } = req.query;
+    const data = await aggregateBusinessTracking({
+      businessId,
+      dateFrom,
+      dateTo,
+    });
+    res.json({ success: true, data });
+  } catch (err) {
+    logger.error('[whatsapp-messages] tracking/business failed:', err);
+    res.status(500).json({ success: false, error: 'Failed to fetch tracking data' });
+  }
+});
+
+/** Paginated message logs (Gupshup WhatsAppMessage). */
+router.get('/logs', authenticateToken, setupMainDatabase, async (req, res) => {
+  try {
+    const { dateFrom, dateTo, status, messageType, businessId, page = 1, limit = 50 } = req.query;
+    const isAdmin = req.user.role === 'admin';
+    const scopedBusinessId =
+      isAdmin && businessId ? businessId : !isAdmin ? req.user.branchId : null;
+
+    const filter = buildMessageFilter({
+      businessId: scopedBusinessId || undefined,
+      dateFrom,
+      dateTo,
+      status,
+      messageType,
+    });
+
+    const data = await listMessageLogs({
+      filter,
+      page,
+      limit,
+      attachNames: Boolean(isAdmin),
+    });
+    res.json({ success: true, data });
+  } catch (err) {
+    logger.error('[whatsapp-messages] logs failed:', err);
+    res.status(500).json({ success: false, error: 'Failed to fetch message logs' });
   }
 });
 

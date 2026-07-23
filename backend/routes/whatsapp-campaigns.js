@@ -1,8 +1,9 @@
 /**
- * WhatsApp campaigns (Meta Cloud API).
- * Mounted at /api/whatsapp/v2/campaigns.
+ * Tenant Gupshup WhatsApp campaigns.
+ * Primary mount: /api/whatsapp/gupshup/campaigns
+ * Legacy alias:  /api/whatsapp/v2/campaigns
  *
- * Hard gates on send:
+ * Sends via Gupshup (connected salon app or shared platform app for marketing).
  *   - Gupshup must be available (connected salon app OR shared platform app)
  *   - Template must be approved with a Gupshup template id
  *   - Recipients filtered to whatsappConsent.optedIn === true

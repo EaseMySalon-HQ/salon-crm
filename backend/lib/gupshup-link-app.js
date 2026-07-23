@@ -9,6 +9,10 @@ const { encrypt } = require('./crypto');
 const gupshupAuth = require('./gupshup-auth');
 const gupshupWhatsApp = require('../services/gupshup-whatsapp-service');
 const { resolveGupshupWebhookUrl } = require('./public-backend-url');
+const {
+  resetBusinessWhatsAppTemplatesForNewApp,
+  shouldResetBusinessWhatsAppTemplatesOnAppLink,
+} = require('./business-whatsapp-template-config');
 const { logger } = require('../utils/logger');
 
 async function getAccountModel() {
@@ -53,6 +57,21 @@ async function linkGupshupApp({ businessId, appId, appName, sourceNumber }) {
   }
 
   const Account = await getAccountModel();
+  const previousAccount = await Account.findOne({ businessId }).lean();
+  const shouldResetTemplates = shouldResetBusinessWhatsAppTemplatesOnAppLink(previousAccount, {
+    appId,
+    sourceNumber,
+  });
+
+  const wabaInfo = await gupshupWhatsApp.getWabaInfo({ appId });
+  const wabaFields = {};
+  if (wabaInfo.success && wabaInfo.data) {
+    const w = wabaInfo.data;
+    if (w.wabaId) wabaFields.wabaId = String(w.wabaId);
+    if (w.phoneId) wabaFields.phoneNumberId = String(w.phoneId);
+    if (w.verifiedName) wabaFields.displayName = String(w.verifiedName);
+  }
+
   const account = await Account.findOneAndUpdate(
     { businessId },
     {
@@ -68,6 +87,7 @@ async function linkGupshupApp({ businessId, appId, appName, sourceNumber }) {
         connectedAt: new Date(),
         disconnectedAt: null,
         lastErrorMessage: null,
+        ...wabaFields,
       },
       $setOnInsert: { businessId },
     },
@@ -93,15 +113,31 @@ async function linkGupshupApp({ businessId, appId, appName, sourceNumber }) {
     logger.warn('[gupshup-link] app linked but subscription failed:', subscription);
   }
 
+  let templatesReset = null;
+  if (shouldResetTemplates) {
+    try {
+      templatesReset = await resetBusinessWhatsAppTemplatesForNewApp(businessId);
+      logger.info(
+        '[gupshup-link] reset WhatsApp templates after app link business=%s templates=%s',
+        String(businessId),
+        templatesReset.templatesReset
+      );
+    } catch (err) {
+      logger.warn('[gupshup-link] template reset failed:', err?.message || err);
+    }
+  }
+
   return {
     success: true,
     account,
     subscription,
+    templatesReset,
   };
 }
 
 async function unlinkGupshupApp(businessId) {
   const Account = await getAccountModel();
+  const previousAccount = await Account.findOne({ businessId }).lean();
   await Account.updateOne(
     { businessId, provider: 'gupshup' },
     {
@@ -112,7 +148,22 @@ async function unlinkGupshupApp(businessId) {
       },
     }
   );
-  return { success: true };
+
+  let templatesReset = null;
+  if (previousAccount?.gupshupAppId || previousAccount?.provider === 'gupshup') {
+    try {
+      templatesReset = await resetBusinessWhatsAppTemplatesForNewApp(businessId);
+      logger.info(
+        '[gupshup-link] reset WhatsApp templates after unlink business=%s templates=%s',
+        String(businessId),
+        templatesReset.templatesReset
+      );
+    } catch (err) {
+      logger.warn('[gupshup-link] template reset on unlink failed:', err?.message || err);
+    }
+  }
+
+  return { success: true, templatesReset };
 }
 
 module.exports = { linkGupshupApp, unlinkGupshupApp, resolveWebhookUrl };
