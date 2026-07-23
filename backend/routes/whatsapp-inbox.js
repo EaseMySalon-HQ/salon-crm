@@ -1,7 +1,9 @@
 /**
- * Inbox endpoints — list conversations + read thread + reply + consent override.
+ * Gupshup WhatsApp inbox — conversations, thread, reply, consent.
+ * Primary mount: /api/whatsapp/gupshup/inbox
+ * Legacy alias:  /api/whatsapp/v2/inbox
  *
- * Mounted at /api/whatsapp/v2/inbox. All routes are gated by:
+ * All routes are gated by:
  *   1. authenticateToken     — staff-or-above session
  *   2. requireWabaAddon      — business must have the `waba` add-on enabled
  *   3. requireTenantGupshupApp — tenant must have their own Gupshup app connected
@@ -61,6 +63,94 @@ async function getTenantClientModel(businessId) {
   const main = await databaseManager.getMainConnection();
   const tenant = await databaseManager.getConnection(String(businessId), main);
   return tenant.model('Client', require('../models/Client').schema);
+}
+
+/**
+ * Fill missing outbound display fields (bodyPreview / templateName) from the
+ * local WhatsAppTemplate catalog so inbox bubbles show real content instead of
+ * "(message)" for older rows that only stored a null templateName.
+ */
+async function enrichOutboundMessageDisplay(messages, businessId) {
+  if (!Array.isArray(messages) || messages.length === 0) return messages;
+  const needs = messages.filter(
+    (m) =>
+      m.direction === 'outbound' &&
+      !m.payload?.serviceText &&
+      !m.payload?.bodyPreview &&
+      (m.payload?.gupshupTemplateId || m.payload?.templateName || m.templateId)
+  );
+  if (!needs.length) {
+    // Still attach a soft displayText for rows with nothing to join on.
+    return messages.map((m) => ({
+      ...m,
+      displayText: outboundDisplayText(m),
+    }));
+  }
+
+  const { Template } = await getMainModels();
+  const gupshupIds = [
+    ...new Set(needs.map((m) => m.payload?.gupshupTemplateId).filter(Boolean).map(String)),
+  ];
+  const names = [
+    ...new Set(needs.map((m) => m.payload?.templateName).filter(Boolean).map(String)),
+  ];
+  const templateObjectIds = needs.map((m) => m.templateId).filter(Boolean);
+
+  const or = [];
+  if (gupshupIds.length) or.push({ gupshupTemplateId: { $in: gupshupIds } });
+  if (names.length) or.push({ name: { $in: names } });
+  if (templateObjectIds.length) or.push({ _id: { $in: templateObjectIds } });
+
+  const templates = or.length
+    ? await Template.find({ businessId, $or: or })
+        .select('name gupshupTemplateId components.body.text')
+        .lean()
+    : [];
+
+  const byGupshupId = new Map();
+  const byName = new Map();
+  const byId = new Map();
+  for (const t of templates) {
+    if (t.gupshupTemplateId) byGupshupId.set(String(t.gupshupTemplateId), t);
+    if (t.name) byName.set(String(t.name), t);
+    byId.set(String(t._id), t);
+  }
+
+  return messages.map((m) => {
+    if (m.direction !== 'outbound') {
+      return { ...m, displayText: m.inboundText || null };
+    }
+    const payload = m.payload && typeof m.payload === 'object' ? { ...m.payload } : {};
+    if (!payload.bodyPreview && !payload.serviceText) {
+      const tpl =
+        (payload.gupshupTemplateId && byGupshupId.get(String(payload.gupshupTemplateId))) ||
+        (m.templateId && byId.get(String(m.templateId))) ||
+        (payload.templateName && byName.get(String(payload.templateName))) ||
+        null;
+      if (tpl) {
+        if (!payload.templateName) payload.templateName = tpl.name || null;
+        if (!payload.gupshupTemplateId && tpl.gupshupTemplateId) {
+          payload.gupshupTemplateId = tpl.gupshupTemplateId;
+        }
+        if (tpl.components?.body?.text) {
+          payload.bodyPreview = String(tpl.components.body.text);
+        }
+      }
+    }
+    const next = { ...m, payload };
+    return { ...next, displayText: outboundDisplayText(next) };
+  });
+}
+
+function outboundDisplayText(m) {
+  if (m.direction === 'inbound') return m.inboundText || null;
+  const p = m.payload || {};
+  if (p.serviceText) return String(p.serviceText);
+  if (p.bodyPreview) return String(p.bodyPreview);
+  if (p.templateName) return String(p.templateName);
+  if (m.intent) return `Template · ${String(m.intent).replace(/_/g, ' ')}`;
+  if (m.category) return `${String(m.category)} message`;
+  return null;
 }
 
 /**
@@ -243,6 +333,10 @@ router.get(
         .limit(200)
         .lean();
 
+      // Enrich outbound template bubbles that were persisted without body text
+      // (e.g. early test sends that only stored a null templateName).
+      const enrichedMessages = await enrichOutboundMessageDisplay(messages, businessId);
+
       if (conv.unreadCount && conv.unreadCount > 0) {
         await Conversation.updateOne({ _id: conv._id }, { $set: { unreadCount: 0 } });
       }
@@ -254,7 +348,7 @@ router.get(
         success: true,
         data: {
           conversation: decorated,
-          messages,
+          messages: enrichedMessages,
         },
       });
     } catch (err) {

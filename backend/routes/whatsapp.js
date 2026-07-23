@@ -1,3 +1,11 @@
+/**
+ * MSG91 WhatsApp legacy routes (admin test, tracking, logs, client-panel templates).
+ * Primary mount: /api/whatsapp/msg91
+ * Legacy alias:  /api/whatsapp (Meta-era root; same router)
+ *
+ * Gupshup WABA features use /api/whatsapp/gupshup/* instead.
+ */
+
 const express = require('express');
 const { logger } = require('../utils/logger');
 const router = express.Router();
@@ -8,7 +16,7 @@ const whatsappService = require('../services/whatsapp-service');
 const databaseManager = require('../config/database-manager');
 
 /**
- * GET /api/whatsapp/health
+ * GET /api/whatsapp/msg91/health (alias /api/whatsapp/health)
  * Health check for WhatsApp routes
  */
 router.get('/health', (req, res) => {
@@ -20,7 +28,7 @@ router.get('/health', (req, res) => {
 });
 
 /**
- * POST /api/whatsapp/test
+ * POST /api/whatsapp/msg91/test (alias /api/whatsapp/test)
  * Test WhatsApp connection (admin only)
  */
 router.post('/test', authenticateAdmin, setupMainDatabase, async (req, res) => {
@@ -47,7 +55,7 @@ router.post('/test', authenticateAdmin, setupMainDatabase, async (req, res) => {
 });
 
 /**
- * GET /api/whatsapp/tracking/admin
+ * GET /api/whatsapp/msg91/tracking/admin
  * Get admin-level WhatsApp analytics (all businesses)
  */
 router.get('/tracking/admin', authenticateAdmin, setupMainDatabase, async (req, res) => {
@@ -133,7 +141,7 @@ router.get('/tracking/admin', authenticateAdmin, setupMainDatabase, async (req, 
 });
 
 /**
- * GET /api/whatsapp/tracking/business
+ * GET /api/whatsapp/msg91/tracking/business
  * Get business-level WhatsApp analytics
  */
 router.get('/tracking/business', authenticateToken, setupMainDatabase, setupBusinessDatabase, async (req, res) => {
@@ -215,7 +223,7 @@ router.get('/tracking/business', authenticateToken, setupMainDatabase, setupBusi
 });
 
 /**
- * GET /api/whatsapp/logs
+ * GET /api/whatsapp/msg91/logs
  * Get message logs with filters
  */
 router.get('/logs', authenticateToken, setupMainDatabase, async (req, res) => {

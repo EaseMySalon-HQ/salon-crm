@@ -1,6 +1,17 @@
 'use strict';
 
+const mongoose = require('mongoose');
 const databaseManager = require('../config/database-manager');
+
+function normalizeCampaignId(campaignId) {
+  if (!campaignId) return null;
+  if (campaignId instanceof mongoose.Types.ObjectId) return campaignId;
+  try {
+    return new mongoose.Types.ObjectId(String(campaignId));
+  } catch {
+    return String(campaignId);
+  }
+}
 
 async function getReportModels() {
   const main = await databaseManager.getMainConnection();
@@ -36,9 +47,12 @@ function durationMs(start, end) {
 
 async function aggregateMessageCounts(campaignId) {
   const { Message } = await getReportModels();
+  const normalizedCampaignId = normalizeCampaignId(campaignId);
   const match = {
     direction: 'outbound',
-    ...(campaignId ? { campaignId } : { campaignId: { $ne: null } }),
+    ...(normalizedCampaignId
+      ? { campaignId: normalizedCampaignId }
+      : { campaignId: { $ne: null } }),
   };
   const rows = await Message.aggregate([
     { $match: match },
@@ -88,7 +102,7 @@ async function reconcileCampaignCounts(campaignId) {
 
 /** Batch aggregate for campaign list screens. */
 async function aggregateMessageCountsForCampaigns(campaignIds) {
-  const ids = (campaignIds || []).filter(Boolean);
+  const ids = (campaignIds || []).filter(Boolean).map((id) => normalizeCampaignId(id));
   const empty = { queued: 0, sent: 0, delivered: 0, read: 0, failed: 0 };
   if (!ids.length) return new Map();
 
@@ -123,10 +137,11 @@ async function aggregateMessageCountsForCampaigns(campaignIds) {
 
 async function topFailureReasons(campaignId, limit = 5) {
   const { Message } = await getReportModels();
+  const normalizedCampaignId = normalizeCampaignId(campaignId);
   return Message.aggregate([
     {
       $match: {
-        campaignId,
+        campaignId: normalizedCampaignId,
         direction: 'outbound',
         status: 'failed',
         failureReason: { $exists: true, $nin: [null, ''] },

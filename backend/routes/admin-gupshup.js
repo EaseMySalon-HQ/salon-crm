@@ -22,12 +22,14 @@ const gupshupConfig = require('../lib/gupshup-config');
 const gupshupWhatsApp = require('../services/gupshup-whatsapp-service');
 const { resolveGupshupWebhookUrl, normalizeGupshupWebhookUrl } = require('../lib/public-backend-url');
 const { linkGupshupApp, unlinkGupshupApp } = require('../lib/gupshup-link-app');
+const { reconcileAllSubscriptions } = require('../lib/gupshup-subscription-reconcile');
 const {
   buildGupshupApplyFields,
   extractTemplateList,
   remoteElementName,
   remoteTemplateId,
   remoteTemplateStatus,
+  normalizeGupshupTemplateRecord,
 } = require('../lib/gupshup-template-apply-fields');
 const {
   PLATFORM_TEMPLATE_CATALOG,
@@ -38,8 +40,20 @@ const {
 const {
   buildVariableMappingForSlot,
 } = require('../lib/platform-template-variable-mapping');
-const { whatsappTemplateBodySchema } = require('../validation/schemas');
-const { logger } = require('../utils/logger');
+const {
+  whatsappTemplateBodySchema,
+  whatsappTemplateHeaderMediaUploadSchema,
+} = require('../validation/schemas');
+const {
+  parseHeaderMediaUploadInput,
+  saveWhatsappTemplateHeaderMedia,
+} = require('../lib/whatsapp-template-header-media');
+const { buildGupshupMessageEnvelope } = require('../lib/platform-template-send-payload');
+
+function firstZodMessage(error, fallback) {
+  const list = (error && (error.issues || error.errors)) || [];
+  return list[0]?.message || fallback;
+}
 
 router.use(authenticateAdmin, setupMainDatabase);
 
@@ -282,9 +296,13 @@ router.put('/config', checkAdminPermission('settings', 'update'), async (req, re
       gupshupAuth.invalidateCache();
     }
 
+    const previousWebhookUrl = String(wa.gupshupWebhookUrl || '').trim();
+    let webhookUrlChanged = false;
     if (gupshupWebhookUrl != null) {
       const trimmed = String(gupshupWebhookUrl).trim();
-      wa.gupshupWebhookUrl = trimmed ? normalizeGupshupWebhookUrl(trimmed) : '';
+      const nextWebhookUrl = trimmed ? normalizeGupshupWebhookUrl(trimmed) : '';
+      webhookUrlChanged = nextWebhookUrl !== previousWebhookUrl;
+      wa.gupshupWebhookUrl = nextWebhookUrl;
     }
     if (gupshupAppId != null) {
       const nextAppId = String(gupshupAppId).trim();
@@ -309,6 +327,26 @@ router.put('/config', checkAdminPermission('settings', 'update'), async (req, re
       });
     }
     const webhook = resolveGupshupWebhookUrl({ adminWebhookUrl: wa.gupshupWebhookUrl });
+
+    // If the admin changed the webhook URL (typically a rotated Cloudflare
+    // tunnel), push it out to every connected Gupshup app so their
+    // subscription no longer points at a dead host. Non-blocking failure —
+    // we still return the saved config; admins can retry from the UI.
+    let subscriptionReconcile = null;
+    if (webhookUrlChanged && partnerConfigured) {
+      try {
+        subscriptionReconcile = await reconcileAllSubscriptions({
+          adminWebhookUrl: wa.gupshupWebhookUrl,
+        });
+      } catch (err) {
+        logger.warn(
+          '[admin-gupshup] subscription reconcile after config save failed:',
+          err?.message || err
+        );
+        subscriptionReconcile = { error: err?.message || 'reconcile failed' };
+      }
+    }
+
     const partnerSource = gupshupAuth.hasPartnerCredentials()
       ? 'env'
       : wa.gupshupPartnerEmail && wa.gupshupClientSecretCipher
@@ -335,11 +373,27 @@ router.put('/config', checkAdminPermission('settings', 'update'), async (req, re
         webhookUrl: webhook.url,
         webhookSource: webhook.source,
         gupshupWebhookUrl: wa.gupshupWebhookUrl,
+        subscriptionReconcile,
       },
     });
   } catch (err) {
     logger.error('[admin-gupshup] config save failed:', err?.message || err);
     return res.status(500).json({ success: false, error: 'Failed to save Gupshup config' });
+  }
+});
+
+/**
+ * Force-refresh every connected app's Gupshup subscription so it points at
+ * our currently-resolved public webhook URL. Idempotent and safe to call
+ * whenever a tunnel URL rotates without changing the admin setting.
+ */
+router.post('/webhook/reconcile', checkAdminPermission('settings', 'update'), async (_req, res) => {
+  try {
+    const result = await reconcileAllSubscriptions();
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    logger.error('[admin-gupshup] webhook reconcile failed:', err?.message || err);
+    return res.status(500).json({ success: false, error: err?.message || 'Failed to reconcile' });
   }
 });
 
@@ -592,6 +646,18 @@ function mapRemoteStatus(remoteStatus) {
 
 function sanitizeComponents(components) {
   if (!components || typeof components !== 'object') return {};
+
+  let header = null;
+  const h = components.header;
+  if (h != null && typeof h === 'object') {
+    const format = h.format ?? null;
+    const text = h.text ?? null;
+    const mediaSampleUrl = h.mediaSampleUrl ?? null;
+    if (format || text || mediaSampleUrl) {
+      header = { format, text, mediaSampleUrl };
+    }
+  }
+
   const b = components.body;
   const body =
     b && typeof b === 'object' && typeof b.text === 'string'
@@ -613,7 +679,7 @@ function sanitizeComponents(components) {
         urlExample: btn.urlExample ?? null,
       }))
     : [];
-  return { body, header: null, footer, buttons };
+  return { header, body, footer, buttons };
 }
 
 /** Platform Template Manager — local drafts + Gupshup API submit/sync. */
@@ -642,6 +708,44 @@ router.get('/platform-templates', checkAdminPermission('settings', 'view'), asyn
   }
 });
 
+router.post(
+  '/platform-templates/upload-header-media',
+  checkAdminPermission('settings', 'update'),
+  async (req, res) => {
+    try {
+      const parsed = whatsappTemplateHeaderMediaUploadSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          success: false,
+          error: firstZodMessage(parsed.error, 'Invalid payload'),
+        });
+      }
+
+      const decoded = parseHeaderMediaUploadInput(parsed.data.media, {
+        format: parsed.data.format,
+        contentType: parsed.data.contentType,
+      });
+      if (decoded.error) {
+        return res.status(400).json({ success: false, error: decoded.error });
+      }
+
+      const saved = saveWhatsappTemplateHeaderMedia({
+        businessId: 'platform',
+        buffer: decoded.buffer,
+        ext: decoded.ext,
+      });
+      if (saved.error) {
+        return res.status(400).json({ success: false, error: saved.error });
+      }
+
+      return res.json({ success: true, data: { url: saved.url } });
+    } catch (err) {
+      logger.error('[admin-gupshup] platform upload-header-media failed:', err?.message || err);
+      return res.status(500).json({ success: false, error: 'Failed to upload header media' });
+    }
+  }
+);
+
 router.post('/platform-templates', checkAdminPermission('settings', 'update'), async (req, res) => {
   try {
     const parsed = whatsappTemplateBodySchema.safeParse(req.body);
@@ -650,6 +754,10 @@ router.post('/platform-templates', checkAdminPermission('settings', 'update'), a
     }
     const { name, language = 'en_US', category, components = {} } = parsed.data;
     const slotKey = req.body?.slotKey ? String(req.body.slotKey).trim() : null;
+    const publishedToTenantLibrary =
+      req.body?.publishedToTenantLibrary === undefined
+        ? true
+        : Boolean(req.body.publishedToTenantLibrary);
     const Template = await getPlatformTemplateModel();
     const created = await Template.create({
       name,
@@ -658,6 +766,7 @@ router.post('/platform-templates', checkAdminPermission('settings', 'update'), a
       slotKey: slotKey || null,
       components: sanitizeComponents(components),
       status: 'draft',
+      publishedToTenantLibrary,
       createdBy: req.admin?._id || null,
     });
     return res.status(201).json({ success: true, data: created });
@@ -690,11 +799,34 @@ router.put('/platform-templates/:id', checkAdminPermission('settings', 'update')
     if (req.body?.slotKey !== undefined) {
       tpl.slotKey = req.body.slotKey ? String(req.body.slotKey).trim() : null;
     }
+    if (req.body?.publishedToTenantLibrary !== undefined) {
+      tpl.publishedToTenantLibrary = Boolean(req.body.publishedToTenantLibrary);
+    }
     await tpl.save();
     return res.json({ success: true, data: tpl });
   } catch (err) {
     logger.error('[admin-gupshup] platform-template update failed:', err?.message || err);
     return res.status(500).json({ success: false, error: 'Failed to update template' });
+  }
+});
+
+router.put('/platform-templates/:id/publish', checkAdminPermission('settings', 'update'), async (req, res) => {
+  try {
+    const Template = await getPlatformTemplateModel();
+    const tpl = await Template.findById(req.params.id);
+    if (!tpl) return res.status(404).json({ success: false, error: 'Template not found' });
+    if (tpl.status !== 'approved') {
+      return res.status(400).json({
+        success: false,
+        error: 'Only approved templates can be published to the tenant library catalog',
+      });
+    }
+    tpl.publishedToTenantLibrary = Boolean(req.body?.publishedToTenantLibrary);
+    await tpl.save();
+    return res.json({ success: true, data: tpl });
+  } catch (err) {
+    logger.error('[admin-gupshup] platform-template publish failed:', err?.message || err);
+    return res.status(500).json({ success: false, error: 'Failed to update library visibility' });
   }
 });
 
@@ -805,7 +937,7 @@ router.post('/platform-templates/:id/sync', checkAdminPermission('settings', 'up
     if (!result.success) {
       return res.status(400).json({ success: false, error: result.error || 'Sync failed' });
     }
-    const remote = result.data?.template || result.data || {};
+    const remote = normalizeGupshupTemplateRecord(result.data);
     const mapped = mapRemoteStatus(remote.status || remote.templateStatus);
     if (mapped) {
       tpl.status = mapped;
@@ -894,11 +1026,20 @@ router.post('/platform-templates/:id/test', checkAdminPermission('settings', 'up
       });
     }
 
+    const messageEnvelope = buildGupshupMessageEnvelope(tpl);
+    if (messageEnvelope === null) {
+      return res.status(400).json({
+        success: false,
+        error: 'Template header media URL is missing. Upload or paste a public sample URL.',
+      });
+    }
+
     const result = await gupshupWhatsApp.sendTemplate({
       businessId: null,
       to: phone,
       templateId: tpl.gupshupTemplateId,
       params: sendParams,
+      message: messageEnvelope,
     });
     if (!result.success) {
       const errMsg =
@@ -1029,6 +1170,7 @@ router.post('/link', checkAdminPermission('settings', 'update'), async (req, res
         sourceNumber: account.sourceNumber,
         status: account.status,
         subscription: result.subscription,
+        templatesReset: result.templatesReset,
       },
     });
   } catch (err) {
@@ -1063,6 +1205,20 @@ router.get('/status/:businessId', checkAdminPermission('settings', 'view'), asyn
   } catch (err) {
     logger.error('[admin-gupshup] status failed:', err?.message || err);
     return res.status(500).json({ success: false, error: 'Failed to load status' });
+  }
+});
+
+/** Platform-wide Gupshup message tracking for admin dashboard. */
+router.get('/messages/tracking', checkAdminPermission('settings', 'view'), async (req, res) => {
+  try {
+    const { aggregateAdminTracking, attachBusinessNames } = require('../lib/gupshup-message-analytics');
+    const { dateFrom, dateTo } = req.query;
+    const summary = await aggregateAdminTracking({ dateFrom, dateTo });
+    summary.businessStats = await attachBusinessNames(summary.businessStats);
+    return res.json({ success: true, data: summary });
+  } catch (err) {
+    logger.error('[admin-gupshup] messages/tracking failed:', err?.message || err);
+    return res.status(500).json({ success: false, error: 'Failed to fetch tracking data' });
   }
 });
 

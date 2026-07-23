@@ -137,6 +137,8 @@ export type SiteProduct = {
   imageUrl: string
   imageAlt: string
   isFeatured: boolean
+  /** Max quantity allowed in cart (from backend availability; never shown as stock count). */
+  maxQuantity: number
   seoTitle?: string
   seoDescription?: string
 }
@@ -268,6 +270,29 @@ export async function fetchSiteOffers(slug: string) {
 export async function fetchSiteReviews(slug: string) {
   const data = await siteFetch<{ reviews: SiteReview[] }>(slug, '/reviews')
   return data.reviews || []
+}
+
+export type ProductFulfillmentType = 'delivery' | 'pickup'
+
+export async function submitSiteProductRequest(
+  slug: string,
+  body: {
+    fulfillmentType: ProductFulfillmentType
+    name: string
+    phone: string
+    email?: string
+    deliveryAddress?: string
+    preferredPickupSlot?: string
+    message?: string
+    items: Array<{ productId: string; quantity?: number }>
+    customFields?: Record<string, string>
+    website?: string
+  }
+) {
+  return siteFetch<{ received: boolean }>(slug, '/product-request', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
 }
 
 export async function submitSiteEnquiry(

@@ -1,6 +1,5 @@
 'use client'
 
-import Link from 'next/link'
 import { useMemo, useState } from 'react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -11,11 +10,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { formatInr, type SiteProduct } from '@/lib/public-site-api'
+import { type SiteProduct } from '@/lib/public-site-api'
 import { ST } from '@/lib/mini-site-theme'
-import { miniSiteBasePath } from '@/lib/mini-site-path'
 import { cn } from '@/lib/utils'
 import { Search } from 'lucide-react'
+import { ProductCard } from '@/components/mini-site/product-card'
 
 function uncategorized(category: string | undefined) {
   const c = String(category || '').trim()
@@ -109,53 +108,23 @@ export function ProductsCatalog({
 
       {total === 0 ? (
         <p className={cn('py-8', ST.textMuted)}>
-          {search || category !== 'all' ? 'No products match your search.' : 'No public products yet.'}
+          {search || category !== 'all' ? 'No products match your search.' : 'No products available right now.'}
         </p>
       ) : (
         <div className="space-y-10">
           {byCategory.map(([cat, items]) => (
             <section key={cat}>
               <h2 className={ST.categoryHeading}>{cat}</h2>
-              <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="mt-4 grid items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 {items.map((p) => (
-                  <article key={p.id} className={cn('overflow-hidden transition hover:shadow-md', ST.card)}>
-                    {showImages ? (
-                      p.imageUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={p.imageUrl}
-                          alt={p.imageAlt || p.name}
-                          className="h-40 w-full object-cover"
-                        />
-                      ) : (
-                        <div className={cn('flex h-40 items-center justify-center text-sm', ST.imagePlaceholder)}>
-                          {cat}
-                        </div>
-                      )
-                    ) : null}
-                    <div className="p-4">
-                      <h3 className={cn('font-medium', ST.textPrimary)}>
-                        <Link
-                          href={miniSiteBasePath(slug, `products/${p.slug}`)}
-                          className={ST.hoverLinkTitle}
-                        >
-                          {p.name}
-                        </Link>
-                      </h3>
-                      <p className={cn('mt-1 line-clamp-2 text-sm', ST.textMuted)}>
-                        {p.shortDescription || p.description}
-                      </p>
-                      {showPrices && p.price != null ? (
-                        <p className={cn('mt-2 font-semibold', ST.textPrimary)}>{formatInr(p.price)}</p>
-                      ) : null}
-                      <Link
-                        href={miniSiteBasePath(slug, `enquiry/product?id=${encodeURIComponent(p.id)}`)}
-                        className={`mt-3 inline-block text-sm ${ST.link}`}
-                      >
-                        Enquire
-                      </Link>
-                    </div>
-                  </article>
+                  <ProductCard
+                    key={p.id}
+                    slug={slug}
+                    product={p}
+                    showPrices={showPrices}
+                    showImages={showImages}
+                    categoryLabel={cat}
+                  />
                 ))}
               </div>
             </section>

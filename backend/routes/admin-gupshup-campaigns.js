@@ -63,6 +63,14 @@ router.post('/', checkAdminPermission('settings', 'update'), async (req, res) =>
   }
 });
 
+router.get('/limits', checkAdminPermission('settings', 'view'), async (_req, res) => {
+  return res.json({
+    success: true,
+    data: { maxRecipients: MAX_RECIPIENTS },
+  });
+});
+
+/** @deprecated use GET /limits */
 router.get('/meta/limits', checkAdminPermission('settings', 'view'), async (_req, res) => {
   return res.json({
     success: true,

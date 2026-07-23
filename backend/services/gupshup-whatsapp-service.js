@@ -57,6 +57,18 @@ async function resolveSendSender(businessId, { requireBusinessSender = false } =
   return gupshupConfig.resolveSender(businessId);
 }
 
+/** POST with a live app token (refreshes on 401/403; persists platform tokens). */
+async function postWithAppToken(sender, body, { json = false, timeout = 15000 } = {}) {
+  return gupshupAuth.withAppToken(sender.appId, async (token) => {
+    if (sender.scope === 'platform') {
+      await gupshupConfig.persistPlatformAppToken(sender.appId, token);
+    }
+    const headers = json ? jsonHeaders(token) : formHeaders(token);
+    const { data } = await axios.post(body.url, body.payload, { headers, timeout });
+    return data;
+  });
+}
+
 /**
  * Send a session (free-form) text message. Only valid inside an open 24h
  * customer service window — the pipeline enforces that before calling.
@@ -83,26 +95,9 @@ async function sendText({ businessId, to, body, previewUrl = false, requireBusin
     text: { body: body || '', preview_url: Boolean(previewUrl) },
   };
   try {
-    const { data } = await axios.post(url, payload, {
-      headers: jsonHeaders(sender.appToken),
-      timeout: 15000,
-    });
+    const data = await postWithAppToken(sender, { url, payload }, { json: true });
     return { success: true, data, messageId: extractMessageId(data) };
   } catch (err) {
-    const status = err?.response?.status;
-    if ((status === 401 || status === 403)) {
-      // Refresh token once and retry.
-      try {
-        const token = await gupshupAuth.getAppToken(sender.appId, { forceRefresh: true });
-        if (sender.scope === 'platform') {
-          await gupshupConfig.persistPlatformAppToken(sender.appId, token);
-        }
-        const { data } = await axios.post(url, payload, { headers: jsonHeaders(token), timeout: 15000 });
-        return { success: true, data, messageId: extractMessageId(data) };
-      } catch (retryErr) {
-        return failure('sendText', retryErr);
-      }
-    }
     return failure('sendText', err);
   }
 }
@@ -144,16 +139,28 @@ async function sendTemplate({
   if (!sender.source) {
     return { success: false, error: 'Gupshup sender number not configured', code: 'GUPSHUP_SOURCE_MISSING' };
   }
+  if (!sender.appName) {
+    // Partner docs require src.name for template/msg — without it Gupshup may
+    // still return status=submitted but Meta never delivers the message.
+    return {
+      success: false,
+      error: 'Gupshup app name (src.name) is required for template sends. Reconnect the app with its App Name from Partner Portal.',
+      code: 'GUPSHUP_APP_NAME_MISSING',
+    };
+  }
   const url = `${appBase(sender.appId)}/template/msg`;
 
   const buildForm = () => {
     const form = new URLSearchParams();
+    // Partner docs: source, destination, src.name, appId, template, message are required.
+    form.set('appId', String(sender.appId));
     form.set('source', sender.source);
-    if (sender.appName) form.set('src.name', sender.appName);
+    form.set('src.name', String(sender.appName));
     form.set('destination', to);
     form.set('template', JSON.stringify({ id: templateId, params: (params || []).map((p) => String(p ?? '')) }));
     form.set('channel', 'whatsapp');
     // Gupshup text-template send expects a `message` JSON envelope (Partner docs).
+    // Empty text is accepted for pure template bodies; keep the type envelope.
     form.set(
       'message',
       JSON.stringify(
@@ -170,30 +177,29 @@ async function sendTemplate({
   };
 
   try {
-    const { data } = await axios.post(url, buildForm(), {
-      headers: formHeaders(sender.appToken),
-      timeout: 15000,
-    });
-    // Gupshup returns {status:'submitted', messageId}; treat non-error as success.
+    let data = await postWithAppToken(sender, { url, payload: buildForm() });
+    // Stale persisted tokens can produce opaque 400 — retry once with a forced refresh.
+    if (data?.status === 'error') {
+      const msg = String(data?.message || '').toLowerCase();
+      if (msg.includes('review the request parameters')) {
+        gupshupAuth.invalidateCache(sender.appId);
+        data = await gupshupAuth.withAppToken(sender.appId, async (token) => {
+          if (sender.scope === 'platform') {
+            await gupshupConfig.persistPlatformAppToken(sender.appId, token);
+          }
+          const { data: retryData } = await axios.post(url, buildForm(), {
+            headers: formHeaders(token),
+            timeout: 15000,
+          });
+          return retryData;
+        });
+      }
+    }
     if (data?.status === 'error') {
       return { success: false, error: data, code: 'GUPSHUP_SEND_ERROR' };
     }
     return { success: true, data, messageId: extractMessageId(data) };
   } catch (err) {
-    const status = err?.response?.status;
-    if (status === 401 || status === 403) {
-      try {
-        const token = await gupshupAuth.getAppToken(sender.appId, { forceRefresh: true });
-        if (sender.scope === 'platform') {
-          await gupshupConfig.persistPlatformAppToken(sender.appId, token);
-        }
-        const { data } = await axios.post(url, buildForm(), { headers: formHeaders(token), timeout: 15000 });
-        if (data?.status === 'error') return { success: false, error: data, code: 'GUPSHUP_SEND_ERROR' };
-        return { success: true, data, messageId: extractMessageId(data) };
-      } catch (retryErr) {
-        return failure('sendTemplate', retryErr);
-      }
-    }
     return failure('sendTemplate', err);
   }
 }
@@ -247,6 +253,10 @@ async function applyTemplate({ appId, fields }) {
       Object.entries(fields || {}).forEach(([k, v]) => {
         if (v !== undefined && v !== null) form.set(k, typeof v === 'string' ? v : JSON.stringify(v));
       });
+      // Gupshup requires appId in the form body (partner-docs POST /partner/app/{appId}/templates).
+      if (appId && !form.has('appId')) {
+        form.set('appId', String(appId));
+      }
       const { data } = await axios.post(`${appBase(appId)}/templates`, form.toString(), {
         headers: formHeaders(token),
         timeout: 20000,
@@ -428,6 +438,23 @@ async function listPartnerApps() {
   }
 }
 
+/** WABA metadata (wabaId, phoneId, verified name) for Meta Business Manager lookup. */
+async function getWabaInfo({ appId }) {
+  try {
+    const data = await gupshupAuth.withAppToken(appId, async (token) => {
+      const { data } = await axios.get(`${appBase(appId)}/waba/info`, {
+        headers: { Authorization: token, token },
+        timeout: 15000,
+      });
+      return data;
+    });
+    const info = data?.wabaInfo && typeof data.wabaInfo === 'object' ? data.wabaInfo : data;
+    return { success: true, data: info };
+  } catch (err) {
+    return failure('getWabaInfo', err);
+  }
+}
+
 /** App health (used to validate an admin-linked app). */
 async function getWabaHealth({ appId }) {
   try {
@@ -594,6 +621,7 @@ module.exports = {
   normalizeSubscriptionUrl,
   uploadMedia,
   listPartnerApps,
+  getWabaInfo,
   getWabaHealth,
   getRatings,
   getWalletBalance,

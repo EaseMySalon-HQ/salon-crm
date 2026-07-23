@@ -91,10 +91,33 @@ type Message = {
   direction: "inbound" | "outbound"
   status: "queued" | "sent" | "delivered" | "read" | "failed"
   inboundText?: string | null
-  payload?: { templateName?: string; serviceText?: string; isService?: boolean } | null
+  displayText?: string | null
+  intent?: string | null
+  payload?: {
+    templateName?: string | null
+    serviceText?: string | null
+    bodyPreview?: string | null
+    gupshupTemplateId?: string | null
+    isService?: boolean
+  } | null
   category?: string
   failureReason?: string | null
   timestamp: string
+}
+
+function messageBubbleText(m: Message): string {
+  if (m.direction === "inbound") {
+    return m.inboundText || m.displayText || "(message)"
+  }
+  return (
+    m.displayText ||
+    m.payload?.serviceText ||
+    m.payload?.bodyPreview ||
+    m.payload?.templateName ||
+    (m.intent ? `Template · ${m.intent.replace(/_/g, " ")}` : null) ||
+    (m.category ? `${m.category} message` : null) ||
+    "(message)"
+  )
 }
 
 type Template = {
@@ -879,10 +902,7 @@ export function WhatsAppInboxPage() {
                       .reverse()
                       .map((m) => {
                         const isInbound = m.direction === "inbound"
-                        const text =
-                          m.inboundText ||
-                          m.payload?.serviceText ||
-                          (m.payload?.templateName ? `[Template: ${m.payload.templateName}]` : "(message)")
+                        const text = messageBubbleText(m)
                         return (
                           <div
                             key={m._id}

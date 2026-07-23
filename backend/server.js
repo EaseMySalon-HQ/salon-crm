@@ -34,6 +34,9 @@ const serviceBundle = require('./lib/service-bundle');
 const { buildDashboardInitPayload, buildAppointmentsSummary } = require('./lib/dashboard-init');
 const { buildNotificationsFeed } = require('./lib/notifications-feed');
 const {
+  listNewWebsiteEnquiriesForNotifications,
+} = require('./lib/website-enquiries-notifications');
+const {
   activeMembershipMongoMatch,
   expiringMembershipMongoMatch,
   membershipExpiredMongoMatch,
@@ -541,12 +544,22 @@ app.use('/api/admin/access', require('./routes/admin-access'));
 app.use('/api/admin/logs', require('./routes/admin-logs'));
 app.use('/api/admin/leads', require('./routes/admin-leads'));
 app.use('/api/email-notifications', require('./routes/email-notifications'));
-app.use('/api/whatsapp', require('./routes/whatsapp'));
+const whatsappMsg91Router = require('./routes/whatsapp');
 app.use('/api/whatsapp/gupshup', require('./routes/whatsapp-gupshup'));
-app.use('/api/whatsapp/v2/templates', require('./routes/whatsapp-templates'));
-app.use('/api/whatsapp/v2/campaigns', require('./routes/whatsapp-campaigns'));
-app.use('/api/whatsapp/v2/messages', require('./routes/whatsapp-messages'));
-app.use('/api/whatsapp/v2/inbox', require('./routes/whatsapp-inbox'));
+const whatsappTemplatesRouter = require('./routes/whatsapp-templates');
+const whatsappCampaignsRouter = require('./routes/whatsapp-campaigns');
+const whatsappMessagesRouter = require('./routes/whatsapp-messages');
+const whatsappInboxRouter = require('./routes/whatsapp-inbox');
+app.use('/api/whatsapp/gupshup/templates', whatsappTemplatesRouter);
+app.use('/api/whatsapp/v2/templates', whatsappTemplatesRouter);
+app.use('/api/whatsapp/gupshup/campaigns', whatsappCampaignsRouter);
+app.use('/api/whatsapp/v2/campaigns', whatsappCampaignsRouter);
+app.use('/api/whatsapp/gupshup/messages', whatsappMessagesRouter);
+app.use('/api/whatsapp/v2/messages', whatsappMessagesRouter);
+app.use('/api/whatsapp/gupshup/inbox', whatsappInboxRouter);
+app.use('/api/whatsapp/v2/inbox', whatsappInboxRouter);
+app.use('/api/whatsapp/msg91', whatsappMsg91Router);
+app.use('/api/whatsapp', whatsappMsg91Router);
 app.use('/api/webhooks/whatsapp/gupshup', require('./routes/gupshup-webhook'));
 app.use('/api/admin/gupshup', require('./routes/admin-gupshup'));
 app.use('/api/channel-usage', require('./routes/channel-usage'));
@@ -12295,6 +12308,22 @@ app.get('/api/notifications/feed', authenticateToken, setupBusinessDatabase, req
   }
 });
 
+/** New mini-website enquiries for the notification center Web Enquiries tab. */
+app.get('/api/notifications/website-enquiries', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 15, 1), 50);
+    const items = await listNewWebsiteEnquiriesForNotifications({
+      branchId: req.user.branchId,
+      businessModels: req.businessModels,
+      limit,
+    });
+    res.json({ success: true, data: { items } });
+  } catch (error) {
+    logger.error('Error loading website enquiry notifications:', error);
+    res.status(500).json({ success: false, error: 'Failed to load website enquiries' });
+  }
+});
+
 function handleAnalyticsTabError(res, error, label) {
   if (error && error.code === 'INVALID_RANGE') {
     return res.status(400).json({ success: false, error: error.message || 'Invalid date range' });
@@ -14092,6 +14121,7 @@ app.put('/api/sales/:id', authenticateToken, setupBusinessDatabase, requirePermi
           notes: 'Payment collected via bill edit',
           collectedBy: req.user?.name || req.user?.firstName || 'Staff'
         });
+        existingSale.paymentStatus.lastPaymentDate = new Date();
         existingSale.markModified('paymentHistory');
       }
     } else {

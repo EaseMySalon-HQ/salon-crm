@@ -8,6 +8,7 @@ import { StaffCard } from '@/components/mini-site/staff-card'
 import { OfferCarousel } from '@/components/mini-site/offer-carousel'
 import { ReviewsMarquee } from '@/components/mini-site/reviews-marquee'
 import { GalleryMarquee } from '@/components/mini-site/gallery-marquee'
+import { ProductCard } from '@/components/mini-site/product-card'
 import {
   fetchSiteGallery,
   fetchSiteMemberships,
@@ -228,20 +229,15 @@ export default async function SalonHomePage({ params }: { params: Promise<{ slug
               View all
             </Link>
           </div>
-          <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mt-6 grid items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {productPreview.map((p) => (
-              <article key={p.id} className={cn('overflow-hidden', ST.card)}>
-                {showProductImages && p.imageUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={p.imageUrl} alt={p.imageAlt || p.name} className="h-36 w-full object-cover" />
-                ) : null}
-                <div className="p-4">
-                  <h3 className={cn('font-medium', ST.textPrimary)}>{p.name}</h3>
-                  {showProductPrices && p.price != null ? (
-                    <p className="mt-1 text-sm font-semibold">{formatInr(p.price)}</p>
-                  ) : null}
-                </div>
-              </article>
+              <ProductCard
+                key={p.id}
+                slug={slug}
+                product={p}
+                showPrices={showProductPrices}
+                showImages={showProductImages}
+              />
             ))}
           </div>
         </section>

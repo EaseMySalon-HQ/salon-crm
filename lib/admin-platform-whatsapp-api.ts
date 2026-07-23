@@ -213,6 +213,26 @@ export class AdminPlatformWhatsAppInboxAPI {
       hints?: { secretConfigured?: boolean; ipAllowlistConfigured?: boolean }
     }>("/admin/gupshup/webhook/recent")
   }
+
+  static messagesTracking(params?: { dateFrom?: string; dateTo?: string }) {
+    const qs = new URLSearchParams()
+    if (params?.dateFrom) qs.set("dateFrom", params.dateFrom)
+    if (params?.dateTo) qs.set("dateTo", params.dateTo)
+    const query = qs.toString()
+    return adminJson<{
+      totalMessages: number
+      sentMessages: number
+      failedMessages: number
+      successRate: number
+      businessStats?: Array<{
+        businessId: string
+        businessName?: string
+        total: number
+        sent: number
+        failed: number
+      }>
+    }>(`/admin/gupshup/messages/tracking${query ? `?${query}` : ""}`)
+  }
 }
 
 export class AdminPlatformWhatsAppCampaignsAPI {
@@ -270,7 +290,7 @@ export class AdminPlatformWhatsAppCampaignsAPI {
   }
 
   static limits() {
-    return adminJson<{ maxRecipients: number }>("/admin/gupshup/campaigns/meta/limits")
+    return adminJson<{ maxRecipients: number }>("/admin/gupshup/campaigns/limits")
   }
 
   static templates() {

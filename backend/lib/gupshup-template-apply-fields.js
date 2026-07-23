@@ -85,6 +85,39 @@ function remoteTemplateStatus(remote) {
   return String(remote?.status || remote?.templateStatus || '').toUpperCase();
 }
 
+/**
+ * Unwrap Gupshup GET template / list item shapes. API envelopes use
+ * `{ status: "success", template: { status: "APPROVED", ... } }` — the outer
+ * status must not be treated as the template approval state.
+ */
+function normalizeGupshupTemplateRecord(data) {
+  if (!data || typeof data !== 'object') return {};
+  const nested =
+    data.template && typeof data.template === 'object' && !Array.isArray(data.template)
+      ? data.template
+      : null;
+  const remote = nested || data;
+  const envelopeStatus = String(data.status || '').toLowerCase();
+  const templateStatus =
+    remote.status ||
+    remote.templateStatus ||
+    remote.state ||
+    (envelopeStatus === 'success' || envelopeStatus === 'error' ? null : data.status);
+
+  return {
+    ...remote,
+    id: remote.id || remote.templateId || data.id || data.templateId || null,
+    status: templateStatus,
+    name: remote.elementName || remote.name || data.elementName || data.name || null,
+    elementName: remote.elementName || remote.name || data.elementName || data.name || null,
+    language: remote.languageCode || remote.language || data.languageCode || data.language || null,
+    rejectedReason:
+      remote.rejectedReason || remote.rejectionReason || remote.rejected_reason || null,
+    rejected_reason:
+      remote.rejected_reason || remote.rejectedReason || remote.rejectionReason || null,
+  };
+}
+
 module.exports = {
   buildGupshupApplyFields,
   buildUrlButtonPayload,
@@ -93,4 +126,5 @@ module.exports = {
   remoteElementName,
   remoteTemplateId,
   remoteTemplateStatus,
+  normalizeGupshupTemplateRecord,
 };

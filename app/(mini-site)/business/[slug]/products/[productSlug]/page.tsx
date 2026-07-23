@@ -2,6 +2,7 @@ import Link from 'next/link'
 import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import { JsonLd } from '@/components/mini-site/json-ld'
+import { ProductDetailActions } from '@/components/mini-site/product-detail-actions'
 import { fetchSiteProduct, formatInr } from '@/lib/public-site-api'
 import { loadSiteProfile, siteMetadata } from '@/lib/mini-site-server'
 import { ST } from '@/lib/mini-site-theme'
@@ -76,12 +77,7 @@ export default async function ProductDetailPage({
       <p className="mt-4 whitespace-pre-wrap text-stone-700">
         {product.description || product.shortDescription}
       </p>
-      <Link
-        href={miniSiteBasePath(profile.slug, `enquiry/product?id=${encodeURIComponent(product.id)}`)}
-        className={`mt-8 inline-flex ${ST.btnPrimary}`}
-      >
-        Enquire about this product
-      </Link>
+      <ProductDetailActions slug={profile.slug} product={product} />
     </div>
   )
 }
