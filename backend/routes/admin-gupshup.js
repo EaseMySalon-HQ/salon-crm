@@ -752,12 +752,8 @@ router.post('/platform-templates', checkAdminPermission('settings', 'update'), a
     if (!parsed.success) {
       return res.status(400).json({ success: false, error: parsed.error.issues?.[0]?.message || 'Invalid payload' });
     }
-    const { name, language = 'en_US', category, components = {} } = parsed.data;
+    const { name, language = 'en_US', category, components = {}, publishedToTenantLibrary } = parsed.data;
     const slotKey = req.body?.slotKey ? String(req.body.slotKey).trim() : null;
-    const publishedToTenantLibrary =
-      req.body?.publishedToTenantLibrary === undefined
-        ? true
-        : Boolean(req.body.publishedToTenantLibrary);
     const Template = await getPlatformTemplateModel();
     const created = await Template.create({
       name,
@@ -766,7 +762,8 @@ router.post('/platform-templates', checkAdminPermission('settings', 'update'), a
       slotKey: slotKey || null,
       components: sanitizeComponents(components),
       status: 'draft',
-      publishedToTenantLibrary,
+      publishedToTenantLibrary:
+        publishedToTenantLibrary === undefined ? true : publishedToTenantLibrary,
       createdBy: req.admin?._id || null,
     });
     return res.status(201).json({ success: true, data: created });
@@ -791,7 +788,7 @@ router.put('/platform-templates/:id', checkAdminPermission('settings', 'update')
     if (!parsed.success) {
       return res.status(400).json({ success: false, error: parsed.error.issues?.[0]?.message || 'Invalid payload' });
     }
-    const { name, language, category, components } = parsed.data;
+    const { name, language, category, components, publishedToTenantLibrary } = parsed.data;
     if (name != null) tpl.name = name;
     if (language != null) tpl.language = language;
     if (category != null) tpl.category = category.toUpperCase();
@@ -799,8 +796,8 @@ router.put('/platform-templates/:id', checkAdminPermission('settings', 'update')
     if (req.body?.slotKey !== undefined) {
       tpl.slotKey = req.body.slotKey ? String(req.body.slotKey).trim() : null;
     }
-    if (req.body?.publishedToTenantLibrary !== undefined) {
-      tpl.publishedToTenantLibrary = Boolean(req.body.publishedToTenantLibrary);
+    if (publishedToTenantLibrary !== undefined) {
+      tpl.publishedToTenantLibrary = publishedToTenantLibrary;
     }
     await tpl.save();
     return res.json({ success: true, data: tpl });
