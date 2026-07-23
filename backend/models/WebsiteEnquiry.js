@@ -12,7 +12,7 @@ const websiteEnquirySchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ['bridal', 'package', 'membership', 'product', 'general'],
+      enum: ['bridal', 'package', 'membership', 'product', 'product_request', 'general'],
       default: 'general',
     },
     name: { type: String, required: true, trim: true, maxlength: 120 },
@@ -24,6 +24,21 @@ const websiteEnquirySchema = new mongoose.Schema(
     relatedPackageId: { type: mongoose.Schema.Types.ObjectId, default: null },
     relatedProductId: { type: mongoose.Schema.Types.ObjectId, default: null },
     relatedMembershipId: { type: mongoose.Schema.Types.ObjectId, default: null },
+    /** Multi-product purchase requests from the public mini-site cart. */
+    requestedProducts: [
+      {
+        productId: { type: mongoose.Schema.Types.ObjectId, default: null },
+        productName: { type: String, default: '', trim: true, maxlength: 200 },
+        quantity: { type: Number, default: 1, min: 1 },
+      },
+    ],
+    fulfillmentType: {
+      type: String,
+      enum: ['delivery', 'pickup'],
+      default: '',
+    },
+    deliveryAddress: { type: String, default: '', trim: true, maxlength: 500 },
+    preferredPickupSlot: { type: String, default: '', trim: true, maxlength: 200 },
     source: { type: String, default: 'website' },
     status: {
       type: String,

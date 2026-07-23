@@ -39,6 +39,10 @@ type WebsiteEnquiryRow = {
   message: string
   customFields: Record<string, string>
   related: { kind: string; id: string; name: string } | null
+  requestedProducts?: { productId: string; productName: string; quantity: number }[]
+  fulfillmentType?: 'delivery' | 'pickup' | ''
+  deliveryAddress?: string
+  preferredPickupSlot?: string
   leadId: string | null
   status: 'new' | 'contacted' | 'converted' | 'closed'
   createdAt: string
@@ -178,8 +182,8 @@ export function WebsiteEnquiriesTab({
         <div>
           <h3 className="font-medium">Website enquiries</h3>
           <p className="mt-1 text-sm text-slate-600">
-            Submissions from your mini-site contact and enquiry forms. A matching lead is also
-            created under Leads when someone submits the form.
+            Submissions from your mini-site contact form, product cart requests, and other enquiry
+            forms. A matching lead is also created under Leads when someone submits.
           </p>
         </div>
 
@@ -254,6 +258,36 @@ export function WebsiteEnquiriesTab({
                   {row.related?.name ? (
                     <p>
                       <span className="text-slate-500">Related:</span> {row.related.name}
+                    </p>
+                  ) : null}
+                  {row.requestedProducts?.length ? (
+                    <div>
+                      <p className="text-slate-500">Requested products:</p>
+                      <ul className="mt-1 list-inside list-disc text-slate-700">
+                        {row.requestedProducts.map((item) => (
+                          <li key={`${item.productId}-${item.productName}`}>
+                            {item.productName}
+                            {item.quantity > 1 ? ` × ${item.quantity}` : ''}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                  {row.fulfillmentType ? (
+                    <p>
+                      <span className="text-slate-500">Fulfillment:</span>{' '}
+                      {row.fulfillmentType === 'delivery' ? 'Delivery' : 'Pickup'}
+                    </p>
+                  ) : null}
+                  {row.deliveryAddress ? (
+                    <p className="whitespace-pre-wrap">
+                      <span className="text-slate-500">Delivery address:</span> {row.deliveryAddress}
+                    </p>
+                  ) : null}
+                  {row.preferredPickupSlot ? (
+                    <p>
+                      <span className="text-slate-500">Preferred pickup slot:</span>{' '}
+                      {row.preferredPickupSlot}
                     </p>
                   ) : null}
                   {row.message ? (

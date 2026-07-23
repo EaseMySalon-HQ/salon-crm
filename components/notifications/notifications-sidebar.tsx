@@ -10,6 +10,7 @@ import {
   Bell,
   Calendar,
   CreditCard,
+  Globe,
   Loader2,
   MessageCircle,
   Receipt,
@@ -28,13 +29,14 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { NotificationCountBadge, NotificationCountBadgeLabel } from "@/components/notifications/notification-count-badge"
-import { FeedbackAPI, WhatsAppInboxAPI, type NotificationFeedItem } from "@/lib/api"
+import { FeedbackAPI, NotificationsAPI, WhatsAppInboxAPI, type NotificationFeedItem, type WebsiteEnquiryNotificationItem } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
 import { useNotificationAppointments } from "@/lib/queries/notification-appointments"
 import { useNotificationsFeed } from "@/lib/queries/notifications"
 import {
   DISMISSED_ALERTS_STORAGE_PREFIX,
   DISMISSED_REVIEWS_STORAGE_PREFIX,
+  DISMISSED_WEB_ENQUIRIES_STORAGE_PREFIX,
   NOTIFICATION_CENTER_TABS,
   NOTIFICATION_TAB_THEMES,
   formatNotificationBadgeCount,
@@ -64,6 +66,14 @@ type NotificationsSidebarProps = {
     reviewsError: boolean
     markReviewRead: (review: ReviewNotificationItem) => void
     markAllReviewsRead: () => void
+  }
+  webEnquiries: {
+    enquiryItems: WebsiteEnquiryNotificationItem[]
+    visibleEnquiryItems: WebsiteEnquiryNotificationItem[]
+    enquiriesPending: boolean
+    enquiriesError: boolean
+    markEnquiryRead: (item: WebsiteEnquiryNotificationItem) => void
+    markAllEnquiriesRead: () => void
   }
 }
 
@@ -410,6 +420,136 @@ export function useDismissedNotificationReviews(enabled = true) {
   }
 }
 
+/** Session-scoped dismiss state for website enquiry notifications. */
+export function useDismissedWebEnquiries(enabled = true) {
+  const { user } = useAuth()
+  const branchKey = user?.branchId ?? user?._id ?? "none"
+  const dismissedStorageKey = `${DISMISSED_WEB_ENQUIRIES_STORAGE_PREFIX}${branchKey}`
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(() => new Set())
+
+  useEffect(() => {
+    if (typeof window === "undefined" || branchKey === "none") return
+    try {
+      const raw = sessionStorage.getItem(dismissedStorageKey)
+      if (!raw) {
+        setDismissedIds(new Set())
+        return
+      }
+      const ids = JSON.parse(raw) as unknown
+      if (Array.isArray(ids) && ids.every((x) => typeof x === "string")) {
+        setDismissedIds(new Set(ids))
+      }
+    } catch {
+      setDismissedIds(new Set())
+    }
+  }, [dismissedStorageKey, branchKey])
+
+  const persistDismissedIds = (next: Set<string>) => {
+    try {
+      if (next.size === 0) {
+        sessionStorage.removeItem(dismissedStorageKey)
+      } else {
+        sessionStorage.setItem(dismissedStorageKey, JSON.stringify([...next]))
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const { data: enquiryItems = [], isPending: enquiriesPending, isError: enquiriesError } = useQuery({
+    queryKey: ["notifications", "website-enquiries", branchKey],
+    queryFn: async () => {
+      const res = await NotificationsAPI.getWebsiteEnquiries()
+      if (!res?.success) throw new Error("Failed to load website enquiries")
+      return (res.data?.items ?? []) as WebsiteEnquiryNotificationItem[]
+    },
+    enabled: Boolean(user && enabled),
+    staleTime: 60_000,
+  })
+
+  const visibleEnquiryItems = useMemo(
+    () => enquiryItems.filter((item) => !dismissedIds.has(item.id)),
+    [enquiryItems, dismissedIds]
+  )
+
+  const markEnquiryRead = (item: WebsiteEnquiryNotificationItem) => {
+    setDismissedIds((prev) => {
+      if (prev.has(item.id)) return prev
+      const next = new Set(prev)
+      next.add(item.id)
+      persistDismissedIds(next)
+      return next
+    })
+  }
+
+  const markAllEnquiriesRead = () => {
+    setDismissedIds((prev) => {
+      const next = new Set(prev)
+      for (const item of enquiryItems) {
+        next.add(item.id)
+      }
+      persistDismissedIds(next)
+      return next
+    })
+  }
+
+  return {
+    enquiryItems,
+    visibleEnquiryItems,
+    visibleCount: visibleEnquiryItems.length,
+    enquiriesPending,
+    enquiriesError,
+    markEnquiryRead,
+    markAllEnquiriesRead,
+  }
+}
+
+function WebEnquiryNotificationRow({
+  item,
+  onMarkRead,
+  onNavigate,
+}: {
+  item: WebsiteEnquiryNotificationItem
+  onMarkRead: (item: WebsiteEnquiryNotificationItem) => void
+  onNavigate: (href: string) => void
+}) {
+  return (
+    <div className="group/enquiry relative flex gap-3 rounded-lg border border-transparent px-3 py-2.5 transition-colors hover:border-border hover:bg-muted/50">
+      <button
+        type="button"
+        className="flex min-w-0 flex-1 gap-3 text-left"
+        onClick={() => onNavigate(item.href)}
+      >
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-teal-100 dark:bg-teal-950/40">
+          <Globe className="h-4 w-4 text-teal-700 dark:text-teal-400" aria-hidden />
+        </div>
+        <div className="min-w-0 flex-1 space-y-0.5">
+          <div className="flex items-center gap-2 pr-1">
+            <p className="text-sm font-semibold text-foreground truncate">{item.name}</p>
+            <Badge variant="outline" className="text-[10px] shrink-0">
+              {item.typeLabel}
+            </Badge>
+          </div>
+          <p className="text-xs text-muted-foreground leading-snug line-clamp-2">
+            {item.summary || item.phone}
+          </p>
+          {item.phone && item.summary ? (
+            <p className="text-[11px] text-muted-foreground">{item.phone}</p>
+          ) : null}
+        </div>
+      </button>
+      <button
+        type="button"
+        aria-label={`Mark enquiry from ${item.name} as read`}
+        className="shrink-0 self-center whitespace-nowrap rounded px-1.5 py-1 text-xs font-medium text-muted-foreground opacity-0 transition-opacity hover:text-foreground hover:underline group-hover/enquiry:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        onClick={() => onMarkRead(item)}
+      >
+        Mark read
+      </button>
+    </div>
+  )
+}
+
 export function NotificationsSidebar({
   open,
   onOpenChange,
@@ -418,6 +558,7 @@ export function NotificationsSidebar({
   canViewMessages,
   alerts,
   reviews,
+  webEnquiries,
 }: NotificationsSidebarProps) {
   const router = useRouter()
   const queryClient = useQueryClient()
@@ -428,6 +569,7 @@ export function NotificationsSidebar({
     () =>
       NOTIFICATION_CENTER_TABS.filter((tab) => {
         if (tab.id === "alerts") return true
+        if (tab.id === "webEnquiries") return true
         if (tab.id === "appointments") return canViewAppointments
         if (tab.id === "reviews") return canViewReviews
         if (tab.id === "messages") return canViewMessages
@@ -465,6 +607,15 @@ export function NotificationsSidebar({
     markReviewRead,
     markAllReviewsRead,
   } = reviews
+
+  const {
+    enquiryItems,
+    visibleEnquiryItems,
+    enquiriesPending,
+    enquiriesError,
+    markEnquiryRead,
+    markAllEnquiriesRead,
+  } = webEnquiries
 
   const {
     data: upcomingAppointments = [],
@@ -511,6 +662,7 @@ export function NotificationsSidebar({
 
   const tabCounts: Record<NotificationCenterTabId, number> = {
     alerts: visibleNotificationItems.length,
+    webEnquiries: visibleEnquiryItems.length,
     appointments: appointmentItems.length,
     reviews: visibleReviewItems.length,
     messages: inboxThreads.reduce((sum, row) => sum + Number(row?.unreadCount || 0), 0),
@@ -526,6 +678,10 @@ export function NotificationsSidebar({
   const refreshActiveTab = () => {
     if (activeTab === "alerts") {
       queryClient.invalidateQueries({ queryKey: ["notifications", "feed"] })
+      return
+    }
+    if (activeTab === "webEnquiries") {
+      queryClient.invalidateQueries({ queryKey: ["notifications", "website-enquiries"] })
       return
     }
     if (activeTab === "appointments") {
@@ -568,6 +724,37 @@ export function NotificationsSidebar({
               key={item.id}
               item={item}
               onMarkRead={markAlertRead}
+              onNavigate={handleNavigate}
+            />
+          ))}
+        </div>
+      )
+    }
+
+    if (activeTab === "webEnquiries") {
+      if (enquiriesPending) return <LoadingState label="Loading web enquiries…" />
+      if (enquiriesError) {
+        return <EmptyState title="Could not load web enquiries" description="Try again in a moment." />
+      }
+      if (visibleEnquiryItems.length === 0) {
+        return (
+          <EmptyState
+            title={enquiryItems.length > 0 ? "All web enquiries marked read" : "No new web enquiries"}
+            description={
+              enquiryItems.length > 0
+                ? "Marked items stay in Settings until you update their status there."
+                : "Contact forms and product requests from your mini-website appear here."
+            }
+          />
+        )
+      }
+      return (
+        <div className="space-y-1 p-2">
+          {visibleEnquiryItems.map((item) => (
+            <WebEnquiryNotificationRow
+              key={item.id}
+              item={item}
+              onMarkRead={markEnquiryRead}
               onNavigate={handleNavigate}
             />
           ))}
@@ -708,7 +895,7 @@ export function NotificationsSidebar({
       >
         <SheetHeader className="border-b border-border px-5 py-4 text-left space-y-1">
           <SheetTitle>Notifications</SheetTitle>
-          <SheetDescription>Alerts, appointments, reviews, and messages in one place.</SheetDescription>
+          <SheetDescription>Alerts, web enquiries, appointments, reviews, and messages in one place.</SheetDescription>
         </SheetHeader>
 
         <div className="flex min-h-0 flex-1">
@@ -768,11 +955,13 @@ export function NotificationsSidebar({
                 <p className="text-xs text-muted-foreground">
                   {activeTab === "alerts"
                     ? "Operational reminders from your salon data."
-                    : activeTab === "appointments"
-                      ? "Upcoming visits for the next 7 days."
-                      : activeTab === "reviews"
-                        ? "New customer feedback awaiting review."
-                        : "Unread WhatsApp conversations."}
+                    : activeTab === "webEnquiries"
+                      ? "New submissions from your public mini-website."
+                      : activeTab === "appointments"
+                        ? "Upcoming visits for the next 7 days."
+                        : activeTab === "reviews"
+                          ? "New customer feedback awaiting review."
+                          : "Unread WhatsApp conversations."}
                 </p>
               </div>
               <div className="flex items-center gap-1 shrink-0">
@@ -783,6 +972,11 @@ export function NotificationsSidebar({
                 ) : null}
                 {activeTab === "reviews" && visibleReviewItems.length > 0 ? (
                   <Button type="button" variant="ghost" size="sm" className="h-8 text-xs" onClick={markAllReviewsRead}>
+                    Mark all read
+                  </Button>
+                ) : null}
+                {activeTab === "webEnquiries" && visibleEnquiryItems.length > 0 ? (
+                  <Button type="button" variant="ghost" size="sm" className="h-8 text-xs" onClick={markAllEnquiriesRead}>
                     Mark all read
                   </Button>
                 ) : null}
@@ -818,6 +1012,13 @@ export function NotificationsSidebar({
                   </Link>
                 </Button>
               ) : null}
+              {activeTab === "webEnquiries" ? (
+                <Button variant="outline" size="sm" className="w-full" asChild>
+                  <Link href="/settings?section=website&tab=enquiries" onClick={() => onOpenChange(false)}>
+                    Open website enquiries
+                  </Link>
+                </Button>
+              ) : null}
               {activeTab === "messages" ? (
                 <Button variant="outline" size="sm" className="w-full" asChild>
                   <Link href="/whatsapp/inbox" onClick={() => onOpenChange(false)}>
@@ -839,6 +1040,7 @@ export function useNotificationCenterBadgeCount(options: {
   canViewReviews: boolean
   canViewMessages: boolean
   alertCount: number
+  webEnquiryCount: number
   reviewCount: number
 }) {
   const { user } = useAuth()
@@ -866,6 +1068,7 @@ export function useNotificationCenterBadgeCount(options: {
 
   const total =
     options.alertCount +
+    options.webEnquiryCount +
     (options.canViewAppointments ? upcomingAppointments.length : 0) +
     (options.canViewReviews ? options.reviewCount : 0) +
     (options.canViewMessages ? inboxUnreadTotal : 0)

@@ -34,6 +34,9 @@ const serviceBundle = require('./lib/service-bundle');
 const { buildDashboardInitPayload, buildAppointmentsSummary } = require('./lib/dashboard-init');
 const { buildNotificationsFeed } = require('./lib/notifications-feed');
 const {
+  listNewWebsiteEnquiriesForNotifications,
+} = require('./lib/website-enquiries-notifications');
+const {
   activeMembershipMongoMatch,
   expiringMembershipMongoMatch,
   membershipExpiredMongoMatch,
@@ -12302,6 +12305,22 @@ app.get('/api/notifications/feed', authenticateToken, setupBusinessDatabase, req
   } catch (error) {
     logger.error('Error building notifications feed:', error);
     res.status(500).json({ success: false, error: 'Failed to load notifications' });
+  }
+});
+
+/** New mini-website enquiries for the notification center Web Enquiries tab. */
+app.get('/api/notifications/website-enquiries', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 15, 1), 50);
+    const items = await listNewWebsiteEnquiriesForNotifications({
+      branchId: req.user.branchId,
+      businessModels: req.businessModels,
+      limit,
+    });
+    res.json({ success: true, data: { items } });
+  } catch (error) {
+    logger.error('Error loading website enquiry notifications:', error);
+    res.status(500).json({ success: false, error: 'Failed to load website enquiries' });
   }
 });
 

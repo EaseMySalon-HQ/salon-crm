@@ -31,7 +31,9 @@ export default async function ProductsPage({ params }: { params: Promise<{ slug:
   return (
     <div className="mx-auto max-w-6xl px-4 py-12">
       <h1 className={cn('text-3xl font-semibold tracking-tight', ST.textPrimary)}>Products</h1>
-      <p className={cn('mt-2', ST.textMuted)}>Browse retail products and send an enquiry.</p>
+      <p className={cn('mt-2', ST.textMuted)}>
+        Browse products in stock and submit a purchase request — the salon will contact you.
+      </p>
       <ProductsCatalog
         slug={profile.slug}
         products={products}
