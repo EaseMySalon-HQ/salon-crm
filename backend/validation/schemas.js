@@ -524,6 +524,8 @@ const whatsappTemplateBodySchema = z
      */
     variables: z.record(z.string(), z.any()).optional(),
     samples: z.record(z.string(), z.any()).optional(),
+    /** Platform admin: expose approved template in tenant library catalog. */
+    publishedToTenantLibrary: z.boolean().optional(),
   })
   .strict();
 
