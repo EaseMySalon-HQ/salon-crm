@@ -11,6 +11,7 @@ const { setupMainDatabase } = require('../middleware/business-db');
 const { setupPublicSiteBySlug } = require('../middleware/public-site-resolver');
 const { logger } = require('../utils/logger');
 const siteService = require('../lib/public-site-service');
+const { notifyWebsiteProductRequest } = require('../lib/notify-website-product-request');
 const {
   validateSubmittedCustomFields,
   formatCustomFieldsForNotes,
@@ -370,6 +371,173 @@ router.post('/enquiry', writeLimiter, resolveTenant, async (req, res) => {
   } catch (error) {
     logger.error('[public-site] enquiry', error);
     res.status(500).json({ success: false, error: 'Could not submit enquiry.' });
+  }
+});
+
+const productRequestSchema = z
+  .object({
+    fulfillmentType: z.enum(['delivery', 'pickup']),
+    name: z.string().trim().min(2).max(120),
+    phone: z.string().trim().min(10).max(20),
+    email: z.string().trim().max(320).optional().or(z.literal('')),
+    deliveryAddress: z.string().trim().max(500).optional().or(z.literal('')),
+    preferredPickupSlot: z.string().trim().max(200).optional().or(z.literal('')),
+    message: z.string().trim().max(2000).optional(),
+    items: z
+      .array(
+        z.object({
+          productId: z.string().trim().min(1).max(64),
+          quantity: z.number().int().min(1).max(99).optional(),
+        })
+      )
+      .min(1)
+      .max(30),
+    customFields: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+    website: z.string().max(0).optional().or(z.literal('')),
+  })
+  .strict()
+  .superRefine((body, ctx) => {
+    if (body.fulfillmentType === 'delivery') {
+      const email = String(body.email || '').trim();
+      if (!email || !z.string().email().safeParse(email).success) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Email is required for delivery.',
+          path: ['email'],
+        });
+      }
+      if (!String(body.deliveryAddress || '').trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Delivery address is required.',
+          path: ['deliveryAddress'],
+        });
+      }
+    }
+  });
+
+router.post('/product-request', writeLimiter, resolveTenant, async (req, res) => {
+  try {
+    if (visibility(req).showProducts === false) {
+      return res.status(404).json({ success: false, error: 'Products are not available.' });
+    }
+
+    const parsed = productRequestSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        success: false,
+        error: parsed.error.issues?.[0]?.message || 'Invalid request.',
+      });
+    }
+    const body = parsed.data;
+    if (body.website) {
+      return res.json({ success: true, data: { received: true } });
+    }
+
+    let requestedProducts;
+    try {
+      requestedProducts = await siteService.validatePublicProductRequestItems(
+        req.businessModels,
+        req.branchId,
+        productVisibility(req),
+        body.items
+      );
+    } catch (validationErr) {
+      const code = validationErr.code || 'PRODUCT_UNAVAILABLE';
+      return res.status(400).json({
+        success: false,
+        error: validationErr.message || 'One or more products are no longer available.',
+        code,
+      });
+    }
+
+    const { WebsiteEnquiry, Lead } = req.businessModels;
+    const ip = String(req.headers['x-forwarded-for'] || req.ip || '')
+      .split(',')[0]
+      .trim()
+      .slice(0, 64);
+    const userAgent = String(req.headers['user-agent'] || '').slice(0, 300);
+
+    const configuredFields = req.businessDoc?.settings?.website?.enquiryForm?.customFields || [];
+    let customFields = {};
+    try {
+      customFields = validateSubmittedCustomFields(configuredFields, body.customFields);
+    } catch (fieldError) {
+      return res.status(400).json({
+        success: false,
+        error: fieldError.message || 'Invalid custom field.',
+      });
+    }
+    const customNotes = formatCustomFieldsForNotes(customFields, configuredFields);
+    const productSummary = requestedProducts
+      .map((p) => `${p.productName}${p.quantity > 1 ? ` × ${p.quantity}` : ''}`)
+      .join(', ');
+    const fulfillmentLabel = body.fulfillmentType === 'delivery' ? 'Delivery' : 'Pickup';
+    const leadNotes = [
+      `Product purchase request (${fulfillmentLabel}): ${productSummary}`,
+      body.fulfillmentType === 'delivery' && body.deliveryAddress
+        ? `Delivery address: ${body.deliveryAddress}`
+        : '',
+      body.fulfillmentType === 'pickup' && body.preferredPickupSlot
+        ? `Preferred pickup slot: ${body.preferredPickupSlot}`
+        : '',
+      body.message || '',
+      customNotes,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    let leadId = null;
+    if (Lead) {
+      const lead = await Lead.create({
+        name: body.name,
+        phone: body.phone,
+        email: body.email || '',
+        source: 'website',
+        status: 'new',
+        notes: leadNotes,
+        branchId: req.branchId,
+      });
+      leadId = lead._id;
+    }
+
+    if (WebsiteEnquiry) {
+      await WebsiteEnquiry.create({
+        branchId: req.branchId,
+        type: 'product_request',
+        name: body.name,
+        phone: body.phone,
+        email: body.email || '',
+        message: body.message || '',
+        customFields,
+        requestedProducts,
+        fulfillmentType: body.fulfillmentType,
+        deliveryAddress: body.fulfillmentType === 'delivery' ? body.deliveryAddress || '' : '',
+        preferredPickupSlot:
+          body.fulfillmentType === 'pickup' ? body.preferredPickupSlot || '' : '',
+        leadId,
+        ip,
+        userAgent,
+      });
+    }
+
+    void notifyWebsiteProductRequest({
+      businessDoc: req.businessDoc,
+      businessModels: req.businessModels,
+      customerName: body.name,
+      customerPhone: body.phone,
+      customerEmail: body.email || '',
+      fulfillmentType: body.fulfillmentType,
+      deliveryAddress: body.deliveryAddress || '',
+      preferredPickupSlot: body.preferredPickupSlot || '',
+      items: requestedProducts,
+      message: body.message || '',
+    });
+
+    res.json({ success: true, data: { received: true } });
+  } catch (error) {
+    logger.error('[public-site] product-request', error);
+    res.status(500).json({ success: false, error: 'Could not submit product request.' });
   }
 });
 

@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   SiteProfile,
   bookAppointmentHref,
@@ -16,6 +16,8 @@ import { CalendarDays, ChevronLeft, MapPin, MessageCircle, Phone } from 'lucide-
 import { resolveMiniSitePageTheme, ST } from '@/lib/mini-site-theme'
 import { miniSiteBasePath } from '@/lib/mini-site-path'
 import { cn } from '@/lib/utils'
+import { ProductCartProvider } from '@/components/mini-site/product-cart-context'
+import { ProductCartSheet, ProductCartTrigger } from '@/components/mini-site/product-cart-sheet'
 
 function sessionId() {
   if (typeof window === 'undefined') return ''
@@ -64,6 +66,8 @@ export function MiniSiteShell({
   const address = formatAddress(profile.address)
   const maps = mapsHref(profile.social.googleMapsUrl || address)
   const siteTheme = resolveMiniSitePageTheme(profile.themeColor)
+  const showProductCart = profile.visibility.showProducts !== false
+  const [cartOpen, setCartOpen] = useState(false)
 
   const handleBack = () => {
     if (typeof window !== 'undefined' && window.history.length > 1) {
@@ -131,7 +135,7 @@ export function MiniSiteShell({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- vars derived from themeColor
   }, [profile.themeColor])
 
-  return (
+  const shellBody = (
     <div
       className="min-h-screen bg-[color:var(--site-surface-muted)] text-[color:var(--site-text-primary)]"
       style={siteTheme.vars as React.CSSProperties}
@@ -166,15 +170,20 @@ export function MiniSiteShell({
               )}
               <span className="truncate font-semibold tracking-tight">{profile.name}</span>
             </Link>
-            {profile.onlineBookingEnabled && !isBookPage ? (
-              <Link
-                href={bookHref}
-                onClick={() => track('book_appointment_click')}
-                className="hidden shrink-0 rounded-full bg-[var(--site-accent)] px-4 py-2 text-sm font-medium text-white sm:inline-flex"
-              >
-                Book Appointment
-              </Link>
-            ) : null}
+            <div className="flex shrink-0 items-center gap-2">
+              {showProductCart ? (
+                <ProductCartTrigger onClick={() => setCartOpen(true)} />
+              ) : null}
+              {profile.onlineBookingEnabled && !isBookPage ? (
+                <Link
+                  href={bookHref}
+                  onClick={() => track('book_appointment_click')}
+                  className="hidden rounded-full bg-[var(--site-accent)] px-4 py-2 text-sm font-medium text-white sm:inline-flex"
+                >
+                  Book Appointment
+                </Link>
+              ) : null}
+            </div>
           </div>
         </header>
       ) : null}
@@ -245,5 +254,22 @@ export function MiniSiteShell({
       </div>
       ) : null}
     </div>
+  )
+
+  if (!showProductCart) {
+    return shellBody
+  }
+
+  return (
+    <ProductCartProvider slug={slug}>
+      {shellBody}
+      <ProductCartSheet
+        slug={slug}
+        open={cartOpen}
+        onOpenChange={setCartOpen}
+        customFields={profile.enquiryForm?.customFields || []}
+        operatingHours={profile.operatingHours}
+      />
+    </ProductCartProvider>
   )
 }

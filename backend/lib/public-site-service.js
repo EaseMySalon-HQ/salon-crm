@@ -245,6 +245,65 @@ async function getProductBySlug(
   return match ? serializeProduct(match, { showPrices }) : null;
 }
 
+/**
+ * Resolve and validate cart line items against public in-stock products.
+ * Never returns stock counts — rejects unavailable lines generically.
+ */
+async function validatePublicProductRequestItems(businessModels, branchId, visibility, items) {
+  const { Product } = businessModels;
+  const lines = Array.isArray(items) ? items : [];
+  if (!lines.length) {
+    const err = new Error('Add at least one product.');
+    err.code = 'PRODUCT_REQUEST_EMPTY';
+    throw err;
+  }
+  if (lines.length > 30) {
+    const err = new Error('Too many products in one request.');
+    err.code = 'PRODUCT_REQUEST_TOO_MANY';
+    throw err;
+  }
+
+  const ids = [...new Set(lines.map((l) => String(l.productId || '').trim()).filter(Boolean))];
+  if (!ids.length) {
+    const err = new Error('Invalid product selection.');
+    err.code = 'PRODUCT_REQUEST_INVALID';
+    throw err;
+  }
+
+  const products = await Product.find({
+    ...productPublicQuery(branchId, visibility),
+    _id: { $in: ids },
+  })
+    .select('name stock')
+    .lean();
+
+  const byId = new Map(products.map((p) => [String(p._id), p]));
+  const resolved = [];
+
+  for (const line of lines) {
+    const pid = String(line.productId || '').trim();
+    const qty = Math.min(Math.max(parseInt(line.quantity, 10) || 1, 1), 99);
+    const product = byId.get(pid);
+    if (!product || Number(product.stock) <= 0) {
+      const err = new Error('One or more products are no longer available.');
+      err.code = 'PRODUCT_UNAVAILABLE';
+      throw err;
+    }
+    if (qty > Number(product.stock)) {
+      const err = new Error('One or more products are no longer available.');
+      err.code = 'PRODUCT_UNAVAILABLE';
+      throw err;
+    }
+    resolved.push({
+      productId: product._id,
+      productName: product.name || 'Product',
+      quantity: qty,
+    });
+  }
+
+  return resolved;
+}
+
 async function listMemberships(businessModels, branchId, { featuredOnly = false, showPrices = true } = {}) {
   const { MembershipPlan } = businessModels;
   const q = { branchId, isActive: true, isPublic: true };
@@ -346,7 +405,14 @@ function showPricesFromBusiness(business) {
 }
 
 function productPublicQuery(branchId, visibility, extra = {}) {
-  const q = { branchId, isActive: { $ne: false }, isPublic: true, ...extra };
+  const q = {
+    branchId,
+    isActive: { $ne: false },
+    isPublic: true,
+    /** In-stock only — never expose stock counts on the public API. */
+    stock: { $gt: 0 },
+    ...extra,
+  };
   if (visibility?.retailProductsOnly) {
     q.productType = { $in: ['retail', 'both'] };
   }
@@ -378,6 +444,7 @@ module.exports = {
   getPackageBySlug,
   listProducts,
   getProductBySlug,
+  validatePublicProductRequestItems,
   listMemberships,
   getMembershipBySlug,
   listPrepaidWallets,

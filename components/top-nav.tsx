@@ -48,6 +48,7 @@ import {
   NotificationsSidebar,
   useDismissedNotificationAlerts,
   useDismissedNotificationReviews,
+  useDismissedWebEnquiries,
   useNotificationCenterBadgeCount,
 } from "@/components/notifications/notifications-sidebar"
 
@@ -108,6 +109,7 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
     hasPermission("feedback", "view") && !entitlementsLoading && hasFeature("feedback_management")
 
   const { visibleCount: alertCount, ...alertsRest } = useDismissedNotificationAlerts(true)
+  const { visibleCount: webEnquiryCount, ...webEnquiriesRest } = useDismissedWebEnquiries(true)
   const { visibleCount: reviewCount, ...reviewsRest } = useDismissedNotificationReviews(
     canViewReviews
   )
@@ -116,6 +118,7 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
     canViewReviews,
     canViewMessages: canAccessWhatsAppInbox,
     alertCount,
+    webEnquiryCount,
     reviewCount,
   })
 
@@ -546,6 +549,14 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
               reviewsError: reviewsRest.reviewsError,
               markReviewRead: reviewsRest.markReviewRead,
               markAllReviewsRead: reviewsRest.markAllReviewsRead,
+            }}
+            webEnquiries={{
+              enquiryItems: webEnquiriesRest.enquiryItems,
+              visibleEnquiryItems: webEnquiriesRest.visibleEnquiryItems,
+              enquiriesPending: webEnquiriesRest.enquiriesPending,
+              enquiriesError: webEnquiriesRest.enquiriesError,
+              markEnquiryRead: webEnquiriesRest.markEnquiryRead,
+              markAllEnquiriesRead: webEnquiriesRest.markAllEnquiriesRead,
             }}
           />
 

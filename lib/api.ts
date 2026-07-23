@@ -3223,11 +3223,29 @@ export interface NotificationFeedItem {
   at: string
 }
 
+export interface WebsiteEnquiryNotificationItem {
+  id: string
+  type: string
+  typeLabel: string
+  name: string
+  phone: string
+  summary: string
+  createdAt: string | null
+  href: string
+}
+
 export class NotificationsAPI {
   static async getFeed(): Promise<
     ApiResponse<{ items: NotificationFeedItem[] }>
   > {
     const response = await apiClient.get("/notifications/feed")
+    return response.data
+  }
+
+  static async getWebsiteEnquiries(): Promise<
+    ApiResponse<{ items: WebsiteEnquiryNotificationItem[] }>
+  > {
+    const response = await apiClient.get("/notifications/website-enquiries")
     return response.data
   }
 }

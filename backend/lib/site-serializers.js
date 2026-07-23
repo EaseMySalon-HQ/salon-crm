@@ -47,6 +47,7 @@ function serializeService(s, { showPrices = true } = {}) {
 
 function serializeProduct(p, { showPrices = true } = {}) {
   if (!p) return null;
+  const stock = Math.max(Math.floor(Number(p.stock) || 0), 0);
   return {
     id: String(p._id),
     slug: ensureSlug(p),
@@ -61,6 +62,8 @@ function serializeProduct(p, { showPrices = true } = {}) {
     displayOrder: p.displayOrder || 0,
     seoTitle: p.seoTitle || '',
     seoDescription: p.seoDescription || '',
+    /** Max units a visitor may request — used for cart limits, not shown as inventory. */
+    maxQuantity: Math.min(stock, 99),
   };
 }
 

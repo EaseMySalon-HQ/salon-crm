@@ -640,6 +640,7 @@ const ENQUIRY_TYPE_LABELS = {
   package: 'Package',
   membership: 'Membership',
   product: 'Product',
+  product_request: 'Product request',
   general: 'General',
 };
 
@@ -665,6 +666,13 @@ async function resolveEnquiryRelated(businessModels, row) {
 }
 
 function serializeEnquiryRow(row, related) {
+  const requestedProducts = Array.isArray(row.requestedProducts)
+    ? row.requestedProducts.map((p) => ({
+        productId: p.productId ? String(p.productId) : '',
+        productName: p.productName || '',
+        quantity: Math.max(1, Number(p.quantity) || 1),
+      }))
+    : [];
   return {
     id: String(row._id),
     type: row.type || 'general',
@@ -679,6 +687,10 @@ function serializeEnquiryRow(row, related) {
         ? row.customFields
         : {},
     related,
+    requestedProducts,
+    fulfillmentType: row.fulfillmentType || '',
+    deliveryAddress: row.deliveryAddress || '',
+    preferredPickupSlot: row.preferredPickupSlot || '',
     leadId: row.leadId ? String(row.leadId) : null,
     status: row.status || 'new',
     createdAt: row.createdAt || null,
