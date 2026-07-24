@@ -1,8 +1,8 @@
-const axios = require('axios');
 const databaseManager = require('../config/database-manager');
 const { logger } = require('../utils/logger');
 const gupshupConfig = require('../lib/gupshup-config');
 const { loadBusinessWhatsAppTemplateConfig } = require('../lib/business-whatsapp-template-config');
+const { resolveGupshupTemplateForSend } = require('../lib/gupshup-resolve-template-for-send');
 
 /**
  * Flatten an MSG91-style variable map ({ body_1, body_2, button_1 } or numeric
@@ -51,57 +51,40 @@ class WhatsAppService {
       logger.debug('📱 [WhatsApp Service] Loading config from admin settings:', {
         hasWhatsappConfig: !!whatsappConfig,
         enabled: whatsappConfig?.enabled,
-        hasApiKey: !!whatsappConfig?.msg91ApiKey,
-        hasTemplates: !!whatsappConfig?.templates
+        hasTemplates: !!whatsappConfig?.templates,
+        gupshupReady: await gupshupConfig.isPlatformConfiguredAsync(),
       });
 
-      if (whatsappConfig && whatsappConfig.enabled && whatsappConfig.msg91ApiKey) {
-        // Check if at least one template is configured
+      if (whatsappConfig && whatsappConfig.enabled) {
         const templates = whatsappConfig.templates || {};
-        const hasTemplate = Object.values(templates).some(templateId => templateId && templateId.trim() !== '');
-        
-        if (hasTemplate) {
-          this.config = whatsappConfig;
+        const hasTemplate = Object.values(templates).some(
+          (templateId) => templateId && String(templateId).trim() !== ''
+        );
+        const gupshupReady = await gupshupConfig.isPlatformConfiguredAsync();
+
+        if (hasTemplate && gupshupReady) {
+          this.config = { ...whatsappConfig, provider: 'gupshup' };
           this.enabled = true;
           this.initialized = true;
-          logger.debug(`✅ WhatsApp service initialized with provider: ${whatsappConfig.provider}`);
-          return;
-        } else {
-          logger.warn('⚠️  WhatsApp service enabled but no templates configured');
-          this.enabled = false;
-          this.initialized = true;
+          logger.debug('✅ WhatsApp service initialized with Gupshup');
           return;
         }
-      } else {
-        logger.warn('⚠️  WhatsApp service not enabled or missing API key in admin settings');
+
+        if (!hasTemplate) {
+          logger.warn('⚠️  WhatsApp service enabled but no templates configured');
+        } else {
+          logger.warn('⚠️  WhatsApp service enabled but Gupshup platform app is not configured');
+        }
         this.enabled = false;
         this.initialized = true;
+        return;
       }
-    } catch (error) {
-      logger.warn('⚠️  Could not load WhatsApp config from admin settings, falling back to environment variables:', error.message);
-    }
 
-    // Fallback to environment variables
-    if (process.env.MSG91_API_KEY) {
-      this.config = {
-        provider: 'msg91',
-        msg91ApiKey: process.env.MSG91_API_KEY,
-        msg91TemplateId: process.env.MSG91_TEMPLATE_ID || '',
-        msg91SenderId: process.env.MSG91_SENDER_ID || '',
-        receiptNotifications: true,
-        appointmentNotifications: true,
-        systemAlerts: false,
-        quietHours: {
-          enabled: false,
-          start: '22:00',
-          end: '08:00'
-        }
-      };
-      this.enabled = true;
+      logger.warn('⚠️  WhatsApp service not enabled in admin settings');
+      this.enabled = false;
       this.initialized = true;
-      logger.debug('✅ WhatsApp service initialized from environment variables');
-    } else {
-      logger.warn('⚠️  WhatsApp service not configured. No API key found.');
+    } catch (error) {
+      logger.warn('⚠️  Could not load WhatsApp config from admin settings:', error.message);
       this.enabled = false;
       this.initialized = true;
     }
@@ -200,10 +183,10 @@ class WhatsAppService {
       }
 
       // Use template message if templateId is provided
-      if (templateId || this.config.msg91TemplateId) {
+      if (templateId) {
         return await this.sendTemplateMessage({
           to: phoneNumber,
-          templateId: templateId || this.config.msg91TemplateId,
+          templateId,
           variables,
           businessId,
         });
@@ -250,324 +233,28 @@ class WhatsAppService {
   }
 
   /**
-   * Send template message via MSG91
-   * Uses MSG91's bulk WhatsApp API format
+   * Send template message via Gupshup Partner Portal.
    */
   async sendTemplateMessage({ to, templateId, variables, businessId = null }) {
     const gupshupAvailable =
       (await gupshupConfig.isPlatformConfiguredAsync()) ||
       (businessId &&
         gupshupConfig.isBusinessAppUsable(await gupshupConfig.loadAccount(businessId)));
-    if (gupshupAvailable) {
-      return this.sendViaGupshup({ to, templateId, variables, businessId });
+    if (!gupshupAvailable) {
+      return {
+        success: false,
+        error: 'Gupshup is not configured. Connect a salon WhatsApp app or configure the shared platform app.',
+      };
     }
-
-    const apiKey = this.config.msg91ApiKey;
-    const integratedNumber = this.config.msg91SenderId;
-    const templateName = templateId || this.config.msg91TemplateId;
-    const namespace = this.config.msg91Namespace || ''; // Optional namespace
-    
-    if (!apiKey) {
-      return { success: false, error: 'MSG91 API key not configured' };
-    }
-    
-    if (!integratedNumber) {
-      return { success: false, error: 'MSG91 Sender ID (integrated number) not configured' };
-    }
-    
-    if (!templateName) {
-      return { success: false, error: 'Template name/ID not configured' };
-    }
-
-    const url = 'https://api.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/bulk/';
-
-    // Build components object with body_1, body_2, button_1, etc.
-    // Variables can be passed as { body_1: "value1", body_2: "value2", button_1: "url" } or { 1: "value1", 2: "value2" }
-    const components = {};
-    
-    // Check if variables already use body_X or button_X format
-    const hasNamedFormat = Object.keys(variables).some(key => key.startsWith('body_') || key.startsWith('button_'));
-    
-    if (hasNamedFormat) {
-      // Sort variables to ensure body_1, body_2, button_1 are in correct order
-      const sortedKeys = Object.keys(variables).sort((a, b) => {
-        // Extract numbers from body_X and button_X
-        const aNum = parseInt(a.replace(/\D/g, '')) || 0;
-        const bNum = parseInt(b.replace(/\D/g, '')) || 0;
-        // Body variables come before button variables
-        const aType = a.startsWith('body_') ? 0 : 1;
-        const bType = b.startsWith('body_') ? 0 : 1;
-        if (aType !== bType) return aType - bType;
-        return aNum - bNum;
-      });
-      
-      // Variables already in body_X or button_X format, use them directly
-      sortedKeys.forEach(key => {
-        if (key.startsWith('body_')) {
-          components[key] = {
-            type: 'text',
-            value: String(variables[key] || '')
-          };
-        } else if (key.startsWith('button_')) {
-          // Button variables - MSG91 format: { "subtype": "url", "type": "text", "value": "path_or_url" }
-          const buttonValue = String(variables[key] || '');
-          
-          // CRITICAL: MSG91 template configuration shows button type is "Visit website"
-          // Template URL: https://www.easemysalon.in/receipt/public/{{1}}
-          // This means button_1 should contain just the path part (e.g., INV-000056/abc123)
-          // But the button component MUST still be formatted as subtype "url" in the API payload
-          // MSG91 will combine the template base URL + button value
-          
-          if (buttonValue.trim() !== '') {
-            // Check if it's a full URL or just a path
-            if (buttonValue.startsWith('http://') || buttonValue.startsWith('https://')) {
-              // Full URL - use as is
-              components[key] = {
-                subtype: 'url',
-                type: 'text',
-                value: buttonValue
-              };
-              logger.debug(`📱 [MSG91] Button ${key} formatted as URL button with full URL: ${buttonValue.substring(0, 50)}...`);
-            } else {
-              // Path only (e.g., INV-000056/abc123) - template includes base URL
-              // Still format as URL button type since template button type is "Visit website"
-              components[key] = {
-                subtype: 'url',
-                type: 'text',
-                value: buttonValue
-              };
-              logger.debug(`📱 [MSG91] Button ${key} formatted as URL button with path (template includes base URL): ${buttonValue}`);
-            }
-          } else {
-            // Empty button value - skip it
-            logger.warn(`⚠️ [MSG91] Button ${key} has empty value, skipping`);
-          }
-        }
-      });
-      
-      // Log for debugging
-      const bodyVars = Object.keys(components).filter(k => k.startsWith('body_'));
-      const buttonVars = Object.keys(components).filter(k => k.startsWith('button_'));
-      logger.debug(`[WhatsApp Send] Template: ${templateName}, Body vars: ${bodyVars.length} (${bodyVars.join(', ')}), Button vars: ${buttonVars.length} (${buttonVars.join(', ')})`);
-    } else {
-      // Variables in numeric format (1, 2, 3), convert to body_1, body_2, etc.
-      const sortedKeys = Object.keys(variables).sort((a, b) => {
-        const numA = parseInt(a) || 0;
-        const numB = parseInt(b) || 0;
-        return numA - numB;
-      });
-      
-      sortedKeys.forEach((key, index) => {
-        components[`body_${index + 1}`] = {
-          type: 'text',
-          value: String(variables[key] || '')
-        };
-      });
-    }
-
-    // MSG91 bulk API payload structure
-    const payload = {
-      integrated_number: integratedNumber,
-      content_type: 'template',
-      payload: {
-        messaging_product: 'whatsapp',
-        type: 'template',
-        template: {
-          name: templateName,
-          language: {
-            code: 'en',
-            policy: 'deterministic'
-          },
-          ...(namespace && { namespace: namespace }),
-          to_and_components: [
-            {
-              to: [to], // Array of phone numbers
-              components: components
-            }
-          ]
-        }
-      }
-    };
-
-    try {
-      logger.debug('📱 [MSG91] Sending WhatsApp message:', {
-        to,
-        templateName,
-        integratedNumber,
-        hasApiKey: !!apiKey,
-        variablesCount: Object.keys(variables).length
-      });
-      
-      const response = await axios.post(url, payload, {
-        headers: {
-          'Content-Type': 'application/json',
-          'authkey': apiKey // lowercase 'authkey' as per MSG91 API
-        },
-        timeout: 10000
-      });
-
-      logger.debug('📱 [MSG91] API Response Status:', response.status);
-      logger.debug('📱 [MSG91] API Response Data:', JSON.stringify(response.data, null, 2));
-
-      // MSG91 API can return 200 with error details in response.data
-      // Check for actual success indicators in the response
-      const responseData = response.data || {};
-      
-      // MSG91 returns different response formats:
-      // 1. Success: { status: "success", hasError: false, data: "message", request_id: "..." }
-      // 2. Error: { status: "error", hasError: true, errors: [...] }
-      // 3. Some APIs return: { success: true/false, message: "..." }
-      
-      const hasError = responseData.hasError === true || 
-                       responseData.status === 'error' ||
-                       (responseData.errors && responseData.errors.length > 0);
-      
-      const isSuccess = response.status === 200 && !hasError && (
-        responseData.success === true ||
-        responseData.status === 'success' ||
-        (responseData.data && typeof responseData.data === 'string' && responseData.data.includes('in process'))
-      );
-
-      if (isSuccess) {
-        const requestId = responseData.request_id || 'N/A';
-        logger.debug('✅ [MSG91] WhatsApp message accepted by MSG91');
-        logger.debug('📱 [MSG91] Request ID:', requestId);
-        logger.debug('📱 [MSG91] Note: Message is queued for delivery. Check MSG91 dashboard for delivery status.');
-        
-        // Queued delivery is normal; avoid multi-line warn spam (was 4+ log lines per message).
-        if (responseData.data && responseData.data.includes('in process')) {
-          logger.debug('[MSG91] WhatsApp queued (in process), request_id=%s', requestId);
-        }
-        
-        return { 
-          success: true, 
-          data: responseData,
-          requestId: requestId,
-          queued: responseData.data && responseData.data.includes('in process')
-        };
-      } else {
-        const errorMsg = responseData.message || 
-                        responseData.error || 
-                        (responseData.errors && responseData.errors.length > 0 ? JSON.stringify(responseData.errors) : null) ||
-                        'Failed to send message';
-        logger.error('❌ [MSG91] WhatsApp message failed:', errorMsg);
-        logger.error('❌ [MSG91] Full response:', JSON.stringify(responseData, null, 2));
-        return { success: false, error: errorMsg, responseData };
-      }
-    } catch (error) {
-      if (error.response) {
-        const errorMessage = error.response.data?.message || 
-                            error.response.data?.error || 
-                            error.message;
-        logger.error('❌ [MSG91] API Error Response:', {
-          status: error.response.status,
-          statusText: error.response.statusText,
-          data: JSON.stringify(error.response.data, null, 2)
-        });
-        return { success: false, error: errorMessage, responseData: error.response.data };
-      }
-      logger.error('❌ [MSG91] Network/Request Error:', error.message);
-      return { success: false, error: error.message };
-    }
+    return this.sendViaGupshup({ to, templateId, variables, businessId });
   }
 
-  /**
-   * Create a new WhatsApp template via MSG91
-   * @param {Object} templateData - Template configuration
-   * @returns {Promise<Object>} - Result with success status and template info
-   */
-  async createTemplate(templateData) {
-    if (!this.initialized) {
-      await this.initialize();
-    }
-
-    if (!this.enabled || !this.config.msg91ApiKey) {
-      return { success: false, error: 'WhatsApp service not configured' };
-    }
-
-    const apiKey = this.config.msg91ApiKey;
-    const url = 'https://api.msg91.com/api/v5/whatsapp/client-panel-template/';
-
-    // Build the payload according to MSG91 API format
-    const payload = {
-      integrated_number: templateData.integratedNumber || this.config.msg91SenderId,
-      template_name: templateData.templateName,
-      language: templateData.language || 'en',
-      category: templateData.category || 'MARKETING',
-      button_url: templateData.buttonUrl || 'false',
-      components: templateData.components || []
+  /** @deprecated Use Gupshup template manager under Settings → WhatsApp Templates. */
+  async createTemplate() {
+    return {
+      success: false,
+      error: 'WhatsApp templates are managed via Gupshup. Use Settings → WhatsApp Templates or Admin → Platform templates.',
     };
-
-    try {
-      logger.debug('📱 [MSG91] Creating template:', {
-        templateName: payload.template_name,
-        language: payload.language,
-        category: payload.category,
-        componentsCount: payload.components.length
-      });
-      logger.debug('📱 [MSG91] Components payload:', JSON.stringify(payload.components, null, 2));
-
-      const response = await axios.post(url, payload, {
-        headers: {
-          'Content-Type': 'application/json',
-          'authkey': apiKey
-        },
-        timeout: 30000 // 30 seconds for template creation
-      });
-
-      logger.debug('📱 [MSG91] Template creation response:', response.status, response.data);
-
-      // MSG91 typically returns success status in response
-      if (response.status === 200 || response.status === 201) {
-        const responseData = response.data || {};
-        
-        // Check for errors in response
-        if (responseData.hasError === true || responseData.status === 'error' || responseData.status === 'fail') {
-          const errorMsg = responseData.message || 
-                          responseData.data ||
-                          (responseData.errors ? (typeof responseData.errors === 'string' ? responseData.errors : JSON.stringify(responseData.errors)) : null) ||
-                          'Template creation failed';
-          logger.error('❌ [MSG91] Template creation failed:', {
-            hasError: responseData.hasError,
-            status: responseData.status,
-            message: responseData.message,
-            data: responseData.data,
-            errors: responseData.errors
-          });
-          return { success: false, error: errorMsg, responseData };
-        }
-
-        return {
-          success: true,
-          data: responseData,
-          templateId: responseData.template_id || responseData.id || responseData.templateName,
-          message: responseData.message || 'Template created successfully and submitted for approval'
-        };
-      } else {
-        return {
-          success: false,
-          error: `Unexpected response status: ${response.status}`,
-          responseData: response.data
-        };
-      }
-    } catch (error) {
-      if (error.response) {
-        const errorMessage = error.response.data?.message || 
-                            error.response.data?.error || 
-                            error.message;
-        logger.error('❌ [MSG91] Template creation failed:', {
-          status: error.response.status,
-          data: error.response.data
-        });
-        return { 
-          success: false, 
-          error: errorMessage, 
-          responseData: error.response.data 
-        };
-      }
-      logger.error('❌ [MSG91] Network error creating template:', error.message);
-      return { success: false, error: error.message };
-    }
   }
 
   /**
@@ -575,8 +262,7 @@ class WhatsAppService {
    */
   getTemplateId(templateType) {
     const templates = this.config?.templates || {};
-    // Use specific template if available, otherwise fall back to default or legacy
-    return templates[templateType] || templates.default || this.config?.msg91TemplateId || '';
+    return templates[templateType] || templates.default || '';
   }
 
   /**
@@ -633,7 +319,12 @@ class WhatsAppService {
               scope: 'business',
             };
           }
-          return { templates: {}, templateVariables: {}, scope: 'business' };
+          // Tenant app connected but notification slots not synced yet — use admin mappings.
+          return {
+            templates: this.config?.templates || {},
+            templateVariables: this.config?.templateVariables || {},
+            scope: 'admin',
+          };
         }
       } catch (err) {
         logger.warn('[WhatsApp] business template config load failed, using admin:', err?.message);
@@ -646,14 +337,39 @@ class WhatsAppService {
     };
   }
 
-  async resolveTemplateId(templateType, businessId = null) {
+  async resolveTemplateForSend(templateType, businessId = null) {
     const cfg = await this.getEffectiveTemplateConfig(businessId);
-    const id =
+    const rawId =
       cfg.templates[templateType] ||
       cfg.templates.default ||
-      (cfg.scope === 'admin' ? this.config?.msg91TemplateId : '') ||
       '';
-    return String(id || '').trim();
+    const templateId = String(rawId || '').trim();
+    if (!templateId) {
+      return {
+        templateId: '',
+        error: `No WhatsApp template configured for "${templateType}". Map one in Admin → Notifications.`,
+      };
+    }
+
+    const resolved = await resolveGupshupTemplateForSend({
+      businessId,
+      templateId,
+      slotKey: templateType,
+    });
+    if (!resolved.success) {
+      return { templateId: '', error: resolved.error };
+    }
+    if (resolved.replacedStaleId) {
+      logger.info(
+        `[WhatsApp] Resolved ${templateType} template for business ${businessId}: ${templateId} → ${resolved.templateId} (${resolved.elementName || 'tenant app'})`
+      );
+    }
+    return { templateId: resolved.templateId, error: null };
+  }
+
+  async resolveTemplateId(templateType, businessId = null) {
+    const { templateId } = await this.resolveTemplateForSend(templateType, businessId);
+    return templateId;
   }
 
   async resolveVariableMapping(templateType, businessId = null) {
@@ -846,7 +562,10 @@ class WhatsAppService {
 
   async sendReceipt({ to, clientName, receiptNumber, receiptData, receiptLink, feedbackLink, businessId = null }) {
     const templateType = await this.resolveReceiptTemplateType(feedbackLink, businessId);
-    const templateId = await this.resolveTemplateId(templateType, businessId);
+    const { templateId, error: templateError } = await this.resolveTemplateForSend(templateType, businessId);
+    if (templateError) {
+      return { success: false, error: templateError };
+    }
     const variableMapping = await this.resolveVariableMapping(templateType, businessId);
 
     logger.debug('📱 [sendReceipt] Starting receipt send:', {
@@ -1003,9 +722,17 @@ class WhatsAppService {
       variables.body_5 = data.businessName;
     }
 
+    const { templateId, error: templateError } = await this.resolveTemplateForSend(
+      'appointmentScheduling',
+      businessId
+    );
+    if (templateError) {
+      return { success: false, error: templateError };
+    }
+
     return await this.sendMessage({
       to,
-      templateId: await this.resolveTemplateId('appointmentScheduling', businessId),
+      templateId,
       variables,
       businessId,
     });
@@ -1043,10 +770,12 @@ class WhatsAppService {
       variables.body_7 = data.businessPhone;
     }
 
-    const templateId = await this.resolveTemplateId('appointmentConfirmation', businessId);
-    if (!templateId || !String(templateId).trim()) {
-      logger.error('📱 [WhatsApp] appointmentConfirmation: no template ID configured');
-      return { success: false, error: 'Appointment confirmation template is not configured. Map an approved template in WhatsApp → Templates.' };
+    const { templateId, error: templateError } = await this.resolveTemplateForSend(
+      'appointmentConfirmation',
+      businessId
+    );
+    if (templateError) {
+      return { success: false, error: templateError };
     }
 
     return await this.sendMessage({
@@ -1119,12 +848,10 @@ class WhatsAppService {
 
     if (Object.keys(variables).length === 0) {
       variables.body_1 = data.clientName;
-      variables.body_2 = data.serviceName;
+      variables.body_2 = data.businessName;
       variables.body_3 = data.date;
       variables.body_4 = data.time;
-      variables.body_5 = data.staffName;
-      variables.body_6 = data.businessName;
-      variables.body_7 = data.businessPhone;
+      variables.body_5 = data.businessPhone;
     }
 
     const templateId = await this.resolveTemplateId('appointmentReschedule', businessId);
@@ -1253,6 +980,65 @@ class WhatsAppService {
   }
 
   /**
+   * Outstanding bill dues reminder (utility). Template: clientDuesReminder
+   * body_1 clientName, body_2 duesAmountFormatted, body_3 businessName
+   */
+  async sendClientDuesReminder(payload) {
+    const { to, businessId = null, ...rest } = payload || {};
+    const data = {
+      clientName: rest.clientName || 'Customer',
+      businessName: rest.businessName || 'Salon',
+      duesAmountFormatted: rest.duesAmountFormatted || '0',
+    };
+
+    const templateType = 'clientDuesReminder';
+    let variables = await this.mapDataToTemplateVariablesForBusiness(templateType, data, businessId);
+    if (!variables || Object.keys(variables).length === 0) {
+      variables = {
+        body_1: data.clientName,
+        body_2: data.duesAmountFormatted,
+        body_3: data.businessName,
+      };
+    }
+
+    const { templateId, error: templateError } = await this.resolveTemplateForSend(templateType, businessId);
+    if (templateError) {
+      return { success: false, error: templateError };
+    }
+
+    return this.sendMessage({ to, templateId, variables, businessId });
+  }
+
+  /**
+   * Birthday wish on client's DOB (utility). Template: clientBirthdayReminder
+   * body_1 clientName, body_2 businessName, body_3 businessName (Team {{3}})
+   */
+  async sendClientBirthdayReminder(payload) {
+    const { to, businessId = null, ...rest } = payload || {};
+    const data = {
+      clientName: rest.clientName || 'Customer',
+      businessName: rest.businessName || 'Salon',
+    };
+
+    const templateType = 'clientBirthdayReminder';
+    let variables = await this.mapDataToTemplateVariablesForBusiness(templateType, data, businessId);
+    if (!variables || Object.keys(variables).length === 0) {
+      variables = {
+        body_1: data.clientName,
+        body_2: data.businessName,
+        body_3: data.businessName,
+      };
+    }
+
+    const { templateId, error: templateError } = await this.resolveTemplateForSend(templateType, businessId);
+    if (templateError) {
+      return { success: false, error: templateError };
+    }
+
+    return this.sendMessage({ to, templateId, variables, businessId });
+  }
+
+  /**
    * Test WhatsApp connection
    * Uses configured variable mappings to send test data matching template requirements
    */
@@ -1270,7 +1056,7 @@ class WhatsAppService {
       if (!templateId) {
         return {
           success: false,
-          error: `Template not configured for type: ${templateType}. Add the MSG91 template name/ID in Admin Settings for this slot.`,
+          error: `Template not configured for type: ${templateType}. Map an approved Gupshup template in Admin → Notifications for this slot.`,
         };
       }
 

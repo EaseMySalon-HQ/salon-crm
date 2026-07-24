@@ -936,7 +936,7 @@ async function buildSaleLinesFromAppointmentPayload(
 }
 
 export type CompleteServiceCheckoutInlineResult =
-  | { ok: true; billNo: string; saleId: string }
+  | { ok: true; billNo: string; saleId: string; receipt: Record<string, unknown> }
   | { ok: false; error: string }
 
 export type ServiceCheckoutTenderSplit = {
@@ -2119,8 +2119,8 @@ export async function completeServiceCheckoutInline(opts: {
 
     const saleDoc = result.data
 
-    addReceipt({
-      id: Date.now().toString(),
+    const receiptPayload = {
+      id: String((saleDoc as any)._id),
       receiptNumber,
       clientId: getCustomerId(customer),
       clientName: customer!.name,
@@ -2151,7 +2151,10 @@ export async function completeServiceCheckoutInline(opts: {
       tipStaffName: tipStaff?.name || undefined,
       notes: remarks,
       shareToken: (saleDoc as any)?.shareToken,
-    } as any)
+      status: String((saleDoc as any)?.status || "completed"),
+    } as Record<string, unknown>
+
+    addReceipt(receiptPayload as any)
 
     void runPostCheckoutSideEffects({
       isBillUpdate,
@@ -2179,7 +2182,7 @@ export async function completeServiceCheckoutInline(opts: {
       validProductItems,
     })
 
-    return { ok: true, billNo: receiptNumber, saleId: String(saleDoc._id) }
+    return { ok: true, billNo: receiptNumber, saleId: String(saleDoc._id), receipt: receiptPayload }
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "Checkout failed"
     return { ok: false, error: msg }

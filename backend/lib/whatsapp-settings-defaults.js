@@ -49,6 +49,12 @@ function getWhatsAppSettingsWithDefaults(whatsappSettings) {
     },
     clientWalletExpiryReminderNotifications: {
       enabled: true
+    },
+    clientDuesReminderNotifications: {
+      enabled: true
+    },
+    clientBirthdayReminderNotifications: {
+      enabled: true
     }
   };
 
@@ -76,6 +82,14 @@ function getWhatsAppSettingsWithDefaults(whatsappSettings) {
     whatsappSettings.clientWalletExpiryReminderNotifications,
     defaults.clientWalletExpiryReminderNotifications
   );
+  const clientDuesReminderNotifications = normalizeWhatsappNestedSection(
+    whatsappSettings.clientDuesReminderNotifications,
+    defaults.clientDuesReminderNotifications
+  );
+  const clientBirthdayReminderNotifications = normalizeWhatsappNestedSection(
+    whatsappSettings.clientBirthdayReminderNotifications,
+    defaults.clientBirthdayReminderNotifications
+  );
 
   const merged = {
     ...defaults,
@@ -85,7 +99,9 @@ function getWhatsAppSettingsWithDefaults(whatsappSettings) {
     appointmentNotifications,
     systemAlerts,
     clientWalletTransactionNotifications,
-    clientWalletExpiryReminderNotifications
+    clientWalletExpiryReminderNotifications,
+    clientDuesReminderNotifications,
+    clientBirthdayReminderNotifications
   };
 
   if (merged.enabled === true) {

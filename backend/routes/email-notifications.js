@@ -1758,12 +1758,6 @@ router.get('/whatsapp/status', authenticateToken, setupMainDatabase, async (req,
       (t) => t && String(t).trim() !== ''
     );
 
-    const legacyMsg91Configured = !!(
-      whatsappConfig.enabled &&
-      whatsappConfig.msg91ApiKey &&
-      hasTemplateIds
-    );
-
     const platformAvailable = await gupshupConfig.isPlatformConfiguredAsync();
     const platformTemplatesReady = Boolean(
       platformAvailable && whatsappConfig.enabled !== false && hasTemplateIds
@@ -1776,12 +1770,11 @@ router.get('/whatsapp/status', authenticateToken, setupMainDatabase, async (req,
     const account = await Account.findOne({ businessId: req.user.branchId }).lean();
     const salonConnected = gupshupConfig.isBusinessAppUsable(account);
 
-    const adminConfigured = legacyMsg91Configured || platformTemplatesReady;
+    const adminConfigured = platformTemplatesReady || salonConnected;
 
     let senderMode = 'none';
     if (salonConnected) senderMode = 'business';
     else if (platformTemplatesReady) senderMode = 'platform';
-    else if (legacyMsg91Configured) senderMode = 'msg91';
 
     const legacyWhatsappAddon = business?.plan?.addons?.whatsapp || {};
     const wabaAddon = business?.plan?.addons?.waba || {};
@@ -1814,7 +1807,7 @@ router.get('/whatsapp/status', authenticateToken, setupMainDatabase, async (req,
         canConfigure,
         /** @deprecated use canConfigure */
         canUse: canConfigure,
-        provider: platformTemplatesReady || salonConnected ? 'gupshup' : whatsappConfig.provider || 'msg91',
+        provider: 'gupshup',
       },
     });
   } catch (error) {

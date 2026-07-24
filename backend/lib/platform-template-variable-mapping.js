@@ -55,13 +55,10 @@ const SLOT_DEFAULT_FIELDS = Object.freeze({
   ],
   appointmentReschedule: [
     'clientName',
-    'serviceName',
+    'businessName',
     'date',
     'time',
-    'staffName',
-    'businessName',
     'businessPhone',
-    'googleMapsUrl',
   ],
   clientWalletTransaction: [
     'clientName',
@@ -79,6 +76,8 @@ const SLOT_DEFAULT_FIELDS = Object.freeze({
     'expiryDateFormatted',
     'balanceFormatted',
   ],
+  clientDuesReminder: ['clientName', 'duesAmountFormatted', 'businessName'],
+  clientBirthdayReminder: ['clientName', 'businessName', 'businessName'],
   default: ['clientName', 'businessName', 'message'],
 });
 

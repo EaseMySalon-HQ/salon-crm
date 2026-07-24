@@ -6,9 +6,14 @@ const router = express.Router();
 const databaseManager = require('../config/database-manager');
 const { authenticateToken } = require('../middleware/auth');
 const { setupBusinessDatabase } = require('../middleware/business-db');
+const { requirePermission } = require('../middleware/permissions');
 const { logger } = require('../utils/logger');
 const bookingService = require('../services/scheduling/booking-service');
-const { sendAppointmentRescheduleWhatsApp, sendAppointmentCancellationWhatsApp } = require('../lib/send-appointment-whatsapp');
+const {
+  sendAppointmentRescheduleWhatsApp,
+  sendAppointmentCancellationWhatsApp,
+  sendAppointmentReminderWhatsApp,
+} = require('../lib/send-appointment-whatsapp');
 
 const auth = [authenticateToken, setupBusinessDatabase];
 
@@ -122,6 +127,42 @@ router.patch('/:id/cancel', auth, async (req, res) => {
     logger.error('[appointments] cancel', e);
     const status = e.code === 'NOT_FOUND' ? 404 : 500;
     return res.status(status).json({ success: false, error: e.message });
+  }
+});
+
+router.post('/:id/send-reminder', auth, requirePermission('appointments', 'edit'), async (req, res) => {
+  try {
+    const { Appointment } = req.businessModels;
+    const appointment = await Appointment.findById(req.params.id)
+      .populate('clientId', 'name phone email')
+      .populate('serviceId', 'name price duration')
+      .populate('staffId', 'name role');
+
+    if (!appointment) {
+      return res.status(404).json({ success: false, error: 'Appointment not found' });
+    }
+
+    const result = await sendAppointmentReminderWhatsApp(req, appointment, { manual: true });
+
+    if (result.skipped) {
+      return res.status(400).json({
+        success: false,
+        error: result.reason || 'Could not send reminder',
+        skipped: true,
+      });
+    }
+
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        error: result.error || 'Failed to send reminder',
+      });
+    }
+
+    return res.json({ success: true, data: result.data || null });
+  } catch (e) {
+    logger.error('[appointments] send-reminder', e);
+    return res.status(500).json({ success: false, error: e.message || 'Failed to send reminder' });
   }
 });
 

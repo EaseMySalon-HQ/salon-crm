@@ -73,6 +73,8 @@ export const DISMISSED_REVIEWS_STORAGE_PREFIX = "salon-ems-reviews-dismissed:"
 
 export const DISMISSED_WEB_ENQUIRIES_STORAGE_PREFIX = "salon-ems-web-enquiries-dismissed:"
 
+export const DISMISSED_APPOINTMENTS_STORAGE_PREFIX = "salon-ems-appointments-dismissed:"
+
 export function notificationDismissStorageKey(item: NotificationFeedItem): string {
   return `${item.id}::${item.fingerprint}`
 }

@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react"
-import { Download, Filter, TrendingUp, DollarSign, Users, MoreHorizontal, Eye, Pencil, Trash2, Receipt, AlertCircle, FileText, FileSpreadsheet, ChevronDown, Edit, CalendarIcon, HelpCircle, Wallet, CreditCard, Banknote, ArrowUpRight, Mail, ReceiptText } from "lucide-react"
+import { Download, Filter, TrendingUp, DollarSign, Users, MoreHorizontal, Eye, Pencil, Trash2, Receipt, AlertCircle, FileText, FileSpreadsheet, ChevronDown, Edit, CalendarIcon, HelpCircle, Wallet, CreditCard, Banknote, ArrowUpRight, Mail, ReceiptText, Package } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -32,6 +32,8 @@ import { AnalyticsDonutChart, type AnalyticsDonutSlice } from "@/components/anal
 import { CASH_MOVEMENT_TYPE_OPTIONS } from "@/lib/cash-movements"
 import { ProductFilterCombobox } from "@/components/reports/product-filter-combobox"
 import { ServiceFilterCombobox } from "@/components/reports/service-filter-combobox"
+import { RecordConsumptionDialog } from "@/components/bills/record-consumption-dialog"
+import { canShowRecordConsumptionCta } from "@/lib/record-consumption-cta"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter, usePathname, useSearchParams } from "next/navigation"
 import { useFeature } from "@/hooks/use-entitlements"
@@ -258,6 +260,8 @@ export function SalesReport() {
   const [staffTipRefreshKey, setStaffTipRefreshKey] = useState(0)
   const [selectedBill, setSelectedBill] = useState<SalesRecord | null>(null)
   const [isBillDialogOpen, setIsBillDialogOpen] = useState(false)
+  const [billConsumptionDialogOpen, setBillConsumptionDialogOpen] = useState(false)
+  const [consumptionDialogSale, setConsumptionDialogSale] = useState<SalesRecord | null>(null)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const [deleteSaleReason, setDeleteSaleReason] = useState("")
@@ -1747,6 +1751,11 @@ export function SalesReport() {
   const handleViewBill = (sale: SalesRecord) => {
     setSelectedBill(sale)
     setIsBillDialogOpen(true)
+  }
+
+  const handleOpenRecordConsumption = (sale: SalesRecord) => {
+    setConsumptionDialogSale(sale)
+    setBillConsumptionDialogOpen(true)
   }
 
   const handleEditSale = (sale: SalesRecord) => {
@@ -4043,6 +4052,20 @@ export function SalesReport() {
                               <Receipt className="mr-2 h-4 w-4 text-blue-600" />
                               <span className="text-slate-700">View Receipt</span>
                             </DropdownMenuItem>
+                            {canShowRecordConsumptionCta({
+                              saleId: sale.id,
+                              status: sale.status,
+                            }) ? (
+                              <DropdownMenuItem
+                                onSelect={() => {
+                                  setTimeout(() => handleOpenRecordConsumption(sale), 0)
+                                }}
+                                className="hover:bg-amber-50"
+                              >
+                                <Package className="mr-2 h-4 w-4 text-amber-600" />
+                                <span className="text-slate-700">Record consumption</span>
+                              </DropdownMenuItem>
+                            ) : null}
                             <DropdownMenuItem
                               onSelect={() => {
                                 setTimeout(() => handleViewBill(sale), 0)
@@ -4112,7 +4135,13 @@ export function SalesReport() {
       </div>
 
       {/* Bill View Dialog */}
-      <Dialog open={isBillDialogOpen} onOpenChange={setIsBillDialogOpen}>
+      <Dialog
+        open={isBillDialogOpen}
+        onOpenChange={(open) => {
+          setIsBillDialogOpen(open)
+          if (!open) setBillConsumptionDialogOpen(false)
+        }}
+      >
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>Bill Details - {selectedBill?.billNo}</DialogTitle>
@@ -4197,10 +4226,24 @@ export function SalesReport() {
               </div>
             </div>
           )}
-          <DialogFooter>
+          <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-end">
             <Button variant="outline" onClick={() => setIsBillDialogOpen(false)}>
               Close
             </Button>
+            {selectedBill &&
+            canShowRecordConsumptionCta({
+              saleId: selectedBill.id,
+              status: selectedBill.status,
+            }) ? (
+              <Button
+                variant="outline"
+                className="bg-amber-50 border-amber-200 text-amber-900 hover:bg-amber-100"
+                onClick={() => handleOpenRecordConsumption(selectedBill)}
+              >
+                <Package className="h-4 w-4 mr-2" />
+                Record consumption
+              </Button>
+            ) : null}
             <Button onClick={() => {
               setIsBillDialogOpen(false)
               // Here you could add print functionality
@@ -4210,6 +4253,18 @@ export function SalesReport() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {(consumptionDialogSale ?? selectedBill)?.id ? (
+        <RecordConsumptionDialog
+          saleId={(consumptionDialogSale ?? selectedBill)!.id}
+          billNo={(consumptionDialogSale ?? selectedBill)!.billNo}
+          open={billConsumptionDialogOpen}
+          onOpenChange={(open) => {
+            setBillConsumptionDialogOpen(open)
+            if (!open) setConsumptionDialogSale(null)
+          }}
+        />
+      ) : null}
 
       {/* Delete Confirmation Dialog */}
       <Dialog

@@ -49,6 +49,7 @@ const {
   saveWhatsappTemplateHeaderMedia,
 } = require('../lib/whatsapp-template-header-media');
 const { buildGupshupMessageEnvelope } = require('../lib/platform-template-send-payload');
+const { logger } = require('../utils/logger');
 
 function firstZodMessage(error, fallback) {
   const list = (error && (error.issues || error.errors)) || [];
@@ -378,7 +379,11 @@ router.put('/config', checkAdminPermission('settings', 'update'), async (req, re
     });
   } catch (err) {
     logger.error('[admin-gupshup] config save failed:', err?.message || err);
-    return res.status(500).json({ success: false, error: 'Failed to save Gupshup config' });
+    const message =
+      err?.name === 'ValidationError'
+        ? err.message
+        : err?.message || 'Failed to save Gupshup config';
+    return res.status(500).json({ success: false, error: message });
   }
 });
 

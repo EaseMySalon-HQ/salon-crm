@@ -3,6 +3,9 @@
  * the API client so unauthenticated visitors are not redirected to /login.
  */
 
+import { MINI_SITE_BASE_PATH } from '@/lib/mini-site-path'
+import { isPublicMarketingPath } from '@/lib/seo/route-classification'
+
 const PUBLIC_EXACT = new Set([
   '/',
   '/login',
@@ -17,13 +20,12 @@ const PUBLIC_EXACT = new Set([
   '/faq',
   '/solutions',
   '/blog',
+  '/how-it-works',
   '/privacy-policy',
   '/terms-and-conditions',
   '/refund-policy',
   '/grievance',
 ])
-
-import { MINI_SITE_BASE_PATH } from '@/lib/mini-site-path'
 
 const PUBLIC_PREFIXES = [
   '/receipt/public/',
@@ -35,5 +37,6 @@ const PUBLIC_PREFIXES = [
 
 export function isPublicClientRoute(pathname: string): boolean {
   if (PUBLIC_EXACT.has(pathname)) return true
+  if (isPublicMarketingPath(pathname)) return true
   return PUBLIC_PREFIXES.some((p) => pathname.startsWith(p))
 }

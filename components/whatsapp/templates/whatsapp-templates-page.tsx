@@ -65,6 +65,8 @@ const NOTIFICATION_SLOT_LABELS: Record<string, string> = {
   receiptCancellation: "Bill cancellation",
   clientWalletTransaction: "Prepaid wallet transaction",
   clientWalletExpiryReminder: "Prepaid wallet expiry reminder",
+  clientDuesReminder: "Outstanding dues reminder",
+  clientBirthdayReminder: "Birthday wish",
   welcomeMessage: "Welcome message",
   businessAccountCreated: "Business account created",
   default: "Default / fallback",

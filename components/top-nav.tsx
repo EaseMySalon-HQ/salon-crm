@@ -47,6 +47,7 @@ import { ThemeToggleMenuItem } from "@/components/theme-toggle"
 import {
   NotificationsSidebar,
   useDismissedNotificationAlerts,
+  useDismissedNotificationAppointments,
   useDismissedNotificationReviews,
   useDismissedWebEnquiries,
   useNotificationCenterBadgeCount,
@@ -113,6 +114,9 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
   const { visibleCount: reviewCount, ...reviewsRest } = useDismissedNotificationReviews(
     canViewReviews
   )
+  const { visibleCount: appointmentCount, ...appointmentsRest } = useDismissedNotificationAppointments(
+    canViewAppointments
+  )
   const notificationBadgeLabel = useNotificationCenterBadgeCount({
     canViewAppointments,
     canViewReviews,
@@ -120,6 +124,7 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
     alertCount,
     webEnquiryCount,
     reviewCount,
+    appointmentCount,
   })
 
   const { data: inboxUnreadTotal = 0 } = useQuery({
@@ -557,6 +562,14 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
               enquiriesError: webEnquiriesRest.enquiriesError,
               markEnquiryRead: webEnquiriesRest.markEnquiryRead,
               markAllEnquiriesRead: webEnquiriesRest.markAllEnquiriesRead,
+            }}
+            appointments={{
+              appointmentItems: appointmentsRest.appointmentItems,
+              visibleAppointmentItems: appointmentsRest.visibleAppointmentItems,
+              appointmentsPending: appointmentsRest.appointmentsPending,
+              appointmentsError: appointmentsRest.appointmentsError,
+              markAppointmentRead: appointmentsRest.markAppointmentRead,
+              markAllAppointmentsRead: appointmentsRest.markAllAppointmentsRead,
             }}
           />
 

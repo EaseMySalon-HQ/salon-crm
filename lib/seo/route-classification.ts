@@ -10,6 +10,7 @@ export const PUBLIC_MARKETING_PREFIXES = [
   "/solutions",
   "/contact",
   "/blog",
+  "/how-it-works",
   "/faq",
   "/privacy-policy",
   "/terms-and-conditions",

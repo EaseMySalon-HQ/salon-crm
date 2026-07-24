@@ -29,12 +29,14 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { NotificationCountBadge, NotificationCountBadgeLabel } from "@/components/notifications/notification-count-badge"
-import { FeedbackAPI, NotificationsAPI, WhatsAppInboxAPI, type NotificationFeedItem, type WebsiteEnquiryNotificationItem } from "@/lib/api"
+import { FeedbackAPI, NotificationsAPI, WhatsAppInboxAPI, AppointmentsAPI, type NotificationFeedItem, type WebsiteEnquiryNotificationItem } from "@/lib/api"
+import { useToast } from "@/components/ui/use-toast"
 import { useAuth } from "@/lib/auth-context"
 import { useNotificationAppointments } from "@/lib/queries/notification-appointments"
 import { useNotificationsFeed } from "@/lib/queries/notifications"
 import {
   DISMISSED_ALERTS_STORAGE_PREFIX,
+  DISMISSED_APPOINTMENTS_STORAGE_PREFIX,
   DISMISSED_REVIEWS_STORAGE_PREFIX,
   DISMISSED_WEB_ENQUIRIES_STORAGE_PREFIX,
   NOTIFICATION_CENTER_TABS,
@@ -74,6 +76,14 @@ type NotificationsSidebarProps = {
     enquiriesError: boolean
     markEnquiryRead: (item: WebsiteEnquiryNotificationItem) => void
     markAllEnquiriesRead: () => void
+  }
+  appointments: {
+    appointmentItems: AppointmentNotificationItem[]
+    visibleAppointmentItems: AppointmentNotificationItem[]
+    appointmentsPending: boolean
+    appointmentsError: boolean
+    markAppointmentRead: (appointment: AppointmentNotificationItem) => void
+    markAllAppointmentsRead: () => void
   }
 }
 
@@ -234,6 +244,82 @@ function parseAppointmentWallDateTime(dateRaw: unknown, timeRaw: unknown, startA
     if (isValid(d)) return d
   }
   return null
+}
+
+type AppointmentNotificationItem = {
+  id: string
+  clientName: string
+  serviceName: string
+  staffName: string
+  status: string
+  timeLabel: string
+}
+
+function AppointmentNotificationRow({
+  appointment,
+  sending,
+  onSendReminder,
+  onMarkRead,
+  onNavigate,
+  canSendReminder = true,
+}: {
+  appointment: AppointmentNotificationItem
+  sending: boolean
+  onSendReminder: (appointment: AppointmentNotificationItem) => void
+  onMarkRead: (appointment: AppointmentNotificationItem) => void
+  onNavigate: (appointment: AppointmentNotificationItem) => void
+  canSendReminder?: boolean
+}) {
+  return (
+    <div className="group/appointment relative flex gap-3 px-4 py-3 transition-colors hover:bg-muted/50">
+      <button
+        type="button"
+        className="flex min-w-0 flex-1 gap-3 text-left"
+        onClick={() => onNavigate(appointment)}
+      >
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-950/40">
+          <Calendar className="h-4 w-4 text-blue-700 dark:text-blue-400" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-foreground truncate">{appointment.clientName}</p>
+          <p className="text-xs text-muted-foreground truncate">
+            {appointment.serviceName}
+            {appointment.staffName ? ` · ${appointment.staffName}` : ""}
+          </p>
+          <p className="text-xs text-muted-foreground mt-0.5">{appointment.timeLabel}</p>
+        </div>
+        <Badge variant="secondary" className="shrink-0 self-start capitalize text-[10px]">
+          {appointment.status.replace(/_/g, " ")}
+        </Badge>
+      </button>
+      <div className="flex shrink-0 flex-col items-end justify-center gap-1 self-center opacity-0 transition-opacity group-hover/appointment:opacity-100 focus-within:opacity-100">
+        {canSendReminder ? (
+          <button
+            type="button"
+            disabled={sending}
+            className="whitespace-nowrap rounded px-1.5 py-1 text-xs font-medium text-primary hover:underline disabled:opacity-50"
+            onClick={() => onSendReminder(appointment)}
+          >
+            {sending ? (
+              <span className="inline-flex items-center gap-1">
+                <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+                Sending…
+              </span>
+            ) : (
+              "Send reminder"
+            )}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="whitespace-nowrap rounded px-1.5 py-1 text-xs font-medium text-muted-foreground hover:text-foreground hover:underline"
+          onClick={() => onMarkRead(appointment)}
+        >
+          Mark read
+        </button>
+      </div>
+    </div>
+  )
 }
 
 function EmptyState({ title, description }: { title: string; description: string }) {
@@ -504,6 +590,104 @@ export function useDismissedWebEnquiries(enabled = true) {
   }
 }
 
+/** Session-scoped dismiss state for upcoming appointment notifications. */
+export function useDismissedNotificationAppointments(enabled = true) {
+  const { user } = useAuth()
+  const branchKey = user?.branchId ?? user?._id ?? "none"
+  const dismissedStorageKey = `${DISMISSED_APPOINTMENTS_STORAGE_PREFIX}${branchKey}`
+  const [dismissedAppointmentIds, setDismissedAppointmentIds] = useState<Set<string>>(() => new Set())
+
+  useEffect(() => {
+    if (typeof window === "undefined" || branchKey === "none") return
+    try {
+      const raw = sessionStorage.getItem(dismissedStorageKey)
+      if (!raw) {
+        setDismissedAppointmentIds(new Set())
+        return
+      }
+      const ids = JSON.parse(raw) as unknown
+      if (Array.isArray(ids) && ids.every((x) => typeof x === "string")) {
+        setDismissedAppointmentIds(new Set(ids))
+      }
+    } catch {
+      setDismissedAppointmentIds(new Set())
+    }
+  }, [dismissedStorageKey, branchKey])
+
+  const persistDismissedIds = (next: Set<string>) => {
+    try {
+      if (next.size === 0) {
+        sessionStorage.removeItem(dismissedStorageKey)
+      } else {
+        sessionStorage.setItem(dismissedStorageKey, JSON.stringify([...next]))
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const {
+    data: upcomingAppointments = [],
+    isPending: appointmentsPending,
+    isError: appointmentsError,
+  } = useNotificationAppointments(enabled)
+
+  const appointmentItems = useMemo(() => {
+    const raw = upcomingAppointments
+    return (Array.isArray(raw) ? raw : []).map((a: any) => {
+      const appointmentDateTime = parseAppointmentWallDateTime(a?.date, a?.time, a?.startAt)
+      const timeLabel =
+        appointmentDateTime && isValid(appointmentDateTime)
+          ? format(appointmentDateTime, "EEE, MMM d · h:mm a")
+          : [a?.date, a?.time].filter(Boolean).join(" ") || "—"
+      return {
+        id: String(a._id),
+        clientName: a?.clientId?.name || "Client",
+        serviceName: a?.serviceId?.name || "Service",
+        staffName: String(a?.staffName || "").trim(),
+        status: a?.status || "scheduled",
+        timeLabel,
+      }
+    })
+  }, [upcomingAppointments])
+
+  const visibleAppointmentItems = useMemo(
+    () => appointmentItems.filter((item) => !dismissedAppointmentIds.has(item.id)),
+    [appointmentItems, dismissedAppointmentIds]
+  )
+
+  const markAppointmentRead = (appointment: AppointmentNotificationItem) => {
+    setDismissedAppointmentIds((prev) => {
+      if (prev.has(appointment.id)) return prev
+      const next = new Set(prev)
+      next.add(appointment.id)
+      persistDismissedIds(next)
+      return next
+    })
+  }
+
+  const markAllAppointmentsRead = () => {
+    setDismissedAppointmentIds((prev) => {
+      const next = new Set(prev)
+      for (const item of appointmentItems) {
+        next.add(item.id)
+      }
+      persistDismissedIds(next)
+      return next
+    })
+  }
+
+  return {
+    appointmentItems,
+    visibleAppointmentItems,
+    visibleCount: visibleAppointmentItems.length,
+    appointmentsPending,
+    appointmentsError,
+    markAppointmentRead,
+    markAllAppointmentsRead,
+  }
+}
+
 function WebEnquiryNotificationRow({
   item,
   onMarkRead,
@@ -559,11 +743,14 @@ export function NotificationsSidebar({
   alerts,
   reviews,
   webEnquiries,
+  appointments,
 }: NotificationsSidebarProps) {
   const router = useRouter()
   const queryClient = useQueryClient()
-  const { user } = useAuth()
+  const { toast } = useToast()
+  const { user, hasPermission } = useAuth()
   const branchKey = user?.branchId ?? user?._id ?? "none"
+  const [sendingReminderId, setSendingReminderId] = useState<string | null>(null)
 
   const visibleTabs = useMemo(
     () =>
@@ -618,29 +805,13 @@ export function NotificationsSidebar({
   } = webEnquiries
 
   const {
-    data: upcomingAppointments = [],
-    isPending: appointmentsPending,
-    isError: appointmentsError,
-  } = useNotificationAppointments(open && activeTab === "appointments" && canViewAppointments)
-
-  const appointmentItems = useMemo(() => {
-    const raw = upcomingAppointments
-    return (Array.isArray(raw) ? raw : []).map((a: any) => {
-      const appointmentDateTime = parseAppointmentWallDateTime(a?.date, a?.time, a?.startAt)
-      const timeLabel =
-        appointmentDateTime && isValid(appointmentDateTime)
-          ? format(appointmentDateTime, "EEE, MMM d · h:mm a")
-          : [a?.date, a?.time].filter(Boolean).join(" ") || "—"
-      return {
-        id: String(a._id),
-        clientName: a?.clientId?.name || "Client",
-        serviceName: a?.serviceId?.name || "Service",
-        staffName: String(a?.staffName || "").trim(),
-        status: a?.status || "scheduled",
-        timeLabel,
-      }
-    })
-  }, [upcomingAppointments])
+    appointmentItems,
+    visibleAppointmentItems,
+    appointmentsPending,
+    appointmentsError,
+    markAppointmentRead,
+    markAllAppointmentsRead,
+  } = appointments
 
   const { data: inboxThreads = [], isPending: messagesPending, isError: messagesError } = useQuery({
     queryKey: ["notifications", "messages-unread", branchKey],
@@ -663,12 +834,43 @@ export function NotificationsSidebar({
   const tabCounts: Record<NotificationCenterTabId, number> = {
     alerts: visibleNotificationItems.length,
     webEnquiries: visibleEnquiryItems.length,
-    appointments: appointmentItems.length,
+    appointments: visibleAppointmentItems.length,
     reviews: visibleReviewItems.length,
     messages: inboxThreads.reduce((sum, row) => sum + Number(row?.unreadCount || 0), 0),
   }
 
+  const handleSendAppointmentReminder = async (appointment: AppointmentNotificationItem) => {
+    setSendingReminderId(appointment.id)
+    try {
+      const res = await AppointmentsAPI.sendReminder(appointment.id)
+      if (res?.success) {
+        toast({
+          title: "Reminder sent",
+          description: `WhatsApp reminder sent to ${appointment.clientName}.`,
+        })
+        markAppointmentRead(appointment)
+      } else {
+        throw new Error(typeof res?.error === "string" ? res.error : "Failed to send reminder")
+      }
+    } catch (err: unknown) {
+      toast({
+        title: "Could not send reminder",
+        description: err instanceof Error ? err.message : "Try again in a moment.",
+        variant: "destructive",
+      })
+    } finally {
+      setSendingReminderId(null)
+    }
+  }
+
+  const handleAppointmentNavigate = (appointment: AppointmentNotificationItem) => {
+    handleNavigate(
+      `/appointments?appointment=${encodeURIComponent(appointment.id)}&panel=details`
+    )
+  }
+
   const activeTabMeta = visibleTabs.find((tab) => tab.id === activeTab) ?? visibleTabs[0]
+  const canSendAppointmentReminder = hasPermission("appointments", "edit")
 
   const handleNavigate = (href: string) => {
     onOpenChange(false)
@@ -767,42 +969,30 @@ export function NotificationsSidebar({
       if (appointmentsError) {
         return <EmptyState title="Could not load appointments" description="Try again in a moment." />
       }
-      if (appointmentItems.length === 0) {
+      if (visibleAppointmentItems.length === 0) {
         return (
           <EmptyState
-            title="No upcoming appointments"
-            description="Scheduled visits for the next 7 days will appear here."
+            title={appointmentItems.length > 0 ? "All appointments marked read" : "No upcoming appointments"}
+            description={
+              appointmentItems.length > 0
+                ? "Dismissed appointments reappear when the list refreshes with new visits."
+                : "Scheduled visits for the next 7 days will appear here."
+            }
           />
         )
       }
       return (
         <div className="divide-y divide-border">
-          {appointmentItems.map((apt) => (
-            <button
+          {visibleAppointmentItems.map((apt) => (
+            <AppointmentNotificationRow
               key={apt.id}
-              type="button"
-              className="flex w-full gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/50"
-              onClick={() =>
-                handleNavigate(
-                  `/appointments?appointment=${encodeURIComponent(apt.id)}&panel=details`
-                )
-              }
-            >
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-950/40">
-                <Calendar className="h-4 w-4 text-blue-700 dark:text-blue-400" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold text-foreground truncate">{apt.clientName}</p>
-                <p className="text-xs text-muted-foreground truncate">
-                  {apt.serviceName}
-                  {apt.staffName ? ` · ${apt.staffName}` : ""}
-                </p>
-                <p className="text-xs text-muted-foreground mt-0.5">{apt.timeLabel}</p>
-              </div>
-              <Badge variant="secondary" className="shrink-0 capitalize text-[10px]">
-                {apt.status.replace(/_/g, " ")}
-              </Badge>
-            </button>
+              appointment={apt}
+              sending={sendingReminderId === apt.id}
+              canSendReminder={canSendAppointmentReminder}
+              onSendReminder={handleSendAppointmentReminder}
+              onMarkRead={markAppointmentRead}
+              onNavigate={handleAppointmentNavigate}
+            />
           ))}
         </div>
       )
@@ -980,6 +1170,11 @@ export function NotificationsSidebar({
                     Mark all read
                   </Button>
                 ) : null}
+                {activeTab === "appointments" && visibleAppointmentItems.length > 0 ? (
+                  <Button type="button" variant="ghost" size="sm" className="h-8 text-xs" onClick={markAllAppointmentsRead}>
+                    Mark all read
+                  </Button>
+                ) : null}
                 <Button
                   type="button"
                   variant="ghost"
@@ -1042,12 +1237,9 @@ export function useNotificationCenterBadgeCount(options: {
   alertCount: number
   webEnquiryCount: number
   reviewCount: number
+  appointmentCount: number
 }) {
   const { user } = useAuth()
-
-  const { data: upcomingAppointments = [] } = useNotificationAppointments(
-    Boolean(user && options.canViewAppointments)
-  )
 
   const { data: inboxUnreadTotal = 0 } = useQuery({
     queryKey: ["whatsapp", "inbox", "unread-total"],
@@ -1069,7 +1261,7 @@ export function useNotificationCenterBadgeCount(options: {
   const total =
     options.alertCount +
     options.webEnquiryCount +
-    (options.canViewAppointments ? upcomingAppointments.length : 0) +
+    (options.canViewAppointments ? options.appointmentCount : 0) +
     (options.canViewReviews ? options.reviewCount : 0) +
     (options.canViewMessages ? inboxUnreadTotal : 0)
 

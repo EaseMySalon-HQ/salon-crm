@@ -1,8 +1,5 @@
 /**
- * Intent-aware WhatsApp provider router.
- *
- * Gupshup is the primary BSP. MSG91 is fallback only when Gupshup is unavailable
- * (platform not configured and no salon app) or for legacy transactional paths.
+ * Intent-aware WhatsApp provider router (Gupshup only).
  *
  * Sender resolution (in gupshup-config): connected salon app → else shared platform app.
  */
@@ -54,7 +51,7 @@ function isFreeWindowOpen(conversation, now = new Date()) {
 
 /**
  * @returns {Promise<{
- *   provider: 'gupshup'|'msg91'|'sms'|null,
+ *   provider: 'gupshup'|'sms'|null,
  *   senderScope: 'business'|'platform'|null,
  *   ...
  * }>}
@@ -87,6 +84,7 @@ async function route({ businessId, intent, recipientPhone, countryCode }) {
       provider = 'sms';
       break;
     case 'gupshup_only':
+    default:
       if (!wabaEnabled && !whatsappEnabled) {
         reason = 'WhatsApp add-on is not enabled for this business';
       } else if (!gupshupAvailable) {
@@ -96,27 +94,6 @@ async function route({ businessId, intent, recipientPhone, countryCode }) {
         reason = salonConnected ? 'Gupshup salon app' : 'Gupshup shared platform';
       }
       break;
-    case 'gupshup_then_msg91':
-      if (!(whatsappEnabled || wabaEnabled)) {
-        reason = 'Neither WABA nor WhatsApp add-on is enabled';
-      } else if (gupshupAvailable) {
-        provider = 'gupshup';
-        reason = salonConnected ? 'Gupshup salon app' : 'Gupshup shared platform';
-      } else if (whatsappEnabled) {
-        provider = 'msg91';
-        reason = 'Gupshup unavailable — falling back to MSG91';
-      } else {
-        reason = 'Gupshup not configured and MSG91 add-on disabled';
-      }
-      break;
-    default:
-      if (gupshupAvailable && (wabaEnabled || whatsappEnabled)) {
-        provider = 'gupshup';
-      } else if (whatsappEnabled) {
-        provider = 'msg91';
-      } else {
-        reason = 'No WhatsApp channel available';
-      }
   }
 
   const costExpectedPaise = resolveCostPaise({

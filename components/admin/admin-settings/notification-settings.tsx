@@ -187,9 +187,7 @@ const DEFAULT_NOTIFICATION_SETTINGS = {
     },
     whatsapp: {
     enabled: false,
-    provider: "msg91",
-    msg91ApiKey: "",
-    msg91SenderId: "",
+    provider: "gupshup",
     templates: { ...EMPTY_WHATSAPP_TEMPLATE_SLOTS },
     templateVariables: {},
     templateJavaScriptCodes: {}
