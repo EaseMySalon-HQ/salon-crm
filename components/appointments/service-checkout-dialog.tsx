@@ -5518,7 +5518,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                               className="w-full px-3 py-2.5 text-left text-sm transition-colors first:rounded-t-2xl last:rounded-b-2xl hover:bg-violet-50/80 disabled:pointer-events-none disabled:opacity-50"
                               onClick={() => void pickCheckoutClient(c)}
                             >
-                              <span className="block truncate font-medium text-foreground flex items-center gap-2">
+                              <span className="flex items-center gap-2 truncate font-medium text-foreground">
                                 {c.name || "Client"}
                                 {isWalkInClient(c) ? (
                                   <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
