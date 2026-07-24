@@ -544,7 +544,6 @@ app.use('/api/admin/access', require('./routes/admin-access'));
 app.use('/api/admin/logs', require('./routes/admin-logs'));
 app.use('/api/admin/leads', require('./routes/admin-leads'));
 app.use('/api/email-notifications', require('./routes/email-notifications'));
-const whatsappMsg91Router = require('./routes/whatsapp');
 app.use('/api/whatsapp/gupshup', require('./routes/whatsapp-gupshup'));
 const whatsappTemplatesRouter = require('./routes/whatsapp-templates');
 const whatsappCampaignsRouter = require('./routes/whatsapp-campaigns');
@@ -558,8 +557,6 @@ app.use('/api/whatsapp/gupshup/messages', whatsappMessagesRouter);
 app.use('/api/whatsapp/v2/messages', whatsappMessagesRouter);
 app.use('/api/whatsapp/gupshup/inbox', whatsappInboxRouter);
 app.use('/api/whatsapp/v2/inbox', whatsappInboxRouter);
-app.use('/api/whatsapp/msg91', whatsappMsg91Router);
-app.use('/api/whatsapp', whatsappMsg91Router);
 app.use('/api/webhooks/whatsapp/gupshup', require('./routes/gupshup-webhook'));
 app.use('/api/admin/gupshup', require('./routes/admin-gupshup'));
 app.use('/api/channel-usage', require('./routes/channel-usage'));
@@ -568,7 +565,6 @@ app.use('/api/platform', require('./routes/platform-ui'));
 app.use('/api/client-wallet', require('./routes/client-wallet'));
 app.use('/api/reward-points', require('./routes/reward-points'));
 app.use('/api/plan', require('./routes/plan-checkout'));
-app.use('/api/campaigns', require('./routes/campaigns'));
 app.use('/api/purchase-invoices', purchaseInvoicesRoutes);
 app.use('/api/bookings', require('./routes/bookings'));
 app.use('/api/packages', require('./routes/packages'));
@@ -11669,6 +11665,10 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, requi
     const previousStatus = appointment.status;
     const isBeingCancelled = updateData.status === 'cancelled' && previousStatus !== 'cancelled';
 
+    const isBeingConfirmed =
+      updateData.status === 'confirmed' &&
+      previousStatus !== 'confirmed' &&
+      previousStatus !== 'cancelled';
 
     const isBeingRescheduled =
       previousStatus !== 'cancelled' &&
@@ -12073,6 +12073,14 @@ app.put('/api/appointments/:id', authenticateToken, setupBusinessDatabase, requi
         await sendAppointmentRescheduleWhatsApp(req, updatedAppointment);
       } catch (whatsappErr) {
         logger.error('Error sending appointment reschedule WhatsApp:', whatsappErr);
+      }
+    }
+
+    if (isBeingConfirmed) {
+      try {
+        await sendAppointmentWhatsAppAfterCreate(req, [updatedAppointment]);
+      } catch (whatsappErr) {
+        logger.error('Error sending appointment confirmation WhatsApp:', whatsappErr);
       }
     }
 
@@ -13528,12 +13536,12 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
                     if (result.queued) {
                       logger.debug(`⏳ Sale receipt WhatsApp queued for delivery to client: ${customerPhone}`, {
                         requestId: result.requestId || 'N/A',
-                        note: 'Message is queued. Check MSG91 dashboard for delivery status.'
+                        note: 'Message is queued. Check Gupshup dashboard for delivery status.'
                       });
                       whatsappStatus.sent = true;
                       whatsappStatus.queued = true;
                       whatsappStatus.requestId = result.requestId;
-                      whatsappStatus.message = 'Message queued for delivery. Check MSG91 dashboard for status.';
+                      whatsappStatus.message = 'Message queued for delivery. Check Gupshup dashboard for status.';
                     } else {
                       logger.debug(`✅ Sale receipt WhatsApp sent to client: ${customerPhone}`);
                       whatsappStatus.sent = true;
@@ -14557,6 +14565,151 @@ app.get('/api/consumption-logs', authenticateToken, setupBusinessDatabase, requi
     res.json({ success: true, data: logs });
   } catch (err) {
     logger.error('Error listing consumption logs:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Preview manual consumption for a completed bill (lists existing consumption logs on bill)
+app.get('/api/sales/:id/consumption-preview', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { Sale, InventoryConsumptionLog, Product } = req.businessModels;
+    const sale = await Sale.findById(req.params.id);
+    if (!sale) {
+      return res.status(404).json({ success: false, error: 'Sale not found' });
+    }
+    if (sale.branchId && String(sale.branchId) !== String(req.user.branchId)) {
+      return res.status(403).json({ success: false, error: 'Sale belongs to another branch' });
+    }
+    const logs = await InventoryConsumptionLog.find({
+      billId: sale._id,
+      isReversal: false,
+      branchId: req.user.branchId,
+    })
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .populate('productId', 'name volumeUnit baseUnit')
+      .lean();
+    res.json({
+      success: true,
+      data: {
+        saleId: String(sale._id),
+        billNo: sale.billNo,
+        status: sale.status,
+        priorLogs: logs.map((log) => ({
+          id: String(log._id),
+          productId: String(log.productId?._id || log.productId),
+          productName: log.productId?.name || 'Product',
+          quantityConsumed: log.quantityConsumed,
+          unit: (log.productId?.volumeUnit || log.productId?.baseUnit || 'pcs').toLowerCase(),
+          source: log.source || 'auto',
+          createdAt: log.createdAt,
+          notes: log.adjustmentReason || '',
+        })),
+      },
+    });
+  } catch (err) {
+    logger.error('Error previewing sale consumption:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Record manual inventory consumption on a bill (ad-hoc product + quantity; no rules required)
+app.post('/api/sales/:id/consumption', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { Sale } = req.businessModels;
+    const sale = await Sale.findById(req.params.id);
+    if (!sale) {
+      return res.status(404).json({ success: false, error: 'Sale not found' });
+    }
+    if (sale.branchId && String(sale.branchId) !== String(req.user.branchId)) {
+      return res.status(403).json({ success: false, error: 'Sale belongs to another branch' });
+    }
+    const autoConsumption = require('./services/auto-consumption');
+    const status = autoConsumption.normalizeStatus(sale.status);
+    if (!autoConsumption.isManualConsumptionStatus(status)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Consumption can only be recorded on active bills (completed, part-paid, or unpaid).',
+      });
+    }
+    const { entries, notes } = req.body || {};
+    if (!Array.isArray(entries) || entries.length === 0) {
+      return res.status(400).json({ success: false, error: 'entries array with productId and quantity is required' });
+    }
+    const normalizedEntries = entries
+      .map((e) => ({
+        productId: e?.productId,
+        quantity: Number(e?.quantity),
+        notes: (e?.notes || notes || '').trim(),
+      }))
+      .filter((e) => e.productId && Number.isFinite(e.quantity) && e.quantity > 0);
+    if (normalizedEntries.length === 0) {
+      return res.status(400).json({ success: false, error: 'Each entry needs a product and quantity greater than zero' });
+    }
+    const { warnings, recordedCount } = await autoConsumption.recordAdHocManualConsumption(
+      normalizedEntries,
+      req.businessModels,
+      {
+        user: req.user,
+        branchId: sale.branchId || req.user.branchId,
+        billId: sale._id,
+        billNo: sale.billNo,
+        source: 'manual_bill',
+        notes: (notes || '').trim(),
+      }
+    );
+    if (recordedCount === 0) {
+      return res.status(400).json({
+        success: false,
+        error: warnings[0] || 'No consumption was recorded',
+        warnings,
+      });
+    }
+    res.json({ success: true, data: { recordedCount, warnings } });
+  } catch (err) {
+    logger.error('Error recording manual sale consumption:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Record manual consumption in bulk (e.g. end-of-day on products page — not tied to a bill)
+app.post('/api/inventory/manual-consumption', authenticateToken, setupBusinessDatabase, requireStaff, async (req, res) => {
+  try {
+    const { entries, notes } = req.body || {};
+    if (!Array.isArray(entries) || entries.length === 0) {
+      return res.status(400).json({ success: false, error: 'entries array with productId and quantity is required' });
+    }
+    const normalizedEntries = entries
+      .map((e) => ({
+        productId: e?.productId,
+        quantity: Number(e?.quantity),
+        notes: (e?.notes || notes || '').trim(),
+      }))
+      .filter((e) => e.productId && Number.isFinite(e.quantity) && e.quantity > 0);
+    if (normalizedEntries.length === 0) {
+      return res.status(400).json({ success: false, error: 'Each entry needs a product and quantity greater than zero' });
+    }
+    const autoConsumption = require('./services/auto-consumption');
+    const { warnings, recordedCount } = await autoConsumption.recordAdHocManualConsumption(
+      normalizedEntries,
+      req.businessModels,
+      {
+        user: req.user,
+        branchId: req.user.branchId,
+        source: 'manual_bulk',
+        notes: (notes || '').trim(),
+      }
+    );
+    if (recordedCount === 0) {
+      return res.status(400).json({
+        success: false,
+        error: warnings[0] || 'No consumption was recorded',
+        warnings,
+      });
+    }
+    res.json({ success: true, data: { recordedCount, warnings } });
+  } catch (err) {
+    logger.error('Error recording bulk manual consumption:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -18776,6 +18929,9 @@ const server = app.listen(PORT, '0.0.0.0', async () => {
   const { setupAppointmentReminderJob } = require('./jobs/appointment-reminder');
   setupAppointmentReminderJob();
 
+  const { setupClientEngagementWhatsAppJob } = require('./jobs/client-engagement-whatsapp-job');
+  setupClientEngagementWhatsAppJob();
+
   // Gupshup: partner-token warm-up + per-app health refresh (12h).
   try {
     const { start: startGupshupTokenRefresh } = require('./jobs/gupshup-token-refresh');
@@ -18812,20 +18968,14 @@ const server = app.listen(PORT, '0.0.0.0', async () => {
 const { registerGracefulShutdown } = require('./utils/shutdown');
 const { closeRedis } = require('./lib/redis');
 const { closeCampaignQueue } = require('./lib/whatsapp-campaign-queue');
-const { closeLegacyCampaignQueue } = require('./lib/legacy-campaign-queue');
 if (process.env.WHATSAPP_CAMPAIGN_WORKER_INLINE === '1') {
   const { startCampaignWorker } = require('./lib/whatsapp-campaign-queue');
   startCampaignWorker();
-}
-if (process.env.LEGACY_CAMPAIGN_WORKER_INLINE === '1') {
-  const { startLegacyCampaignWorker } = require('./lib/legacy-campaign-queue');
-  startLegacyCampaignWorker();
 }
 registerGracefulShutdown(server, [
   { name: 'rate-limit-redis', close: shutdownRateLimitInfrastructure },
   { name: 'shared-redis', close: closeRedis },
   { name: 'whatsapp-campaign-queue', close: closeCampaignQueue },
-  { name: 'legacy-campaign-queue', close: closeLegacyCampaignQueue },
   {
     name: 'tenant-database-connections',
     close: () => databaseManager.closeAllConnections(),

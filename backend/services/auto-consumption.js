@@ -25,6 +25,40 @@ function normalizeStatus(status) {
   return String(status).toLowerCase();
 }
 
+const MANUAL_CONSUMPTION_STATUSES = new Set(['completed', 'partial', 'unpaid']);
+
+function isManualConsumptionStatus(status) {
+  return MANUAL_CONSUMPTION_STATUSES.has(normalizeStatus(status));
+}
+
+/**
+ * Resolve consumption rules for a service line (variant-aware, deduped by product).
+ * @param {Object} item - Sale item with serviceId, variantKey
+ * @param {mongoose.Types.ObjectId|string} branchId
+ * @param {Object} ServiceConsumptionRule - Mongoose model
+ * @returns {Promise<Object[]>}
+ */
+async function resolveRulesForServiceItem(item, branchId, ServiceConsumptionRule) {
+  const variantKey = (item.variantKey || '').trim();
+  const allRules = await ServiceConsumptionRule.find({ serviceId: item.serviceId, branchId }).lean();
+  const rules = variantKey
+    ? allRules.filter((r) => (r.variantKey || '') === variantKey || (r.variantKey || '') === '')
+    : allRules.filter((r) => !(r.variantKey || '').trim());
+  if (rules.length === 0 && allRules.length > 0 && variantKey) {
+    rules.push(...allRules.filter((r) => !(r.variantKey || '').trim()));
+  } else if (rules.length === 0) {
+    rules.push(...allRules);
+  }
+  const seenProduct = new Set();
+  const rulesDeduped = rules.filter((r) => {
+    const key = String(r.productId);
+    if (seenProduct.has(key)) return false;
+    seenProduct.add(key);
+    return true;
+  });
+  return rulesDeduped.length ? rulesDeduped : rules;
+}
+
 /**
  * Run auto consumption for a single service line item.
  * Deducts stock per ServiceConsumptionRule and creates InventoryConsumptionLog per product.
@@ -48,29 +82,10 @@ async function runConsumptionForServiceItem(sale, itemIndex, businessModels, opt
     return { warnings, processed: false };
   }
 
-  const variantKey = (item.variantKey || '').trim();
   const branchIdForRules = sale.branchId || (options.user && options.user.branchId);
-  const allRules = await ServiceConsumptionRule.find({ serviceId: item.serviceId, branchId: branchIdForRules }).lean();
-  if (allRules.length === 0) {
-    logger.debug('[AutoConsumption] No consumption rules for serviceId:', item.serviceId, 'branchId:', String(branchIdForRules));
-  }
-  const rules = variantKey
-    ? allRules.filter((r) => (r.variantKey || '') === variantKey || (r.variantKey || '') === '')
-    : allRules.filter((r) => !(r.variantKey || '').trim());
-  if (rules.length === 0 && allRules.length > 0 && variantKey) {
-    rules.push(...allRules.filter((r) => !(r.variantKey || '').trim()));
-  } else if (rules.length === 0) {
-    rules.push(...allRules);
-  }
-  const seenProduct = new Set();
-  const rulesDeduped = rules.filter((r) => {
-    const key = String(r.productId);
-    if (seenProduct.has(key)) return false;
-    seenProduct.add(key);
-    return true;
-  });
-  const rulesFinal = rulesDeduped.length ? rulesDeduped : rules;
+  const rulesFinal = await resolveRulesForServiceItem(item, branchIdForRules, ServiceConsumptionRule);
   if (rulesFinal.length === 0) {
+    logger.debug('[AutoConsumption] No consumption rules for serviceId:', item.serviceId, 'branchId:', String(branchIdForRules));
     return { warnings, processed: true };
   }
 
@@ -242,6 +257,130 @@ async function runAutoConsumptionForSale(sale, businessModels, options = {}) {
 }
 
 /**
+ * Deduct stock for one ad-hoc manual consumption line (no service rules required).
+ * @param {{ productId: string, quantity: number, notes?: string }} entry
+ * @param {Object} businessModels
+ * @param {Object} options - { branchId, user, billId?, billNo?, serviceId?, itemIndex?, source }
+ */
+async function recordAdHocConsumptionEntry(entry, businessModels, options = {}) {
+  const { Product, InventoryConsumptionLog, InventoryTransaction } = businessModels;
+  const warnings = [];
+  const branchId = options.branchId;
+  const productId = entry?.productId;
+  const quantityToDeduct = Number(entry?.quantity);
+
+  if (!productId) {
+    return { ok: false, warnings: ['Product is required.'] };
+  }
+  if (!Number.isFinite(quantityToDeduct) || quantityToDeduct <= 0) {
+    return { ok: false, warnings: ['Quantity must be greater than zero.'] };
+  }
+  if (!branchId) {
+    return { ok: false, warnings: ['Branch is required.'] };
+  }
+
+  try {
+    const product = await Product.findById(productId);
+    if (!product) {
+      return { ok: false, warnings: ['Product not found.'] };
+    }
+    if (product.branchId && String(product.branchId) !== String(branchId)) {
+      return { ok: false, warnings: [`${product.name} belongs to another branch.`] };
+    }
+
+    const productUnit = (product.volumeUnit || product.baseUnit || 'pcs').toLowerCase();
+    const productVol = Number(product.volume);
+    const useVolumeUnits = productVol > 0 && productUnit !== 'pcs' && productUnit !== 'pkt';
+    const stockBefore = Number(product.stock);
+    const stockDelta = useVolumeUnits ? quantityToDeduct / productVol : quantityToDeduct;
+    const stockAfter = stockBefore - stockDelta;
+
+    await Product.findByIdAndUpdate(productId, { stock: stockAfter });
+
+    const staffId = String(options.staffId || options.user?.staffId || options.user?._id || '');
+    const staffName = options.staffName || options.user?.firstName || options.user?.name || options.user?.email || 'Staff';
+    const source = options.source || (options.billId ? 'manual_bill' : 'manual_bulk');
+
+    await InventoryConsumptionLog.create({
+      productId,
+      serviceId: options.serviceId || null,
+      billId: options.billId || null,
+      staffId,
+      quantityConsumed: quantityToDeduct,
+      stockBefore,
+      stockAfter,
+      isReversal: false,
+      referenceLogId: null,
+      itemIndex: options.itemIndex,
+      branchId,
+      source,
+      adjustmentReason: (entry.notes || options.notes || '').trim(),
+    });
+
+    const unitCost = Number(product.cost) || Number(product.price) || 0;
+    if (InventoryTransaction) {
+      const billNo = options.billNo || (options.billId ? `Bill-${String(options.billId).slice(-6)}` : '');
+      await InventoryTransaction.create({
+        productId,
+        productName: product.name,
+        transactionType: 'service_usage',
+        quantity: -Math.abs(stockDelta),
+        previousStock: stockBefore,
+        newStock: stockAfter,
+        unitCost,
+        totalValue: Math.abs(stockDelta * unitCost),
+        referenceType: options.billId ? 'other' : 'adjustment',
+        referenceId: options.billId ? String(options.billId) : String(productId),
+        referenceNumber: billNo || `MC-${Date.now()}`,
+        processedBy: staffName,
+        reason: source === 'manual_bill' ? 'Service consumption (manual bill)' : 'Service consumption (manual)',
+        notes: entry.notes || options.notes || `Manual consumption (${quantityToDeduct} ${productUnit})`,
+        transactionDate: new Date(),
+      });
+    }
+
+    try {
+      await checkAndSendLowInventoryAlerts(String(branchId), String(productId));
+    } catch (alertErr) {
+      logger.warn('Manual consumption: low inventory alert check failed:', alertErr.message);
+    }
+
+    return { ok: true, warnings, productName: product.name, quantity: quantityToDeduct, unit: productUnit };
+  } catch (err) {
+    logger.error('Manual consumption entry failed:', productId, err);
+    return { ok: false, warnings: [err.message || 'Failed to record consumption.'] };
+  }
+}
+
+/**
+ * Record multiple ad-hoc manual consumption lines.
+ * @param {Array<{ productId: string, quantity: number, notes?: string }>} entries
+ * @param {Object} businessModels
+ * @param {Object} options - { branchId, user, billId?, billNo?, source? }
+ */
+async function recordAdHocManualConsumption(entries, businessModels, options = {}) {
+  const allWarnings = [];
+  let recordedCount = 0;
+
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return { warnings: ['Add at least one product and quantity.'], recordedCount: 0 };
+  }
+
+  const branchId = options.branchId || (options.user && options.user.branchId);
+  if (!branchId) {
+    return { warnings: ['Branch is required to record consumption.'], recordedCount: 0 };
+  }
+
+  for (const entry of entries) {
+    const result = await recordAdHocConsumptionEntry(entry, businessModels, { ...options, branchId });
+    if (result.warnings?.length) allWarnings.push(...result.warnings);
+    if (result.ok) recordedCount++;
+  }
+
+  return { warnings: allWarnings, recordedCount };
+}
+
+/**
  * Reverse all consumption logs for a bill (e.g. when status changes to cancelled).
  * Creates reversal logs, restores product stock, clears autoConsumptionProcessedAt on sale items.
  * @param {mongoose.Types.ObjectId|string} saleId - Sale _id
@@ -276,7 +415,7 @@ async function reverseConsumptionForBill(saleId, businessModels) {
         serviceId: log.serviceId,
         billId: log.billId,
         staffId: log.staffId,
-        quantityConsumed: -restoreQty,
+        quantityConsumed: -log.quantityConsumed,
         stockBefore: currentStock,
         stockAfter,
         isReversal: true,
@@ -303,9 +442,13 @@ async function reverseConsumptionForBill(saleId, businessModels) {
 
 module.exports = {
   runAutoConsumptionForSale,
+  recordAdHocManualConsumption,
+  recordAdHocConsumptionEntry,
   reverseConsumptionForBill,
   runConsumptionForServiceItem,
+  resolveRulesForServiceItem,
   getPrimaryStaffId,
   normalizeStatus,
+  isManualConsumptionStatus,
   UNIT_ENUM
 };

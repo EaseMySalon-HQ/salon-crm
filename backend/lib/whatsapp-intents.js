@@ -30,64 +30,63 @@ const INTENTS = Object.freeze({
 
 /**
  * Provider policy (interpreted by whatsapp-router.js):
- *   gupshup_only       — Gupshup only (marketing/campaigns); no MSG91 fallback
- *   gupshup_then_msg91 — Gupshup when available; MSG91 fallback for transactional
- *   sms_first          — SMS provider first
+ *   gupshup_only — Gupshup Partner Portal (only supported WhatsApp provider)
+ *   sms_first    — SMS provider first
  */
 const DESCRIPTORS = Object.freeze({
   [INTENTS.APPOINTMENT_CONFIRMATION]: {
     category: 'utility',
     cswFreeIfOpen: true,
     fallbackChannel: 'sms',
-    providerPolicy: 'gupshup_then_msg91',
+    providerPolicy: 'gupshup_only',
   },
   [INTENTS.APPOINTMENT_REMINDER]: {
     category: 'utility',
     cswFreeIfOpen: true,
     fallbackChannel: 'sms',
-    providerPolicy: 'gupshup_then_msg91',
+    providerPolicy: 'gupshup_only',
   },
   [INTENTS.APPOINTMENT_RESCHEDULE]: {
     category: 'utility',
     cswFreeIfOpen: true,
     fallbackChannel: 'sms',
-    providerPolicy: 'gupshup_then_msg91',
+    providerPolicy: 'gupshup_only',
   },
   [INTENTS.APPOINTMENT_CANCELLATION]: {
     category: 'utility',
     cswFreeIfOpen: true,
     fallbackChannel: 'sms',
-    providerPolicy: 'gupshup_then_msg91',
+    providerPolicy: 'gupshup_only',
   },
   [INTENTS.INVOICE]: {
     category: 'utility',
     cswFreeIfOpen: true,
     fallbackChannel: 'sms',
-    providerPolicy: 'gupshup_then_msg91',
+    providerPolicy: 'gupshup_only',
   },
   [INTENTS.PAYMENT_RECEIPT]: {
     category: 'utility',
     cswFreeIfOpen: true,
     fallbackChannel: 'sms',
-    providerPolicy: 'gupshup_then_msg91',
+    providerPolicy: 'gupshup_only',
   },
   [INTENTS.WALLET_UPDATE]: {
     category: 'utility',
     cswFreeIfOpen: true,
     fallbackChannel: 'sms',
-    providerPolicy: 'gupshup_then_msg91',
+    providerPolicy: 'gupshup_only',
   },
   [INTENTS.WALLET_EXPIRY]: {
     category: 'utility',
     cswFreeIfOpen: true,
     fallbackChannel: 'sms',
-    providerPolicy: 'gupshup_then_msg91',
+    providerPolicy: 'gupshup_only',
   },
   [INTENTS.PACKAGE_REMINDER]: {
     category: 'utility',
     cswFreeIfOpen: true,
     fallbackChannel: 'sms',
-    providerPolicy: 'gupshup_then_msg91',
+    providerPolicy: 'gupshup_only',
   },
   [INTENTS.MARKETING_CAMPAIGN]: {
     category: 'marketing',
@@ -105,13 +104,13 @@ const DESCRIPTORS = Object.freeze({
     category: 'utility',
     cswFreeIfOpen: true,
     fallbackChannel: 'email',
-    providerPolicy: 'gupshup_then_msg91',
+    providerPolicy: 'gupshup_only',
   },
   [INTENTS.WELCOME]: {
     category: 'utility',
     cswFreeIfOpen: true,
     fallbackChannel: 'sms',
-    providerPolicy: 'gupshup_then_msg91',
+    providerPolicy: 'gupshup_only',
   },
 });
 

@@ -1673,6 +1673,14 @@ export class InventoryAPI {
     return response.data
   }
 
+  static async recordManualConsumption(body: {
+    entries: Array<{ productId: string; quantity: number; notes?: string }>
+    notes?: string
+  }): Promise<ApiResponse<{ recordedCount: number; warnings: string[] }>> {
+    const response = await apiClient.post('/inventory/manual-consumption', body)
+    return response.data
+  }
+
   static async getTransactions(params?: { page?: number; limit?: number; productId?: string; transactionType?: string; dateFrom?: string; dateTo?: string }): Promise<PaginatedResponse<any>> {
     const response = await apiClient.get('/inventory/transactions', { params })
     return response.data
@@ -1790,6 +1798,11 @@ export class AppointmentsAPI {
 
   static async updateStatus(id: string, status: string): Promise<ApiResponse<any>> {
     const response = await apiClient.patch(`/appointments/${id}/status`, { status })
+    return response.data
+  }
+
+  static async sendReminder(id: string): Promise<ApiResponse<unknown>> {
+    const response = await apiClient.post(`/appointments/${id}/send-reminder`)
     return response.data
   }
 
@@ -2737,6 +2750,36 @@ export class SalesAPI {
 
   static async getByBillNo(billNo: string): Promise<ApiResponse<any>> {
     const response = await apiClient.get(`/sales/bill/${billNo}`)
+    return response.data
+  }
+
+  static async getConsumptionPreview(saleId: string): Promise<ApiResponse<{
+    saleId: string
+    billNo: string
+    status: string
+    priorLogs: Array<{
+      id: string
+      productId: string
+      productName: string
+      quantityConsumed: number
+      unit: string
+      source: string
+      createdAt?: string
+      notes?: string
+    }>
+  }>> {
+    const response = await apiClient.get(`/sales/${saleId}/consumption-preview`)
+    return response.data
+  }
+
+  static async recordConsumption(
+    saleId: string,
+    body: {
+      entries: Array<{ productId: string; quantity: number; notes?: string }>
+      notes?: string
+    }
+  ): Promise<ApiResponse<{ recordedCount: number; warnings: string[] }>> {
+    const response = await apiClient.post(`/sales/${saleId}/consumption`, body)
     return response.data
   }
 

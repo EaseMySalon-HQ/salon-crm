@@ -31,7 +31,7 @@ type WhatsAppAdminConfig = {
   platformAvailable?: boolean
   platformTemplatesReady?: boolean
   salonConnected?: boolean
-  senderMode?: "none" | "platform" | "business" | "msg91"
+  senderMode?: "none" | "platform" | "business"
   wabaAddonEnabled?: boolean
   legacyWhatsappAddonEnabled?: boolean
   messagingAddonEnabled?: boolean
@@ -68,6 +68,12 @@ type WhatsAppNotificationState = {
   clientWalletExpiryReminderNotifications: {
     enabled: boolean
   }
+  clientDuesReminderNotifications: {
+    enabled: boolean
+  }
+  clientBirthdayReminderNotifications: {
+    enabled: boolean
+  }
 }
 
 const DEFAULT_WHATSAPP_NOTIFICATIONS: WhatsAppNotificationState = {
@@ -95,6 +101,12 @@ const DEFAULT_WHATSAPP_NOTIFICATIONS: WhatsAppNotificationState = {
     enabled: true,
   },
   clientWalletExpiryReminderNotifications: {
+    enabled: true,
+  },
+  clientDuesReminderNotifications: {
+    enabled: true,
+  },
+  clientBirthdayReminderNotifications: {
     enabled: true,
   },
 }
@@ -238,6 +250,22 @@ export function WhatsAppNotificationSettings() {
                 whatsappSettings.clientWalletExpiryReminderNotifications?.enabled !== undefined
                   ? whatsappSettings.clientWalletExpiryReminderNotifications.enabled
                   : prev.clientWalletExpiryReminderNotifications.enabled,
+            },
+            clientDuesReminderNotifications: {
+              ...prev.clientDuesReminderNotifications,
+              ...whatsappSettings.clientDuesReminderNotifications,
+              enabled:
+                whatsappSettings.clientDuesReminderNotifications?.enabled !== undefined
+                  ? whatsappSettings.clientDuesReminderNotifications.enabled
+                  : prev.clientDuesReminderNotifications.enabled,
+            },
+            clientBirthdayReminderNotifications: {
+              ...prev.clientBirthdayReminderNotifications,
+              ...whatsappSettings.clientBirthdayReminderNotifications,
+              enabled:
+                whatsappSettings.clientBirthdayReminderNotifications?.enabled !== undefined
+                  ? whatsappSettings.clientBirthdayReminderNotifications.enabled
+                  : prev.clientBirthdayReminderNotifications.enabled,
             },
           }))
         }
@@ -531,8 +559,29 @@ export function WhatsAppNotificationSettings() {
 
                   <div className="flex items-center justify-between py-1.5">
                     <div className="space-y-0.5">
+                      <Label className="text-sm">Scheduling</Label>
+                      <p className="text-xs text-gray-500">
+                        Sent when a new appointment is booked (status Scheduled).
+                      </p>
+                    </div>
+                    <Switch
+                      checked={settings.appointmentNotifications.newAppointments !== false}
+                      onCheckedChange={(checked) =>
+                        setSettings((prev) => ({
+                          ...prev,
+                          appointmentNotifications: { ...prev.appointmentNotifications, newAppointments: checked },
+                        }))
+                      }
+                      disabled={!settings.enabled}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between py-1.5">
+                    <div className="space-y-0.5">
                       <Label className="text-sm">Confirmation</Label>
-                      <p className="text-xs text-gray-500">Sent when a new appointment is booked.</p>
+                      <p className="text-xs text-gray-500">
+                        Sent when appointment status is set to Confirmed.
+                      </p>
                     </div>
                     <Switch
                       checked={settings.appointmentNotifications.confirmations}
@@ -662,6 +711,76 @@ export function WhatsAppNotificationSettings() {
                       ...prev,
                       clientWalletExpiryReminderNotifications: {
                         ...prev.clientWalletExpiryReminderNotifications,
+                        enabled: checked,
+                      },
+                    }))
+                  }
+                  disabled={!settings.enabled}
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center space-x-2">
+                <Wallet className="h-5 w-5 text-rose-600" />
+                <span>Outstanding dues reminders</span>
+              </CardTitle>
+              <CardDescription>
+                Sent every 7 days at 12:00 PM to clients with pending bill balance. Uses the admin template
+                &quot;Outstanding dues reminder&quot;.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <Label>Send dues reminder WhatsApp</Label>
+                  <p className="text-sm text-gray-500">
+                    Client must have a phone number and unpaid sales (part-paid / unpaid bills).
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.clientDuesReminderNotifications?.enabled !== false}
+                  onCheckedChange={(checked) =>
+                    setSettings((prev) => ({
+                      ...prev,
+                      clientDuesReminderNotifications: {
+                        ...prev.clientDuesReminderNotifications,
+                        enabled: checked,
+                      },
+                    }))
+                  }
+                  disabled={!settings.enabled}
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center space-x-2">
+                <Wallet className="h-5 w-5 text-pink-600" />
+                <span>Birthday wishes</span>
+              </CardTitle>
+              <CardDescription>
+                Sent once on the client&apos;s birthday at 12:00 PM. Requires date of birth on the client profile.
+                Uses the admin template &quot;Birthday wish&quot;.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <Label>Send birthday WhatsApp</Label>
+                  <p className="text-sm text-gray-500">One message per client per calendar year.</p>
+                </div>
+                <Switch
+                  checked={settings.clientBirthdayReminderNotifications?.enabled !== false}
+                  onCheckedChange={(checked) =>
+                    setSettings((prev) => ({
+                      ...prev,
+                      clientBirthdayReminderNotifications: {
+                        ...prev.clientBirthdayReminderNotifications,
                         enabled: checked,
                       },
                     }))

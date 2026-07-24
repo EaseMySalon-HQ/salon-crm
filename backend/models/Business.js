@@ -216,6 +216,14 @@ const businessSchema = new mongoose.Schema({
       clientWalletExpiryReminderNotifications: {
         enabled: { type: Boolean, default: true },
       },
+      /** WhatsApp when client has outstanding bill dues (every 7 days) */
+      clientDuesReminderNotifications: {
+        enabled: { type: Boolean, default: true },
+      },
+      /** WhatsApp birthday wish on client's date of birth */
+      clientBirthdayReminderNotifications: {
+        enabled: { type: Boolean, default: true },
+      },
       /**
        * Per-business Gupshup template ids for transactional slots (connected own app).
        * Populated via WhatsApp → Templates → Map. Shared-number salons use AdminSettings.
@@ -378,8 +386,8 @@ const businessSchema = new mongoose.Schema({
     // avoid breaking older documents and any legacy read paths.
     addons: {
       /**
-       * Legacy MSG91 WhatsApp channel. When ON, message sites route through
-       * the existing MSG91 pipeline. Kept untouched for backwards compat.
+       * Transactional WhatsApp notifications (receipts, appointments, etc.).
+       * Sends via Gupshup when enabled together with WABA or this add-on.
        */
       whatsapp: {
         enabled: { type: Boolean, default: false },
@@ -388,11 +396,9 @@ const businessSchema = new mongoose.Schema({
         lastResetAt: { type: Date },
       },
       /**
-       * Native Meta Cloud API integration ("WABA"). When ON, the new
-       * WhatsApp module (templates, campaigns, inbox, webhook-driven status)
-       * takes over routing — `whatsapp-router.route()` returns provider:'meta'
-       * only when this flag is true AND the WABA is connected. When this is
-       * OFF, calls fall back to the legacy MSG91 path (if `whatsapp` is on).
+       * Gupshup WABA integration. When ON, templates, campaigns, inbox, and
+       * webhook-driven status are available. Sends route via Gupshup (own app
+       * when connected, otherwise the shared platform number).
        */
       waba: {
         enabled: { type: Boolean, default: false },

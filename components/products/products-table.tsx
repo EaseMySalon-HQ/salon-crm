@@ -25,6 +25,7 @@ import { TransferRequestForm, type TransferFormPrefill } from "@/components/prod
 import { useTransferEligibility } from "@/hooks/use-transfer-eligibility"
 import { InventoryLogs } from "@/components/products/inventory-logs"
 import { ProductImportModal } from "@/components/products/product-import-modal"
+import { RecordConsumptionDialog } from "@/components/bills/record-consumption-dialog"
 import { useAuth } from "@/lib/auth-context"
 import { useCurrency } from "@/hooks/use-currency"
 import { useToast } from "@/hooks/use-toast"
@@ -90,6 +91,7 @@ export function ProductsTable({
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [isProductOutDialogOpen, setIsProductOutDialogOpen] = useState(false)
+  const [isRecordConsumptionOpen, setIsRecordConsumptionOpen] = useState(false)
   const [isTransferFormOpen, setIsTransferFormOpen] = useState(false)
   const [transferPrefill, setTransferPrefill] = useState<TransferFormPrefill | undefined>()
   const { data: transferEligibility } = useTransferEligibility()
@@ -359,6 +361,26 @@ export function ProductsTable({
                   />
                 </DialogContent>
               </Dialog>
+
+              <Button
+                variant="outline"
+                className="h-10 px-4 border-amber-200 text-amber-800 hover:bg-amber-50 hover:border-amber-300"
+                onClick={() => setIsRecordConsumptionOpen(true)}
+              >
+                <Package className="mr-2 h-4 w-4" />
+                Record consumption
+              </Button>
+              {isRecordConsumptionOpen && (
+                <RecordConsumptionDialog
+                  mode="standalone"
+                  open={isRecordConsumptionOpen}
+                  onOpenChange={setIsRecordConsumptionOpen}
+                  onRecorded={() => {
+                    fetchProducts()
+                    window.dispatchEvent(new CustomEvent("inventoryTransactionCreated"))
+                  }}
+                />
+              )}
 
               <Button
                 variant="outline"

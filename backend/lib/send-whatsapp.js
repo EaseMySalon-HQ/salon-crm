@@ -539,15 +539,6 @@ async function sendWhatsApp(args) {
         requireBusinessSender: requireTenantApp,
       });
     }
-  } else if (routing.provider === 'msg91') {
-    // Legacy MSG91 path is handled by the existing whatsappService send-sites.
-    // The unified pipeline only needs to record the attempt; callers fall back
-    // to the legacy code path when they receive `provider === 'msg91'`.
-    providerResult = { success: true, data: { provider: 'msg91', delegated: true } };
-    messageDoc.status = 'sent';
-    messageDoc.statusEvents.push({ status: 'sent', at: new Date(), raw: providerResult.data });
-    await messageDoc.save();
-    return { success: true, deduped: false, message: messageDoc, delegateToMsg91: true };
   } else if (routing.provider === 'sms') {
     providerResult = { success: true, data: { provider: 'sms', delegated: true } };
     messageDoc.status = 'sent';

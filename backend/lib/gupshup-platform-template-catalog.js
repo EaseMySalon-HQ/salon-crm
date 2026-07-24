@@ -49,17 +49,9 @@ const PLATFORM_TEMPLATE_CATALOG = Object.freeze([
     elementName: 'ems_appointment_reschedule',
     category: 'UTILITY',
     language: 'en_US',
-    exampleParams: [
-      'Priya',
-      'Haircut',
-      '16 Jul 2026',
-      '5:00 PM',
-      'Anita',
-      'Glow Salon',
-      '919876543210',
-    ],
+    exampleParams: ['Priya', 'Glow Salon', '16 Jul 2026', '5:00 PM', '919876543210'],
     content:
-      'Hi {{1}}, your {{2}} at {{6}} has been rescheduled to {{3}} at {{4}} with {{5}}. Call {{7}} for help.',
+      'Hello *{{1}}*,\nYour appointment at *{{2}}* has been rescheduled.\n*📅 New Date: {{3}}*\n*⏰ New Time: {{4}}*\nFor assistance call *{{5}}*.\nThank you.',
   },
   {
     slotKey: 'receipt',
@@ -86,6 +78,24 @@ const PLATFORM_TEMPLATE_CATALOG = Object.freeze([
     exampleParams: ['Priya', 'Gold Plan', 'Glow Salon', '7', '31 Jul 2026', 'Rs 1500'],
     content:
       'Hi {{1}}, your {{2}} wallet at {{3}} expires in {{4}} days ({{5}}). Balance: {{6}}.',
+  },
+  {
+    slotKey: 'clientDuesReminder',
+    elementName: 'ems_client_dues_reminder',
+    category: 'UTILITY',
+    language: 'en_US',
+    exampleParams: ['Priya', '1,250', 'Glow Salon'],
+    content:
+      'Hi {{1}} 👋\n\nThis is a friendly reminder that an outstanding balance of *₹{{2}}* is pending on your account.\n\nTo avoid any inconvenience during your next visit, we request you to clear the dues at your earliest convenience.\n\nIf you\'ve already made the payment, please ignore this message.\n\nFor any queries, feel free to reply to this message or contact us.\n\nThank you for choosing *{{3}}*. 💙',
+  },
+  {
+    slotKey: 'clientBirthdayReminder',
+    elementName: 'ems_client_birthday',
+    category: 'UTILITY',
+    language: 'en_US',
+    exampleParams: ['Priya', 'Glow Salon', 'Glow Salon'],
+    content:
+      '🎉 Happy Birthday, {{1}}! 🎂\n\nThe entire team at *{{2}}* wishes you a wonderful year filled with happiness, good health, and success. 💐\n\nTo make your special day even more memorable, we\'ve got something special waiting for you! 🎁\n\nVisit us and celebrate with an exclusive birthday surprise.\n\nWe look forward to pampering you soon! ✨\n\nWarm wishes,\n*Team {{3}}* 💙',
   },
   {
     slotKey: 'welcomeMessage',
@@ -156,6 +166,8 @@ const NOTIFICATION_SLOT_KEYS = [
   'receiptCancellation',
   'clientWalletTransaction',
   'clientWalletExpiryReminder',
+  'clientDuesReminder',
+  'clientBirthdayReminder',
   'welcomeMessage',
   'platformLeadWelcome',
   'businessAccountCreated',

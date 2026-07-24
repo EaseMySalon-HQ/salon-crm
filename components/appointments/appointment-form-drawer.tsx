@@ -48,6 +48,7 @@ export function AppointmentFormDrawer({
   const [formOpenKey, setFormOpenKey] = useState(0)
   const [serviceCheckoutOpen, setServiceCheckoutOpen] = useState(false)
   const [checkoutPaymentStep, setCheckoutPaymentStep] = useState(false)
+  const postPaymentModalActiveRef = useRef(false)
   const serviceCheckoutPaymentBackRef = useRef<(() => void) | null>(null)
   const [drawerHeaderEnd, setDrawerHeaderEnd] = useState<ReactNode>(null)
   const [drawerHeaderStatusTone, setDrawerHeaderStatusTone] = useState<string | null>(null)
@@ -145,7 +146,7 @@ export function AppointmentFormDrawer({
   const handleServiceCheckoutOpenChange = useCallback(
     (next: boolean) => {
       setServiceCheckoutOpen(next)
-      if (openCheckoutDirectly && !next) {
+      if (openCheckoutDirectly && !next && !postPaymentModalActiveRef.current) {
         onOpenChange(false)
       }
     },
@@ -260,6 +261,9 @@ export function AppointmentFormDrawer({
                 onDrawerHeaderStatusToneChange={setDrawerHeaderStatusTone}
                 onDrawerSelectedServiceCountChange={setDrawerSelectedServiceCount}
                 onEditAppointmentDirtyChange={setEditAppointmentDirty}
+                onPostPaymentModalActiveChange={(active) => {
+                  postPaymentModalActiveRef.current = active
+                }}
               />
             </div>
           </div>

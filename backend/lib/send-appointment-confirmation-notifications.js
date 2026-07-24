@@ -387,6 +387,11 @@ async function sendAppointmentConfirmationNotifications(req, createdAppointments
             const { Client, Staff } = req.businessModels;
             
             for (const appointment of createdAppointments) {
+              const appointmentStatus = String(appointment.status || 'scheduled').toLowerCase();
+              if (appointmentStatus !== 'confirmed') {
+                continue;
+              }
+
               // Get client
               let client = null;
               if (appointment.clientId && typeof appointment.clientId === 'object') {
