@@ -203,8 +203,6 @@ Salons with **their own connected app** use **WhatsApp → Templates** in the te
 
 **Platform admin:** `/api/admin/gupshup/*` (templates, campaigns, inbox, webhooks).
 
-**MSG91 legacy** (transactional fallback analytics only): `/api/whatsapp/msg91/*` (alias `/api/whatsapp/*`).
-
 When implementing, follow existing conventions:
 - New provider client: `backend/services/gupshup-whatsapp-service.js` (token lookup, decrypt-at-use, axios, no plaintext logs).
 - Register in `whatsapp-router.js` so `send-whatsapp.js` can route to it; keep dedupe + wallet debit in the unified pipeline.

@@ -1,13 +1,13 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useParams, useSearchParams } from "next/navigation"
 import { ProtectedRoute } from "@/components/auth/protected-route"
 import { ProtectedLayout } from "@/components/layout/protected-layout"
 import { ReceiptTemplateView, printReceiptWithTemplate } from "@/components/receipts/receipt-template-view"
 import { ReceiptPrintStyles } from "@/components/receipts/receipt-print-styles"
 import { Button } from "@/components/ui/button"
-import { Printer, ArrowLeft, MessageCircle } from "lucide-react"
+import { Printer, ArrowLeft, MessageCircle, Package } from "lucide-react"
 import Link from "next/link"
 import { SettingsAPI } from "@/lib/api"
 import { SalesAPI } from "@/lib/api"
@@ -15,6 +15,8 @@ import { useToast } from "@/hooks/use-toast"
 import { buildReceiptPaymentsWithLegacyFallback } from "@/lib/sale-payment-lines"
 import { formatSaleTimeForDisplay } from "@/lib/sale-datetime-format"
 import { receiptPreviewFromBillPageData } from "@/lib/receipt-preview-from-sale-api"
+import { RecordConsumptionDialog } from "@/components/bills/record-consumption-dialog"
+import { canShowRecordConsumptionCta } from "@/lib/record-consumption-cta"
 
 interface ReceiptData {
   id: string
@@ -87,6 +89,7 @@ export default function ReceiptPage() {
   const [businessSettings, setBusinessSettings] = useState<any>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [consumptionDialogOpen, setConsumptionDialogOpen] = useState(false)
   const { toast } = useToast()
 
   // Load business settings
@@ -366,6 +369,38 @@ export default function ReceiptPage() {
     }
   }, [receipt, params.billNo, searchParams])
 
+  // Resolve Mongo sale id when receipt was opened from ?data= (no id in payload)
+  useEffect(() => {
+    const billNo = params.billNo as string
+    if (!billNo || receipt?.id) return
+    const status = String(receipt?.status || "").toLowerCase()
+    if (!["completed", "partial", "unpaid"].includes(status) || receipt?.invoiceDeleted) return
+
+    let cancelled = false
+    SalesAPI.getByBillNo(billNo)
+      .then((res) => {
+        if (cancelled || !res?.success || !res.data) return
+        const saleId = res.data._id || res.data.id
+        if (!saleId) return
+        setReceipt((prev) => (prev ? { ...prev, id: String(saleId) } : prev))
+      })
+      .catch(() => {})
+
+    return () => {
+      cancelled = true
+    }
+  }, [params.billNo, receipt?.id, receipt?.status, receipt?.invoiceDeleted])
+
+  const showConsumptionCta = useMemo(
+    () =>
+      canShowRecordConsumptionCta({
+        saleId: receipt?.id,
+        status: receipt?.status,
+        invoiceDeleted: receipt?.invoiceDeleted,
+      }),
+    [receipt?.id, receipt?.status, receipt?.invoiceDeleted]
+  )
+
   const handlePrint = () => {
     if (!receipt) return
     printReceiptWithTemplate(
@@ -477,6 +512,16 @@ ${publicUrl}`
               <Printer className="h-4 w-4 mr-2" />
               Print
             </Button>
+            {showConsumptionCta && receipt.id ? (
+              <Button
+                onClick={() => setConsumptionDialogOpen(true)}
+                variant="outline"
+                className="bg-amber-50 border-amber-200 text-amber-900 hover:bg-amber-100"
+              >
+                <Package className="h-4 w-4 mr-2" />
+                Record consumption
+              </Button>
+            ) : null}
             <Button onClick={handleShareWhatsApp} variant="outline" className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
               <MessageCircle className="h-4 w-4 mr-2" />
               Share via WhatsApp
@@ -503,6 +548,15 @@ ${publicUrl}`
       </div>
 
       <ReceiptPrintStyles businessSettings={businessSettings} />
+
+      {receipt?.id ? (
+        <RecordConsumptionDialog
+          saleId={String(receipt.id)}
+          billNo={receipt.billNo}
+          open={consumptionDialogOpen}
+          onOpenChange={setConsumptionDialogOpen}
+        />
+      ) : null}
     </div>
   )
 

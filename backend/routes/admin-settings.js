@@ -491,9 +491,7 @@ let adminSettingsFallback = {
       },
       whatsappService: {
         enabled: false,
-        provider: "msg91",
-        msg91ApiKey: "",
-        msg91SenderId: "",
+        provider: "gupshup",
         templateIncludesBaseUrl: true, // If true, template already has base URL, only pass path variables
         templateIncludesGoogleMapsBaseUrl: true, // MSG91 short link: base https://maps.app.goo.gl/ is in template; pass slug only
         templates: {
@@ -511,7 +509,6 @@ let adminSettingsFallback = {
         },
         templateVariables: {},
         templateJavaScriptCodes: {},
-        msg91TemplateId: "", // Legacy field for backward compatibility
         receiptNotifications: true,
         appointmentNotifications: true,
         systemAlerts: false
@@ -762,7 +759,7 @@ router.post('/test/:type', authenticateAdmin, setupMainDatabase, async (req, res
           whatsappService.config = {
             ...(originalConfig || {}),
             ...testSettings,
-            provider: 'msg91',
+            provider: 'gupshup',
             templates: mergedTemplates,
             templateVariables: mergedTemplateVariables,
           };
@@ -770,9 +767,11 @@ router.post('/test/:type', authenticateAdmin, setupMainDatabase, async (req, res
           const templateIdForType = mergedTemplates[requestedTemplateType];
           const hasTemplate =
             (templateIdForType && String(templateIdForType).trim()) ||
-            (mergedTemplates.default && String(mergedTemplates.default).trim()) ||
-            (testSettings.msg91TemplateId && String(testSettings.msg91TemplateId).trim());
-          whatsappService.enabled = testSettings.enabled !== false && testSettings.msg91ApiKey && hasTemplate;
+            (mergedTemplates.default && String(mergedTemplates.default).trim());
+          const gupshupConfig = require('../lib/gupshup-config');
+          const gupshupReady = await gupshupConfig.isPlatformConfiguredAsync();
+          whatsappService.enabled =
+            testSettings.enabled !== false && hasTemplate && gupshupReady;
           
           try {
             const result = await whatsappService.testConnection(phone, templateType || 'default');

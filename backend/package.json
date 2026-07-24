@@ -12,7 +12,6 @@
     "cleanup:scheduling": "node scripts/cleanup-scheduling-stale.js",
     "wa:rotate-tunnel": "node scripts/rotate-meta-webhook-tunnel.js",
     "worker:whatsapp-campaigns": "node workers/whatsapp-campaign-worker.js",
-    "worker:legacy-campaigns": "node workers/legacy-campaign-worker.js",
     "verify:redis": "node scripts/verify-redis.js"
   },
   "keywords": [

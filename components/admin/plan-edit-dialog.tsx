@@ -397,10 +397,10 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
                 <div className="space-y-4">
                   <div className="flex items-center justify-between p-4 border rounded">
                     <div>
-                      <Label className="text-base font-semibold">WhatsApp (legacy / MSG91)</Label>
+                      <Label className="text-base font-semibold">WhatsApp Notifications</Label>
                       <p className="text-sm text-gray-500">
-                        Routes WhatsApp through the existing MSG91 integration. Used for receipts,
-                        reminders, etc. Leave OFF if the business is on the new WABA module.
+                        Transactional WhatsApp via Gupshup — receipts, appointment confirmations,
+                        reminders, etc. Requires WABA add-on for templates, campaigns, and inbox.
                       </p>
                     </div>
                     <Switch
@@ -446,12 +446,6 @@ export function PlanEditDialog({ businessId, businessName, open, onOpenChange, o
                       WABA add-on enabled. Templates, Campaigns, Inbox, and Settings → WhatsApp
                       Integration are unlocked. Sends route via Gupshup (own app when connected,
                       otherwise the shared platform number).
-                    </div>
-                  )}
-                  {formData.addons.waba.enabled && formData.addons.whatsapp.enabled && (
-                    <div className="rounded-md border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-900">
-                      Both WABA and legacy WhatsApp add-ons are ON. Gupshup is primary;
-                      MSG91 is fallback only when Gupshup is unavailable.
                     </div>
                   )}
 

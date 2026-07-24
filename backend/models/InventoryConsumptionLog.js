@@ -13,12 +13,18 @@ const inventoryConsumptionLogSchema = new mongoose.Schema({
   serviceId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Service',
-    required: true
+    default: null
   },
   billId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Sale',
-    required: true
+    default: null
+  },
+  /** auto | manual_bill | manual_bulk */
+  source: {
+    type: String,
+    enum: ['auto', 'manual_bill', 'manual_bulk'],
+    default: 'auto'
   },
   staffId: {
     type: String,

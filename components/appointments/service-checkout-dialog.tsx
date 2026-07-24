@@ -974,6 +974,12 @@ export interface ServiceCheckoutDialogProps {
   ) => Promise<EnsureAppointmentBookingResult | null>
   /** Called after bill is saved inline (e.g. close parent appointment drawer and return to calendar). */
   onSuccessfulCheckout?: () => void
+  /** When set, show post-payment receipt modal instead of navigating immediately. */
+  onCheckoutReceipt?: (payload: {
+    receipt: Record<string, unknown>
+    saleId: string
+    returnPath: string
+  }) => void
   /** Called when the payment step (vs catalog) toggles — drawer host can mirror title in sheet header. */
   onPaymentStepChange?: (inPaymentStep: boolean) => void
   /** Edit an existing bill (same checkout UI as appointments). */
@@ -1009,6 +1015,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
   onCustomerChange,
   ensureAppointmentBookingBeforeCheckout,
   onSuccessfulCheckout,
+  onCheckoutReceipt,
   onPaymentStepChange,
   existingSaleId,
   existingBillNo,
@@ -3500,29 +3507,37 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
 
       if (inlineResult.ok) {
         const remaining = Math.max(0, due - totalPaid)
-        toast(
-          existingSaleId
-            ? {
-                title: "Bill updated",
-                description: `${inlineResult.billNo} was saved successfully.`,
-              }
-            : isUnpaidBill
-            ? {
-                title: "Unpaid bill saved",
-                description: `${inlineResult.billNo} saved. ₹${formatCheckoutInr(remaining)} is due on this bill.`,
-              }
-            : isPartialPayment
+        if (onCheckoutReceipt && inlineResult.receipt) {
+          onCheckoutReceipt({
+            receipt: inlineResult.receipt,
+            saleId: inlineResult.saleId,
+            returnPath: "/appointments",
+          })
+        } else {
+          toast(
+            existingSaleId
               ? {
-                  title: "Partial payment recorded",
-                  description: `${inlineResult.billNo} saved. ₹${formatCheckoutInr(remaining)} balance remains on this bill.`,
-                }
-              : {
-                  title: "Bill created",
+                  title: "Bill updated",
                   description: `${inlineResult.billNo} was saved successfully.`,
                 }
-        )
+              : isUnpaidBill
+              ? {
+                  title: "Unpaid bill saved",
+                  description: `${inlineResult.billNo} saved. ₹${formatCheckoutInr(remaining)} is due on this bill.`,
+                }
+              : isPartialPayment
+                ? {
+                    title: "Partial payment recorded",
+                    description: `${inlineResult.billNo} saved. ₹${formatCheckoutInr(remaining)} balance remains on this bill.`,
+                  }
+                : {
+                    title: "Bill created",
+                    description: `${inlineResult.billNo} was saved successfully.`,
+                  }
+          )
+          onSuccessfulCheckout?.()
+        }
         onOpenChange(false)
-        onSuccessfulCheckout?.()
         return
       }
 

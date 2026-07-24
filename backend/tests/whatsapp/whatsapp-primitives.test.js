@@ -42,16 +42,16 @@ test('crypto: tamper detection throws', () => {
   assert.throws(() => decrypt(tampered), /unable to authenticate|bad/i);
 });
 
-test('intents: marketing_campaign is meta_only', () => {
+test('intents: marketing_campaign is gupshup_only', () => {
   const desc = getDescriptor(INTENTS.MARKETING_CAMPAIGN);
-  assert.equal(desc.providerPolicy, 'meta_only');
+  assert.equal(desc.providerPolicy, 'gupshup_only');
   assert.equal(desc.category, 'marketing');
   assert.equal(desc.cswFreeIfOpen, false);
 });
 
-test('intents: appointment_reminder is utility/meta_then_msg91 with CSW free', () => {
+test('intents: appointment_reminder is utility/gupshup_only with CSW free', () => {
   const desc = getDescriptor(INTENTS.APPOINTMENT_REMINDER);
-  assert.equal(desc.providerPolicy, 'meta_then_msg91');
+  assert.equal(desc.providerPolicy, 'gupshup_only');
   assert.equal(desc.category, 'utility');
   assert.equal(desc.cswFreeIfOpen, true);
   assert.equal(desc.fallbackChannel, 'sms');

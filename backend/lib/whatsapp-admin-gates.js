@@ -30,9 +30,19 @@ function isAdminClientWalletExpiryReminderNotificationsEnabled(whatsapp) {
   return isAdminWhatsappPreferenceTrueByDefault(whatsapp, 'clientWalletExpiryReminderNotifications');
 }
 
+function isAdminClientDuesReminderNotificationsEnabled(whatsapp) {
+  return isAdminWhatsappPreferenceTrueByDefault(whatsapp, 'clientDuesReminderNotifications');
+}
+
+function isAdminClientBirthdayReminderNotificationsEnabled(whatsapp) {
+  return isAdminWhatsappPreferenceTrueByDefault(whatsapp, 'clientBirthdayReminderNotifications');
+}
+
 module.exports = {
   isAdminAppointmentNotificationsEnabled,
   isAdminReceiptNotificationsEnabled,
   isAdminClientWalletTransactionNotificationsEnabled,
   isAdminClientWalletExpiryReminderNotificationsEnabled,
+  isAdminClientDuesReminderNotificationsEnabled,
+  isAdminClientBirthdayReminderNotificationsEnabled,
 };

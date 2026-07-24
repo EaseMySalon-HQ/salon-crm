@@ -78,6 +78,7 @@ import { readServiceCheckoutDraftByRef } from "@/lib/service-checkout-draft-stor
 import { ServiceCheckoutDialog, type ServiceCheckoutLine, type EnsureAppointmentBookingResult, type ServiceCheckoutDialogHandle } from "@/components/appointments/service-checkout-dialog"
 import { PaymentCollectionModal } from "@/components/reports/payment-collection-modal"
 import { ReceiptPreview } from "@/components/receipts/receipt-preview"
+import { PostPaymentReceiptModal } from "@/components/receipts/post-payment-receipt-modal"
 import { receiptPreviewReceiptFromSaleApi } from "@/lib/receipt-preview-from-sale-api"
 import { expandBundleToLines, isBundleService } from "@/lib/bundle-service"
 import { customerDropdownList, findWalkInClient, formatClientPhoneForDisplay, isWalkInClient, WALK_IN_UI_BADGE } from "@/lib/walk-in-client"
@@ -478,6 +479,8 @@ export interface AppointmentFormProps {
   onServiceCheckoutPaymentStepChange?: (inPaymentStep: boolean) => void
   /** Drawer: assign a function that exits payment-only step back to catalog. */
   serviceCheckoutPaymentBackRef?: MutableRefObject<(() => void) | null>
+  /** Drawer: parent keeps sheet open while post-payment modal is visible. */
+  onPostPaymentModalActiveChange?: (active: boolean) => void
 }
 
 export function AppointmentForm({
@@ -501,6 +504,7 @@ export function AppointmentForm({
   onEditAppointmentDirtyChange,
   onServiceCheckoutPaymentStepChange,
   serviceCheckoutPaymentBackRef,
+  onPostPaymentModalActiveChange,
 }: AppointmentFormProps = {}) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -639,6 +643,31 @@ export function AppointmentForm({
       onServiceCheckoutOpenChange?.(next)
     },
     [serviceCheckoutControlled, onServiceCheckoutOpenChange]
+  )
+
+  const [postPaymentModal, setPostPaymentModal] = useState<{
+    receipt: Record<string, unknown>
+    saleId: string
+    returnPath: string
+  } | null>(null)
+
+  const handleCheckoutReceipt = useCallback(
+    (payload: { receipt: Record<string, unknown>; saleId: string; returnPath: string }) => {
+      setPostPaymentModal(payload)
+      onPostPaymentModalActiveChange?.(true)
+    },
+    [onPostPaymentModalActiveChange]
+  )
+
+  const handlePostPaymentModalOpenChange = useCallback(
+    (next: boolean) => {
+      if (!next) {
+        setPostPaymentModal(null)
+        onPostPaymentModalActiveChange?.(false)
+        onSuccess?.()
+      }
+    },
+    [onPostPaymentModalActiveChange, onSuccess]
   )
 
   const serviceCheckoutRef = useRef<ServiceCheckoutDialogHandle>(null)
@@ -3497,7 +3526,7 @@ export function AppointmentForm({
             ensureAppointmentBookingBeforeCheckout={
               isEditMode || openCheckoutDirectly ? undefined : ensureAppointmentBookingBeforeCheckout
             }
-            onSuccessfulCheckout={onSuccess}
+            onCheckoutReceipt={handleCheckoutReceipt}
             onPaymentStepChange={onServiceCheckoutPaymentStepChange}
           />
         </div>
@@ -3685,6 +3714,7 @@ export function AppointmentForm({
           ensureAppointmentBookingBeforeCheckout={
             isEditMode ? undefined : ensureAppointmentBookingBeforeCheckout
           }
+          onCheckoutReceipt={handleCheckoutReceipt}
         />
       )}
 
@@ -4161,6 +4191,16 @@ export function AppointmentForm({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <PostPaymentReceiptModal
+        key={postPaymentModal?.saleId ?? "post-payment-idle"}
+        open={!!postPaymentModal}
+        onOpenChange={handlePostPaymentModalOpenChange}
+        receipt={postPaymentModal?.receipt ?? null}
+        saleId={postPaymentModal?.saleId}
+        returnPath={postPaymentModal?.returnPath ?? "/appointments"}
+        autoCloseSeconds={5}
+      />
     </>
   )
 }

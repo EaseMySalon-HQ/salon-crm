@@ -111,9 +111,7 @@ const adminSettingsSchema = new mongoose.Schema({
     },
     whatsapp: {
       enabled: { type: Boolean, default: false },
-      provider: { type: String, enum: ['msg91', 'gupshup'], default: 'msg91' },
-      msg91ApiKey: { type: String, default: '' },
-      msg91SenderId: { type: String, default: '' },
+      provider: { type: String, enum: ['gupshup'], default: 'gupshup' },
       /**
        * Shared platform Gupshup app used as the transactional fallback sender
        * when a salon has not connected its own app. The partner credentials +
@@ -147,20 +145,21 @@ const adminSettingsSchema = new mongoose.Schema({
         appointmentReschedule: { type: String, default: '' }, // Appointment reschedule
         clientWalletTransaction: { type: String, default: '' }, // Prepaid wallet credit/debit/adjustment/refund
         clientWalletExpiryReminder: { type: String, default: '' }, // Prepaid wallet 30/15/7-day expiry reminder
+        clientDuesReminder: { type: String, default: '' }, // Outstanding bill dues reminder
+        clientBirthdayReminder: { type: String, default: '' }, // Birthday wish on client's DOB
         default: { type: String, default: '' } // Default/fallback template
       },
-      // Template variable mappings - configure which variables each template uses
-      // Maps template variable names (body_1, body_2, etc.) to data field names
-      // These are auto-populated when JavaScript code is parsed from approved MSG91 templates
-      // Example structure: { welcomeMessage: { body_1: 'clientName', body_2: 'businessName' }, ... }
+      // Template variable mappings — body_1/body_2/… → CRM data fields.
+      // Auto-populated from Platform Template Manager (Gupshup) or default slot presets.
+      // Example: { clientDuesReminder: { body_1: 'clientName', body_2: 'duesAmountFormatted', body_3: 'businessName' } }
       templateVariables: {
         type: mongoose.Schema.Types.Mixed,
-        default: {} // Start empty - will be populated when templates are configured with JavaScript code
+        default: {}
       },
-      // Store the raw JavaScript code for each template (for parsing and re-display)
+      /** @deprecated Legacy MSG91 API sample paste — no longer used in admin UI */
       templateJavaScriptCodes: {
         type: mongoose.Schema.Types.Mixed,
-        default: {} // Stores JavaScript code for each template type
+        default: {}
       },
       // Legacy: Keep for backward compatibility
       msg91TemplateId: { type: String, default: '' },
@@ -177,6 +176,14 @@ const adminSettingsSchema = new mongoose.Schema({
         default: () => ({ enabled: true }),
       },
       clientWalletExpiryReminderNotifications: {
+        type: mongoose.Schema.Types.Mixed,
+        default: () => ({ enabled: true }),
+      },
+      clientDuesReminderNotifications: {
+        type: mongoose.Schema.Types.Mixed,
+        default: () => ({ enabled: true }),
+      },
+      clientBirthdayReminderNotifications: {
         type: mongoose.Schema.Types.Mixed,
         default: () => ({ enabled: true }),
       },
@@ -375,9 +382,7 @@ adminSettingsSchema.statics.getSettings = async function() {
   if (!settings.notifications.whatsapp) {
     settings.notifications.whatsapp = {
       enabled: false,
-      provider: 'msg91',
-      msg91ApiKey: '',
-      msg91SenderId: '',
+      provider: 'gupshup',
       templateIncludesBaseUrl: true,
       templateIncludesGoogleMapsBaseUrl: true,
       templates: {
@@ -394,6 +399,8 @@ adminSettingsSchema.statics.getSettings = async function() {
         appointmentReschedule: '',
         clientWalletTransaction: '',
         clientWalletExpiryReminder: '',
+        clientDuesReminder: '',
+        clientBirthdayReminder: '',
         default: ''
       },
       templateVariables: {},
@@ -403,6 +410,8 @@ adminSettingsSchema.statics.getSettings = async function() {
       systemAlerts: false,
       clientWalletTransactionNotifications: { enabled: true },
       clientWalletExpiryReminderNotifications: { enabled: true },
+      clientDuesReminderNotifications: { enabled: true },
+      clientBirthdayReminderNotifications: { enabled: true },
       quietHours: {
         enabled: false,
         start: '22:00',
@@ -411,10 +420,21 @@ adminSettingsSchema.statics.getSettings = async function() {
     };
     await settings.save();
   } else {
+    // Legacy installs stored msg91/meta; schema now only allows gupshup.
+    let waLegacyMigrate = false;
+    const waProvider = settings.notifications.whatsapp.provider;
+    if (waProvider && waProvider !== 'gupshup') {
+      settings.notifications.whatsapp.provider = 'gupshup';
+      settings.markModified('notifications.whatsapp');
+      waLegacyMigrate = true;
+    }
     // Ensure enabled field exists, but only set to false if it's truly undefined
     // Don't overwrite existing false/true values
     if (!settings.notifications.whatsapp.hasOwnProperty('enabled')) {
       settings.notifications.whatsapp.enabled = false;
+      waLegacyMigrate = true;
+    }
+    if (waLegacyMigrate) {
       await settings.save();
     }
   }
@@ -511,6 +531,8 @@ adminSettingsSchema.statics.getSettings = async function() {
         appointmentReschedule: '',
         clientWalletTransaction: '',
         clientWalletExpiryReminder: '',
+        clientDuesReminder: '',
+        clientBirthdayReminder: '',
         platformLeadWelcome: '',
         default: '',
       };
@@ -529,6 +551,14 @@ adminSettingsSchema.statics.getSettings = async function() {
       }
       if (settings.notifications.whatsapp.clientWalletExpiryReminderNotifications == null) {
         settings.notifications.whatsapp.clientWalletExpiryReminderNotifications = { enabled: true };
+        waMerge = true;
+      }
+      if (settings.notifications.whatsapp.clientDuesReminderNotifications == null) {
+        settings.notifications.whatsapp.clientDuesReminderNotifications = { enabled: true };
+        waMerge = true;
+      }
+      if (settings.notifications.whatsapp.clientBirthdayReminderNotifications == null) {
+        settings.notifications.whatsapp.clientBirthdayReminderNotifications = { enabled: true };
         waMerge = true;
       }
       if (settings.notifications.whatsapp.platformLeadWelcomeNotifications == null) {

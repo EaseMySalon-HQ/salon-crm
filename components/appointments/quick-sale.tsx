@@ -603,6 +603,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const [postPaymentModal, setPostPaymentModal] = useState<{
     receipt: any
     returnPath: string
+    saleId?: string
   } | null>(null)
   /** Bill activity panel: Eye opens same ReceiptPreview as post-checkout "View invoice", not /receipt. */
   const [historyInvoicePreviewOpen, setHistoryInvoicePreviewOpen] = useState(false)
@@ -5778,7 +5779,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
 
       const subtotalExcludingTax = subtotalExcludingTaxForReceipt
       const receipt: any = {
-        id: Date.now().toString(),
+        id: String(result.data?._id || result.data?.id || Date.now()),
         receiptNumber: receiptNumber,
         clientId: getCustomerId(customer),
         clientName: customer!.name,
@@ -5813,6 +5814,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           : {}),
         notes: remarks,
         shareToken: result.data?.shareToken,
+        status: result.data?.status || "completed",
         ...(creditChangeEffective &&
         changeToCredit > 0.005 && {
           billChangeCreditedToWallet: changeToCredit,
@@ -5843,7 +5845,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
             }
 
             const returnPath = linkedAppointmentId ? "/appointments" : "/quick-sale"
-            setPostPaymentModal({ receipt: { ...receipt }, returnPath })
+            setPostPaymentModal({
+              receipt: { ...receipt },
+              returnPath,
+              saleId: String(result.data?._id || result.data?.id || receipt.id),
+            })
           } else {
             console.error('❌ Failed to create sale in backend:', result.error)
                   toast({
@@ -9645,7 +9651,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           if (!next) setPostPaymentModal(null)
         }}
         receipt={postPaymentModal?.receipt ?? null}
+        saleId={postPaymentModal?.saleId}
         returnPath={postPaymentModal?.returnPath ?? "/quick-sale"}
+        autoCloseSeconds={5}
       />
 
       {/* Dues Settlement Dialog - Rendered at root level */}

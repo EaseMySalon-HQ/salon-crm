@@ -17,6 +17,7 @@ const whatsappMessageLogSchema = new mongoose.Schema({
     enum: [
       'receipt',
       'appointment',
+      'appointment_scheduling',
       'appointment_reminder',
       'appointment_reschedule',
       'appointment_cancellation',
@@ -24,6 +25,8 @@ const whatsappMessageLogSchema = new mongoose.Schema({
       'campaign',
       'client_wallet_transaction',
       'client_wallet_expiry',
+      'client_dues_reminder',
+      'client_birthday_reminder',
     ],
     required: true,
     index: true
