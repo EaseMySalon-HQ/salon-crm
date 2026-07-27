@@ -23,6 +23,14 @@ import { CashMovementModal } from "./cash-movement-modal"
 import { CashMovementsLogDialog } from "./cash-movements-log-dialog"
 import type { CashMovementRow } from "@/lib/cash-movements"
 import { billChangeCreditedToWalletCashAddition } from "@/lib/bill-change-wallet-cash"
+import {
+  checkoutCardOnlineAmount,
+  checkoutCardOnlineBreakdown,
+  checkoutCashAmount,
+  paymentHistoryCardOnlineBreakdownInRange,
+  paymentHistoryCardOnlineInRange,
+  paymentHistoryCashInRange,
+} from "@/lib/cash-registry-payment-ledger"
 import { useToast } from "@/hooks/use-toast"
 import { useFeature } from "@/hooks/use-entitlements"
 import { useAuth } from "@/lib/auth-context"
@@ -756,19 +764,15 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
       const saleDay = toDateStringIST(sale.date)
       // 1. Cash from new bills (checkout payments) - use sale date (payment at checkout = same day as invoice)
       if (saleDay >= fromDay && saleDay <= toDay) {
-        let cashAmt = 0
+        let cashAmt = checkoutCashAmount(sale)
         let isAllCash = false
         if (sale.payments && sale.payments.length > 0) {
-          const cashPayments = sale.payments.filter((p: any) => (p.mode || p.type || "").toLowerCase().includes("cash"))
           const hasNonCash = sale.payments.some((p: any) => {
             const m = (p.mode || p.type || "").toLowerCase()
             return m.includes("card") || m.includes("online") || m.includes("upi")
           })
-          cashAmt = cashPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0)
           isAllCash = cashAmt > 0 && !hasNonCash
         } else {
-          const pm = (sale.paymentMode || "").toLowerCase()
-          cashAmt = pm.includes("cash") && !pm.includes("card") && !pm.includes("online") ? (sale.netTotal || 0) : 0
           isAllCash = cashAmt > 0
         }
         cashAmt += billChangeCreditedToWalletCashAddition(sale)
@@ -776,34 +780,11 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
         total += cashAmt - (isAllCash ? tip : 0)
       }
       // 2. Cash from due collections - use paymentHistory date (when payment was actually collected)
-      ;(sale.paymentHistory || []).forEach((ph: any) => {
-        if (!ph || (ph.method || "").toLowerCase() !== "cash") return
-        const phDay = ph.date ? toDateStringIST(ph.date) : ""
-        if (phDay && phDay >= fromDay && phDay <= toDay) {
-          total += ph.amount || 0
-        }
-      })
+      total += paymentHistoryCashInRange(sale, fromDay, toDay, toDateStringIST)
     })
     return total
   }
 
-  /** Card / Online dues use paymentHistory.method; match Sale schema enum Cash | Card | Online */
-  const addOnlineSalesFromPaymentHistory = (
-    sale: any,
-    fromDay: string,
-    toDay: string,
-    add: (amt: number) => void
-  ) => {
-    ;(sale.paymentHistory || []).forEach((ph: any) => {
-      if (!ph) return
-      const method = (ph.method || "").toLowerCase()
-      if (method !== "card" && method !== "online") return
-      const phDay = ph.date ? toDateStringIST(ph.date) : ""
-      if (phDay && phDay >= fromDay && phDay <= toDay) {
-        add(ph.amount || 0)
-      }
-    })
-  }
 
   const getRealTimeOnlineSales = () => {
     if (!activeDateRange) return 0
@@ -812,20 +793,10 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     let total = 0
     salesData.forEach((sale: any) => {
       const saleDay = toDateStringIST(sale.date)
-      // 1. Card/Online from checkout (invoice date in range)
       if (saleDay >= fromDay && saleDay <= toDay) {
-        if (sale.payments && sale.payments.length > 0) {
-          total += sale.payments
-            .filter((payment: any) => payment.mode === "Card" || payment.mode === "Online")
-            .reduce((paymentSum: number, payment: any) => paymentSum + payment.amount, 0)
-        } else if (sale.paymentMode === "Card" || sale.paymentMode === "Online") {
-          total += sale.netTotal || 0
-        }
+        total += checkoutCardOnlineAmount(sale)
       }
-      // 2. Card/Online from due collections (payment date in range)
-      addOnlineSalesFromPaymentHistory(sale, fromDay, toDay, (amt) => {
-        total += amt
-      })
+      total += paymentHistoryCardOnlineInRange(sale, fromDay, toDay, toDateStringIST)
     })
     return total
   }
@@ -850,17 +821,9 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     salesData.forEach((sale: any) => {
       const saleDate = toDateStringIST(sale.date)
       if (saleDate === todayString) {
-        if (sale.payments && sale.payments.length > 0) {
-          total += sale.payments
-            .filter((payment: any) => payment.mode === "Card" || payment.mode === "Online")
-            .reduce((paymentSum: number, payment: any) => paymentSum + payment.amount, 0)
-        } else if (sale.paymentMode === "Card" || sale.paymentMode === "Online") {
-          total += sale.netTotal || 0
-        }
+        total += checkoutCardOnlineAmount(sale)
       }
-      addOnlineSalesFromPaymentHistory(sale, todayString, todayString, (amt) => {
-        total += amt
-      })
+      total += paymentHistoryCardOnlineInRange(sale, todayString, todayString, toDateStringIST)
     })
     return total
   }
@@ -880,32 +843,22 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     salesData.forEach((sale: any) => {
       const saleDay = toDateStringIST(sale.date)
       if (saleDay >= fromDay && saleDay <= toDay) {
-        let cashAmt = 0
+        let cashAmt = checkoutCashAmount(sale)
         let isAllCash = false
         if (sale.payments && sale.payments.length > 0) {
-          const cashPayments = sale.payments.filter((p: any) => (p.mode || p.type || "").toLowerCase().includes("cash"))
           const hasNonCash = sale.payments.some((p: any) => {
             const m = (p.mode || p.type || "").toLowerCase()
             return m.includes("card") || m.includes("online") || m.includes("upi")
           })
-          cashAmt = cashPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0)
           isAllCash = cashAmt > 0 && !hasNonCash
         } else {
-          const pm = (sale.paymentMode || "").toLowerCase()
-          cashAmt = pm.includes("cash") && !pm.includes("card") && !pm.includes("online") ? (sale.netTotal || 0) : 0
           isAllCash = cashAmt > 0
         }
         cashAmt += billChangeCreditedToWalletCashAddition(sale)
         const tip = sale.tip || 0
         fromNewBills += cashAmt - (isAllCash ? tip : 0)
       }
-      ;(sale.paymentHistory || []).forEach((ph: any) => {
-        if (!ph || (ph.method || "").toLowerCase() !== "cash") return
-        const phDay = ph.date ? toDateStringIST(ph.date) : ""
-        if (phDay && phDay >= fromDay && phDay <= toDay) {
-          fromDueCollected += ph.amount || 0
-        }
-      })
+      fromDueCollected += paymentHistoryCashInRange(sale, fromDay, toDay, toDateStringIST)
     })
     return { fromNewBills, fromDueCollected }
   }
@@ -921,28 +874,13 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     salesData.forEach((sale: any) => {
       const saleDay = toDateStringIST(sale.date)
       if (saleDay >= fromDay && saleDay <= toDay) {
-        if (sale.payments && sale.payments.length > 0) {
-          sale.payments.forEach((p: any) => {
-            const mode = (p.mode || p.type || "").toLowerCase()
-            const amt = p.amount || 0
-            if (mode.includes("card")) fromCard += amt
-            else if (mode.includes("online") || mode.includes("upi")) fromOnline += amt
-          })
-        } else {
-          const pm = (sale.paymentMode || "").toLowerCase()
-          if (pm.includes("card")) fromCard += sale.netTotal || 0
-          else if (pm.includes("online") || pm.includes("upi")) fromOnline += sale.netTotal || 0
-        }
+        const checkout = checkoutCardOnlineBreakdown(sale)
+        fromCard += checkout.card
+        fromOnline += checkout.online
       }
-      ;(sale.paymentHistory || []).forEach((ph: any) => {
-        if (!ph) return
-        const phDay = ph.date ? toDateStringIST(ph.date) : ""
-        if (!phDay || phDay < fromDay || phDay > toDay) return
-        const method = (ph.method || "").toLowerCase()
-        const amt = ph.amount || 0
-        if (method === "card") fromCard += amt
-        else if (method === "online") fromOnline += amt
-      })
+      const due = paymentHistoryCardOnlineBreakdownInRange(sale, fromDay, toDay, toDateStringIST)
+      fromCard += due.card
+      fromOnline += due.online
     })
     return { fromCard, fromOnline }
   }
@@ -956,33 +894,22 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
       const saleDateStr = toDateStringIST(sale.date)
       // 1. Cash from new bills (checkout) - sale date = entry date
       if (saleDateStr === normalizedEntryDate) {
-        let cashAmt = 0
+        let cashAmt = checkoutCashAmount(sale)
         let isAllCash = false
         if (sale.payments && sale.payments.length > 0) {
-          const cashPayments = sale.payments.filter((p: any) => (p.mode || p.type || "").toLowerCase().includes("cash"))
           const hasNonCash = sale.payments.some((p: any) => {
             const m = (p.mode || p.type || "").toLowerCase()
             return m.includes("card") || m.includes("online") || m.includes("upi")
           })
-          cashAmt = cashPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0)
           isAllCash = cashAmt > 0 && !hasNonCash
         } else {
-          const pm = (sale.paymentMode || "").toLowerCase()
-          cashAmt = pm.includes("cash") && !pm.includes("card") && !pm.includes("online") ? (sale.netTotal || 0) : 0
           isAllCash = cashAmt > 0
         }
         cashAmt += billChangeCreditedToWalletCashAddition(sale)
         const tip = sale.tip || 0
         total += cashAmt - (isAllCash ? tip : 0)
       }
-      // 2. Cash from due collections - paymentHistory date = entry date
-      ;(sale.paymentHistory || []).forEach((ph: any) => {
-        if (!ph || (ph.method || "").toLowerCase() !== "cash") return
-        const phDateStr = ph.date ? toDateStringIST(ph.date) : ""
-        if (phDateStr === normalizedEntryDate) {
-          total += ph.amount || 0
-        }
-      })
+      total += paymentHistoryCashInRange(sale, normalizedEntryDate, normalizedEntryDate, toDateStringIST)
     })
     return total
   }
@@ -995,17 +922,9 @@ export function CashRegistryReport({ isVerificationModalOpen, onVerificationModa
     salesData.forEach((sale: any) => {
       const saleDate = toDateStringIST(sale.date)
       if (saleDate === normalizedEntryDate) {
-        if (sale.payments && sale.payments.length > 0) {
-          total += sale.payments
-            .filter((payment: any) => payment.mode === "Card" || payment.mode === "Online")
-            .reduce((paymentSum: number, payment: any) => paymentSum + payment.amount, 0)
-        } else if (sale.paymentMode === "Card" || sale.paymentMode === "Online") {
-          total += sale.netTotal || 0
-        }
+        total += checkoutCardOnlineAmount(sale)
       }
-      addOnlineSalesFromPaymentHistory(sale, normalizedEntryDate, normalizedEntryDate, (amt) => {
-        total += amt
-      })
+      total += paymentHistoryCardOnlineInRange(sale, normalizedEntryDate, normalizedEntryDate, toDateStringIST)
     })
     return total
   }

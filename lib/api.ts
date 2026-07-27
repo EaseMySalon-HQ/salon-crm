@@ -3955,6 +3955,22 @@ export class EmailNotificationsAPI {
     return response.data
   }
 
+  /** Published platform templates with per-slot tenant enable state */
+  static async getWhatsappTemplateSlots(): Promise<ApiResponse<{
+    slots: Array<{
+      slotKey: string
+      templateName: string
+      category: string
+      language: string
+      label: string
+      description: string
+      enabled: boolean
+    }>
+  }>> {
+    const response = await apiClient.get('/email-notifications/whatsapp/template-slots')
+    return response.data
+  }
+
   // Get all staff with email notification preferences
   static async getStaff(): Promise<ApiResponse<any>> {
     const response = await apiClient.get('/email-notifications/staff')

@@ -218,14 +218,8 @@ saleSchema.methods.addPayment = function(paymentData) {
   this.paymentStatus.paidAmount += paymentData.amount;
   this.paymentStatus.lastPaymentDate = new Date();
   
-  // Also update the payments array for consistency with frontend display
-  this.payments.push({
-    mode: paymentData.method,
-    amount: paymentData.amount
-  });
-  
-  // Let the pre-save middleware handle status updates
-  // This prevents conflicts and ensures consistent status logic
+  // Due settlements live in paymentHistory only; cash register reads checkout `payments`
+  // separately from paymentHistory to avoid double-counting.
   
   return this.save();
 };
