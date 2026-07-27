@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -24,11 +24,23 @@ import {
 import { useToast } from "@/components/ui/use-toast"
 import { compressImageFile } from "@/lib/compress-showcase-image"
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import {
+  Bold,
+  Braces,
   ExternalLink,
   FileText,
   Image as ImageIcon,
+  Italic,
+  List,
+  ListOrdered,
   Loader2,
   Phone,
+  Strikethrough,
   Trash2,
   Upload,
   X,
@@ -86,6 +98,11 @@ function readFileAsDataUrl(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error ?? new Error("Could not read file"))
     reader.readAsDataURL(file)
   })
+}
+
+/** Live template name: lowercase snake_case (Meta / Gupshup element names). */
+function normalizeTemplateNameInput(raw: string): string {
+  return raw.toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "")
 }
 
 const BUTTON_TYPES = ["QUICK_REPLY", "URL", "PHONE_NUMBER"] as const
@@ -170,6 +187,121 @@ export function findPlaceholders(text: string): number[] {
   return Array.from(set).sort((a, b) => a - b)
 }
 
+function getNextPlaceholderIndex(text: string): number {
+  const existing = findPlaceholders(text)
+  if (existing.length === 0) return 1
+  return Math.max(...existing) + 1
+}
+
+function applyTextareaEdit(
+  textarea: HTMLTextAreaElement | null,
+  current: string,
+  next: string,
+  cursor: number
+) {
+  if (textarea) {
+    requestAnimationFrame(() => {
+      textarea.focus()
+      textarea.setSelectionRange(cursor, cursor)
+    })
+  }
+  return next
+}
+
+function insertIntoTextarea(
+  textarea: HTMLTextAreaElement | null,
+  current: string,
+  insert: string
+): string {
+  const start = textarea?.selectionStart ?? current.length
+  const end = textarea?.selectionEnd ?? current.length
+  const next = current.slice(0, start) + insert + current.slice(end)
+  applyTextareaEdit(textarea, current, next, start + insert.length)
+  return next
+}
+
+function wrapTextareaSelection(
+  textarea: HTMLTextAreaElement | null,
+  current: string,
+  before: string,
+  after: string
+): string {
+  const start = textarea?.selectionStart ?? current.length
+  const end = textarea?.selectionEnd ?? current.length
+  const selected = current.slice(start, end)
+  if (selected) {
+    const wrapped = before + selected + after
+    const next = current.slice(0, start) + wrapped + current.slice(end)
+    applyTextareaEdit(textarea, current, next, start + wrapped.length)
+    return next
+  }
+  const next = current.slice(0, start) + before + after + current.slice(end)
+  applyTextareaEdit(textarea, current, next, start + before.length)
+  return next
+}
+
+function insertListLine(
+  textarea: HTMLTextAreaElement | null,
+  current: string,
+  prefix: string
+): string {
+  const start = textarea?.selectionStart ?? current.length
+  const lineStart = current.lastIndexOf("\n", start - 1) + 1
+  const lineBeforeCursor = current.slice(lineStart, start)
+  const insert =
+    lineBeforeCursor.trim() === "" && start === lineStart
+      ? prefix
+      : `\n${prefix}`
+  return insertIntoTextarea(textarea, current, insert)
+}
+
+function nextNumberedListIndex(text: string, cursor: number): number {
+  const before = text.slice(0, cursor)
+  const lines = before.split("\n")
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]
+    const match = line.match(/^\s*(\d+)\.\s/)
+    if (match) return parseInt(match[1], 10) + 1
+    if (line.trim() !== "") break
+  }
+  return 1
+}
+
+function renderWhatsAppFormattedText(text: string): ReactNode {
+  const parts = text.split(/(\*[^*\n]+\*|_[^_\n]+_|~[^~\n]+~|```[^`\n]+```)/g)
+  return parts.map((part, i) => {
+    if (part.startsWith("*") && part.endsWith("*") && part.length > 2) {
+      return (
+        <strong key={i} className="font-semibold">
+          {part.slice(1, -1)}
+        </strong>
+      )
+    }
+    if (part.startsWith("_") && part.endsWith("_") && part.length > 2) {
+      return (
+        <em key={i} className="italic">
+          {part.slice(1, -1)}
+        </em>
+      )
+    }
+    if (part.startsWith("~") && part.endsWith("~") && part.length > 2) {
+      return (
+        <s key={i} className="line-through">
+          {part.slice(1, -1)}
+        </s>
+      )
+    }
+    if (part.startsWith("```") && part.endsWith("```") && part.length > 6) {
+      return (
+        <code key={i} className="font-mono text-[12px] bg-slate-100 px-0.5 rounded">
+          {part.slice(3, -3)}
+        </code>
+      )
+    }
+    return part
+  })
+}
+
 function urlHasDynamicPlaceholder(url: string): boolean {
   return /\{\{\d+\}\}/.test(url)
 }
@@ -211,6 +343,7 @@ export function WhatsAppTemplateFormDialog({
   const [headerMediaUrl, setHeaderMediaUrl] = useState("")
   const [headerMediaUploading, setHeaderMediaUploading] = useState(false)
   const headerMediaInputRef = useRef<HTMLInputElement>(null)
+  const bodyTextareaRef = useRef<HTMLTextAreaElement>(null)
   const [body, setBody] = useState("")
   const [bodySamples, setBodySamples] = useState<string[]>([])
   const [footer, setFooter] = useState("")
@@ -219,6 +352,26 @@ export function WhatsAppTemplateFormDialog({
 
   // Auto-detect placeholders in body and resize the sample inputs to match.
   const placeholders = useMemo(() => findPlaceholders(body), [body])
+  const nextPlaceholderIndex = useMemo(() => getNextPlaceholderIndex(body), [body])
+
+  const insertBodyPlaceholder = (index?: number) => {
+    const n = index ?? nextPlaceholderIndex
+    setBody((prev) => insertIntoTextarea(bodyTextareaRef.current, prev, `{{${n}}}`))
+  }
+
+  const applyBodyFormat = (before: string, after: string) => {
+    setBody((prev) => wrapTextareaSelection(bodyTextareaRef.current, prev, before, after))
+  }
+
+  const insertBodyList = (numbered: boolean) => {
+    setBody((prev) => {
+      const ta = bodyTextareaRef.current
+      const cursor = ta?.selectionStart ?? prev.length
+      const prefix = numbered ? `${nextNumberedListIndex(prev, cursor)}. ` : "• "
+      return insertListLine(ta, prev, prefix)
+    })
+  }
+
   useEffect(() => {
     setBodySamples((prev) => {
       const next = [...prev]
@@ -402,7 +555,7 @@ export function WhatsAppTemplateFormDialog({
       })
 
       const payload: WhatsAppTemplateSavePayload = {
-        name: name.toLowerCase().replace(/[^a-z0-9_]/g, "_"),
+        name: normalizeTemplateNameInput(name),
         language,
         category,
         components,
@@ -436,8 +589,8 @@ export function WhatsAppTemplateFormDialog({
             <DialogHeader className="text-left">
               <DialogTitle>{editing ? editTitle : createTitle}</DialogTitle>
               <DialogDescription>
-                Use {"{{1}}"}, {"{{2}}"}… for variables in the body. Provide example values so Meta
-                can review the template.
+                Use the toolbar for WhatsApp formatting and the Add variable button for {"{{1}}"}, {"{{2}}"}…
+                placeholders. Provide example values so Meta can review the template.
               </DialogDescription>
             </DialogHeader>
 
@@ -446,9 +599,26 @@ export function WhatsAppTemplateFormDialog({
                 <Label>Template name</Label>
                 <Input
                   value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  onChange={(e) => setName(normalizeTemplateNameInput(e.target.value))}
+                  onKeyDown={(e) => {
+                    if (e.key === " ") {
+                      e.preventDefault()
+                      const el = e.currentTarget
+                      const start = el.selectionStart ?? name.length
+                      const end = el.selectionEnd ?? name.length
+                      const next = normalizeTemplateNameInput(`${name.slice(0, start)}_${name.slice(end)}`)
+                      setName(next)
+                      requestAnimationFrame(() => {
+                        el.setSelectionRange(start + 1, start + 1)
+                      })
+                    }
+                  }}
                   placeholder="appointment_confirmation_v1"
                   disabled={!!editing}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  className="lowercase"
                 />
                 <p className="text-xs text-slate-500">
                   Lowercase, snake_case. Cannot be changed after submission.
@@ -648,17 +818,136 @@ export function WhatsAppTemplateFormDialog({
                 )
               })()}
 
-              <div className="sm:col-span-2">
-                <Label>Body</Label>
-            <Textarea
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              placeholder="Hi {{1}}, your appointment for {{2}} on {{3}} is confirmed."
-              rows={4}
-              maxLength={1024}
-            />
-            <p className="text-xs text-slate-500 mt-1">Up to 1024 characters.</p>
-          </div>
+              <div className="sm:col-span-2 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <Label className="mb-0">Body</Label>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    className="h-8 gap-1.5"
+                    onClick={() => insertBodyPlaceholder()}
+                  >
+                    <Braces className="h-3.5 w-3.5" />
+                    Add variable {`{{${nextPlaceholderIndex}}}`}
+                  </Button>
+                </div>
+
+                <TooltipProvider delayDuration={300}>
+                  <div className="flex flex-wrap items-center gap-1 rounded-md border border-slate-200 bg-slate-50/80 p-1.5">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          aria-label="Bold"
+                          onClick={() => applyBodyFormat("*", "*")}
+                        >
+                          <Bold className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Bold (*text*)</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          aria-label="Italic"
+                          onClick={() => applyBodyFormat("_", "_")}
+                        >
+                          <Italic className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Italic (_text_)</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          aria-label="Strikethrough"
+                          onClick={() => applyBodyFormat("~", "~")}
+                        >
+                          <Strikethrough className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Strikethrough (~text~)</TooltipContent>
+                    </Tooltip>
+                    <span className="mx-0.5 h-5 w-px bg-slate-200" aria-hidden />
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          aria-label="Bullet list"
+                          onClick={() => insertBodyList(false)}
+                        >
+                          <List className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Bullet line (•)</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          aria-label="Numbered list"
+                          onClick={() => insertBodyList(true)}
+                        >
+                          <ListOrdered className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Numbered line (1.)</TooltipContent>
+                    </Tooltip>
+                  </div>
+                </TooltipProvider>
+
+                <Textarea
+                  ref={bodyTextareaRef}
+                  value={body}
+                  onChange={(e) => setBody(e.target.value)}
+                  placeholder="Hi {{1}}, your appointment for {{2}} on {{3}} is confirmed."
+                  rows={5}
+                  maxLength={1024}
+                  className="font-mono text-sm"
+                />
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs text-slate-500">
+                    Up to 1024 characters. WhatsApp supports *bold*, _italic_, ~strikethrough~, and bullet lines.
+                  </p>
+                  <p className="text-xs text-slate-400">{body.length}/1024</p>
+                </div>
+
+                {placeholders.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-xs text-slate-500">Insert again:</span>
+                    {placeholders.map((n) => (
+                      <Button
+                        key={n}
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2 font-mono text-xs"
+                        onClick={() => insertBodyPlaceholder(n)}
+                      >
+                        {`{{${n}}}`}
+                      </Button>
+                    ))}
+                  </div>
+                )}
+              </div>
 
               {placeholders.length > 0 && (
                 <div className="sm:col-span-2 rounded-lg bg-slate-50 border border-slate-200 p-4">
@@ -984,7 +1273,9 @@ function WhatsAppMobilePreview({
                 )}
 
                 <div className="px-3 py-2 text-[13px] text-slate-800 leading-relaxed whitespace-pre-wrap">
-                  {renderedBody || (
+                  {renderedBody ? (
+                    renderWhatsAppFormattedText(renderedBody)
+                  ) : (
                     <span className="text-slate-400">Body text will appear here…</span>
                   )}
                 </div>

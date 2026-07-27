@@ -1,6 +1,7 @@
 const { logger } = require('../utils/logger');
 const { isAdminAppointmentNotificationsEnabled } = require('./whatsapp-admin-gates');
 const { getWhatsAppSettingsWithDefaults } = require('./whatsapp-settings-defaults');
+const { isTenantTemplateNotificationEnabled } = require('./whatsapp-template-notification-gates');
 const { canUseAddon } = require('./entitlements');
 const { canDeductWhatsApp, deductWhatsApp } = require('./wallet-deduction');
 
@@ -139,14 +140,12 @@ async function sendAppointmentWhatsAppAfterCreate(req, createdAppointments) {
     const rawWhatsappSettings = business?.settings?.whatsappNotificationSettings;
     const whatsappSettings = getWhatsAppSettingsWithDefaults(rawWhatsappSettings);
     const businessWhatsappEnabled = whatsappSettings.enabled === true;
-    const appointmentWhatsappEnabled = whatsappSettings.appointmentNotifications?.enabled === true;
-    const schedulingEnabled = whatsappSettings.appointmentNotifications?.newAppointments !== false;
-    const confirmationsEnabled = whatsappSettings.appointmentNotifications?.confirmations !== false;
+    const schedulingEnabled = isTenantTemplateNotificationEnabled(whatsappSettings, 'appointmentScheduling');
+    const confirmationsEnabled = isTenantTemplateNotificationEnabled(whatsappSettings, 'appointmentConfirmation');
 
-    if (!businessWhatsappEnabled || !appointmentWhatsappEnabled) {
+    if (!businessWhatsappEnabled) {
       logger.info('📱 [WhatsApp] Skipping appointment messages (salon business settings)', {
         businessWhatsappEnabled,
-        appointmentWhatsappEnabled,
         rawAppointment: rawWhatsappSettings?.appointmentNotifications,
       });
       return;
@@ -298,11 +297,9 @@ async function sendAppointmentRescheduleWhatsApp(req, appointment) {
 
     const rawWhatsappSettings = business?.settings?.whatsappNotificationSettings;
     const whatsappSettings = getWhatsAppSettingsWithDefaults(rawWhatsappSettings);
-    const businessWhatsappEnabled = whatsappSettings.enabled === true;
-    const appointmentWhatsappEnabled = whatsappSettings.appointmentNotifications?.enabled === true;
-    const rescheduleEnabled = whatsappSettings.appointmentNotifications?.reschedule !== false;
+    const rescheduleEnabled = isTenantTemplateNotificationEnabled(whatsappSettings, 'appointmentReschedule');
 
-    if (!businessWhatsappEnabled || !appointmentWhatsappEnabled || !rescheduleEnabled) {
+    if (!rescheduleEnabled) {
       logger.debug('📱 [WhatsApp] Skipping appointment reschedule (salon business settings)');
       return;
     }
@@ -423,11 +420,9 @@ async function sendAppointmentCancellationWhatsApp(req, appointment, reason) {
 
     const rawWhatsappSettings = business?.settings?.whatsappNotificationSettings;
     const whatsappSettings = getWhatsAppSettingsWithDefaults(rawWhatsappSettings);
-    const businessWhatsappEnabled = whatsappSettings.enabled === true;
-    const appointmentWhatsappEnabled = whatsappSettings.appointmentNotifications?.enabled === true;
-    const cancellationsEnabled = whatsappSettings.appointmentNotifications?.cancellations !== false;
+    const cancellationsEnabled = isTenantTemplateNotificationEnabled(whatsappSettings, 'appointmentCancellation');
 
-    if (!businessWhatsappEnabled || !appointmentWhatsappEnabled || !cancellationsEnabled) {
+    if (!cancellationsEnabled) {
       logger.debug('📱 [WhatsApp] Skipping appointment cancellation (salon business settings)');
       return;
     }
@@ -550,11 +545,13 @@ async function sendAppointmentReminderWhatsApp(req, appointment, options = {}) {
 
     const rawWhatsappSettings = business?.settings?.whatsappNotificationSettings;
     const whatsappSettings = getWhatsAppSettingsWithDefaults(rawWhatsappSettings);
-    if (!whatsappSettings.enabled || !whatsappSettings.appointmentNotifications?.enabled) {
-      return { skipped: true, reason: 'WhatsApp appointment notifications are disabled for this salon' };
-    }
-    if (!manual && !whatsappSettings.appointmentNotifications?.reminders) {
-      return { skipped: true, reason: 'Automatic appointment reminders are disabled' };
+    if (!isTenantTemplateNotificationEnabled(whatsappSettings, 'appointmentReminder')) {
+      return {
+        skipped: true,
+        reason: manual
+          ? 'Appointment reminder notifications are disabled for this salon'
+          : 'Automatic appointment reminders are disabled',
+      };
     }
 
     if (!manual) {

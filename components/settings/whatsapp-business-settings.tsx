@@ -12,10 +12,9 @@ import { Badge } from "@/components/ui/badge"
 import {
   MessageCircle,
   Receipt,
-  Calendar,
   AlertTriangle,
   XCircle,
-  Wallet,
+  Bell,
 } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { useAuth } from "@/lib/auth-context"
@@ -41,8 +40,19 @@ type WhatsAppAdminConfig = {
   provider: string
 }
 
+type TemplateSlot = {
+  slotKey: string
+  templateName: string
+  category: string
+  language: string
+  label: string
+  description: string
+  enabled: boolean
+}
+
 type WhatsAppNotificationState = {
   enabled: boolean
+  templateNotifications?: Record<string, { enabled: boolean }>
   receiptNotifications: {
     enabled: boolean
     autoSendToClients: boolean
@@ -168,6 +178,18 @@ export function WhatsAppIntegrationSettings() {
   )
 }
 
+const RECEIPT_SLOT_KEYS = new Set(["receipt", "receiptWithFeedback"])
+
+function isTemplateSlotEnabled(
+  settings: WhatsAppNotificationState,
+  slotKey: string,
+  fallback = true
+): boolean {
+  const entry = settings.templateNotifications?.[slotKey]
+  if (entry && typeof entry.enabled === "boolean") return entry.enabled
+  return fallback
+}
+
 /** Settings → Notifications → WhatsApp: which messages to send after integration is connected. */
 export function WhatsAppNotificationSettings() {
   const { user } = useAuth()
@@ -176,8 +198,14 @@ export function WhatsAppNotificationSettings() {
   const canUseReceiptFeedbackLink = hasFeature("feedback_management")
   const { adminConfig, isLoadingStatus, canUseWhatsApp } = useWhatsAppAdminStatus()
   const [isLoading, setIsLoading] = useState(false)
+  const [isLoadingSlots, setIsLoadingSlots] = useState(true)
+  const [templateSlots, setTemplateSlots] = useState<TemplateSlot[]>([])
   const [settings, setSettings] = useState<WhatsAppNotificationState>(DEFAULT_WHATSAPP_NOTIFICATIONS)
   const isAdmin = user?.role === "admin" || user?.role === "manager"
+
+  const receiptTemplateSlots = templateSlots.filter((slot) => RECEIPT_SLOT_KEYS.has(slot.slotKey))
+  const nonReceiptTemplateSlots = templateSlots.filter((slot) => !RECEIPT_SLOT_KEYS.has(slot.slotKey))
+  const hasReceiptWithFeedbackSlot = templateSlots.some((slot) => slot.slotKey === "receiptWithFeedback")
 
   useEffect(() => {
     loadSettings()
@@ -197,16 +225,44 @@ export function WhatsAppNotificationSettings() {
     })
   }, [canUseReceiptFeedbackLink, entitlementsLoading])
 
+  const setTemplateSlotEnabled = (slotKey: string, enabled: boolean) => {
+    setSettings((prev) => ({
+      ...prev,
+      templateNotifications: {
+        ...(prev.templateNotifications || {}),
+        [slotKey]: { enabled },
+      },
+    }))
+    setTemplateSlots((prev) =>
+      prev.map((slot) => (slot.slotKey === slotKey ? { ...slot, enabled } : slot))
+    )
+  }
+
   const loadSettings = async () => {
     try {
-      const response = await EmailNotificationsAPI.getSettings()
-      if (response.success && response.data) {
-        const whatsappSettings = response.data.whatsappNotificationSettings
+      setIsLoadingSlots(true)
+      const [settingsResponse, slotsResponse] = await Promise.all([
+        EmailNotificationsAPI.getSettings(),
+        EmailNotificationsAPI.getWhatsappTemplateSlots(),
+      ])
+
+      if (slotsResponse.success && slotsResponse.data?.slots) {
+        setTemplateSlots(slotsResponse.data.slots)
+      } else {
+        setTemplateSlots([])
+      }
+
+      if (settingsResponse.success && settingsResponse.data) {
+        const whatsappSettings = settingsResponse.data.whatsappNotificationSettings
         if (whatsappSettings) {
           setSettings((prev) => ({
             ...prev,
             ...whatsappSettings,
             enabled: whatsappSettings.enabled !== undefined ? whatsappSettings.enabled : prev.enabled,
+            templateNotifications: {
+              ...(prev.templateNotifications || {}),
+              ...(whatsappSettings.templateNotifications || {}),
+            },
             receiptNotifications: {
               ...prev.receiptNotifications,
               ...whatsappSettings.receiptNotifications,
@@ -272,6 +328,8 @@ export function WhatsAppNotificationSettings() {
       }
     } catch (error) {
       console.error("Error loading WhatsApp settings:", error)
+    } finally {
+      setIsLoadingSlots(false)
     }
   }
 
@@ -403,29 +461,78 @@ export function WhatsAppNotificationSettings() {
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center space-x-2">
-                <Receipt className="h-5 w-5 text-blue-600" />
-                <span>Receipt Notifications</span>
+                <Bell className="h-5 w-5 text-indigo-600" />
+                <span>Message templates</span>
               </CardTitle>
-              <CardDescription>Send receipt links via WhatsApp to clients.</CardDescription>
+              <CardDescription>
+                Enable or disable each approved WhatsApp template published for your salon. New templates appear here
+                automatically after your administrator publishes them.
+              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <Label>Enable Receipt Notifications</Label>
-                  <p className="text-sm text-gray-500">Enable WhatsApp notifications for receipts and bills.</p>
-                </div>
-                <Switch
-                  checked={settings.receiptNotifications.enabled}
-                  onCheckedChange={(checked) =>
-                    setSettings((prev) => ({
-                      ...prev,
-                      receiptNotifications: { ...prev.receiptNotifications, enabled: checked },
-                    }))
-                  }
-                  disabled={!settings.enabled}
-                />
-              </div>
+              {isLoadingSlots ? (
+                <p className="text-sm text-gray-500">Loading published templates…</p>
+              ) : templateSlots.length === 0 ? (
+                <p className="text-sm text-gray-500">
+                  No templates are published yet. Your administrator must approve and publish templates in Admin →
+                  Template Manager before you can configure them here.
+                </p>
+              ) : (
+                <>
+                  {receiptTemplateSlots.length > 0 && (
+                    <div className="space-y-3">
+                      <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Receipts & bills</p>
+                      {receiptTemplateSlots.map((slot) => (
+                        <div key={slot.slotKey} className="flex items-center justify-between py-1.5">
+                          <div className="space-y-0.5 pr-4">
+                            <Label className="text-sm">{slot.label}</Label>
+                            <p className="text-xs text-gray-500">{slot.description}</p>
+                            <p className="text-xs text-gray-400">Template: {slot.templateName}</p>
+                          </div>
+                          <Switch
+                            checked={isTemplateSlotEnabled(settings, slot.slotKey, slot.enabled)}
+                            onCheckedChange={(checked) => setTemplateSlotEnabled(slot.slotKey, checked)}
+                            disabled={!settings.enabled}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
 
+                  {nonReceiptTemplateSlots.length > 0 && (
+                    <div className={`space-y-3 ${receiptTemplateSlots.length > 0 ? "pt-3 border-t border-gray-100" : ""}`}>
+                      <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Other notifications</p>
+                      {nonReceiptTemplateSlots.map((slot) => (
+                        <div key={slot.slotKey} className="flex items-center justify-between py-1.5">
+                          <div className="space-y-0.5 pr-4">
+                            <Label className="text-sm">{slot.label}</Label>
+                            <p className="text-xs text-gray-500">{slot.description}</p>
+                            <p className="text-xs text-gray-400">Template: {slot.templateName}</p>
+                          </div>
+                          <Switch
+                            checked={isTemplateSlotEnabled(settings, slot.slotKey, slot.enabled)}
+                            onCheckedChange={(checked) => setTemplateSlotEnabled(slot.slotKey, checked)}
+                            disabled={!settings.enabled}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          {receiptTemplateSlots.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center space-x-2">
+                <Receipt className="h-5 w-5 text-blue-600" />
+                <span>Receipt delivery options</span>
+              </CardTitle>
+              <CardDescription>Configure how and when receipt WhatsApp messages are sent.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
               <div className="flex items-center justify-between">
                 <div className="space-y-1">
                   <Label>Auto-send to Clients</Label>
@@ -439,15 +546,21 @@ export function WhatsAppNotificationSettings() {
                       receiptNotifications: { ...prev.receiptNotifications, autoSendToClients: checked },
                     }))
                   }
-                  disabled={!settings.enabled || !settings.receiptNotifications.enabled}
+                  disabled={
+                    !settings.enabled ||
+                    !receiptTemplateSlots.some((slot) =>
+                      isTemplateSlotEnabled(settings, slot.slotKey, slot.enabled)
+                    )
+                  }
                 />
               </div>
 
+              {hasReceiptWithFeedbackSlot && (
               <div className="space-y-3 rounded-md border p-4">
                 <div className="space-y-1">
-                  <Label>Receipt template</Label>
+                  <Label>Receipt template preference</Label>
                   <p className="text-sm text-gray-500">
-                    Choose one template — only one is sent per receipt.
+                    Choose which receipt template to use when both are enabled above.
                     {!canUseReceiptFeedbackLink &&
                       " Starter plan uses the standard receipt only; upgrade to Growth or Pro for the feedback option."}
                   </p>
@@ -463,7 +576,13 @@ export function WhatsAppNotificationSettings() {
                       },
                     }))
                   }
-                  disabled={!settings.enabled || !settings.receiptNotifications.enabled || entitlementsLoading}
+                  disabled={
+                    !settings.enabled ||
+                    entitlementsLoading ||
+                    !receiptTemplateSlots.some((slot) =>
+                      isTemplateSlotEnabled(settings, slot.slotKey, slot.enabled)
+                    )
+                  }
                   className="space-y-3"
                 >
                   <div className="flex items-start gap-3">
@@ -494,6 +613,7 @@ export function WhatsAppNotificationSettings() {
                   </div>
                 </RadioGroup>
               </div>
+              )}
 
               <div className="space-y-2">
                 <Label htmlFor="highValueThreshold">High Value Threshold (₹)</Label>
@@ -520,276 +640,7 @@ export function WhatsAppNotificationSettings() {
               </div>
             </CardContent>
           </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center space-x-2">
-                <Calendar className="h-5 w-5 text-blue-600" />
-                <span>Appointment Notifications</span>
-              </CardTitle>
-              <CardDescription>Send appointment updates via WhatsApp.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <Label>Enable Appointment Notifications</Label>
-                  <p className="text-sm text-gray-500">Master toggle for all appointment-related WhatsApp messages.</p>
-                </div>
-                <Switch
-                  checked={settings.appointmentNotifications.enabled}
-                  onCheckedChange={(checked) =>
-                    setSettings((prev) => ({
-                      ...prev,
-                      appointmentNotifications: {
-                        ...prev.appointmentNotifications,
-                        enabled: checked,
-                        ...(checked
-                          ? { confirmations: true, newAppointments: true, reminders: true, cancellations: true }
-                          : {}),
-                      },
-                    }))
-                  }
-                  disabled={!settings.enabled}
-                />
-              </div>
-
-              {settings.appointmentNotifications.enabled && (
-                <div className="space-y-3 pt-3 border-t border-gray-100">
-                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Individual Templates</p>
-
-                  <div className="flex items-center justify-between py-1.5">
-                    <div className="space-y-0.5">
-                      <Label className="text-sm">Scheduling</Label>
-                      <p className="text-xs text-gray-500">
-                        Sent when a new appointment is booked (status Scheduled).
-                      </p>
-                    </div>
-                    <Switch
-                      checked={settings.appointmentNotifications.newAppointments !== false}
-                      onCheckedChange={(checked) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          appointmentNotifications: { ...prev.appointmentNotifications, newAppointments: checked },
-                        }))
-                      }
-                      disabled={!settings.enabled}
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between py-1.5">
-                    <div className="space-y-0.5">
-                      <Label className="text-sm">Confirmation</Label>
-                      <p className="text-xs text-gray-500">
-                        Sent when appointment status is set to Confirmed.
-                      </p>
-                    </div>
-                    <Switch
-                      checked={settings.appointmentNotifications.confirmations}
-                      onCheckedChange={(checked) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          appointmentNotifications: { ...prev.appointmentNotifications, confirmations: checked },
-                        }))
-                      }
-                      disabled={!settings.enabled}
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between py-1.5">
-                    <div className="space-y-0.5">
-                      <Label className="text-sm">Reminder</Label>
-                      <p className="text-xs text-gray-500">Sent automatically 2–24 hours before the appointment.</p>
-                    </div>
-                    <Switch
-                      checked={settings.appointmentNotifications.reminders}
-                      onCheckedChange={(checked) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          appointmentNotifications: { ...prev.appointmentNotifications, reminders: checked },
-                        }))
-                      }
-                      disabled={!settings.enabled}
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between py-1.5">
-                    <div className="space-y-0.5">
-                      <Label className="text-sm">Reschedule</Label>
-                      <p className="text-xs text-gray-500">Sent when an appointment date or time is changed.</p>
-                    </div>
-                    <Switch
-                      checked={settings.appointmentNotifications.reschedule !== false}
-                      onCheckedChange={(checked) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          appointmentNotifications: { ...prev.appointmentNotifications, reschedule: checked },
-                        }))
-                      }
-                      disabled={!settings.enabled}
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between py-1.5">
-                    <div className="space-y-0.5">
-                      <Label className="text-sm">Cancellation</Label>
-                      <p className="text-xs text-gray-500">Sent when an appointment is cancelled.</p>
-                    </div>
-                    <Switch
-                      checked={settings.appointmentNotifications.cancellations}
-                      onCheckedChange={(checked) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          appointmentNotifications: { ...prev.appointmentNotifications, cancellations: checked },
-                        }))
-                      }
-                      disabled={!settings.enabled}
-                    />
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center space-x-2">
-                <Wallet className="h-5 w-5 text-indigo-600" />
-                <span>Prepaid wallet updates</span>
-              </CardTitle>
-              <CardDescription>
-                Notify clients on WhatsApp after each wallet credit, debit (checkout), manual adjustment, or refund.
-                Uses the template configured by your administrator (Prepaid wallet transaction).
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <Label>Send wallet activity WhatsApp</Label>
-                  <p className="text-sm text-gray-500">
-                    Requires admin template ID and the client&apos;s mobile number on file.
-                  </p>
-                </div>
-                <Switch
-                  checked={settings.clientWalletTransactionNotifications?.enabled !== false}
-                  onCheckedChange={(checked) =>
-                    setSettings((prev) => ({
-                      ...prev,
-                      clientWalletTransactionNotifications: {
-                        ...prev.clientWalletTransactionNotifications,
-                        enabled: checked,
-                      },
-                    }))
-                  }
-                  disabled={!settings.enabled}
-                />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center space-x-2">
-                <Wallet className="h-5 w-5 text-amber-600" />
-                <span>Prepaid wallet expiry reminders</span>
-              </CardTitle>
-              <CardDescription>
-                30 / 15 / 7 days before wallet expiry (same schedule as Prepaid wallet → Business rules). Uses the
-                admin-approved template &quot;Prepaid wallet expiry reminder&quot;. Also requires expiry alerts on in
-                prepaid settings.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <Label>Send expiry reminder WhatsApp</Label>
-                  <p className="text-sm text-gray-500">Template ID must be set in Admin → Notifications → WhatsApp.</p>
-                </div>
-                <Switch
-                  checked={settings.clientWalletExpiryReminderNotifications?.enabled !== false}
-                  onCheckedChange={(checked) =>
-                    setSettings((prev) => ({
-                      ...prev,
-                      clientWalletExpiryReminderNotifications: {
-                        ...prev.clientWalletExpiryReminderNotifications,
-                        enabled: checked,
-                      },
-                    }))
-                  }
-                  disabled={!settings.enabled}
-                />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center space-x-2">
-                <Wallet className="h-5 w-5 text-rose-600" />
-                <span>Outstanding dues reminders</span>
-              </CardTitle>
-              <CardDescription>
-                Sent every 7 days at 12:00 PM to clients with pending bill balance. Uses the admin template
-                &quot;Outstanding dues reminder&quot;.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <Label>Send dues reminder WhatsApp</Label>
-                  <p className="text-sm text-gray-500">
-                    Client must have a phone number and unpaid sales (part-paid / unpaid bills).
-                  </p>
-                </div>
-                <Switch
-                  checked={settings.clientDuesReminderNotifications?.enabled !== false}
-                  onCheckedChange={(checked) =>
-                    setSettings((prev) => ({
-                      ...prev,
-                      clientDuesReminderNotifications: {
-                        ...prev.clientDuesReminderNotifications,
-                        enabled: checked,
-                      },
-                    }))
-                  }
-                  disabled={!settings.enabled}
-                />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center space-x-2">
-                <Wallet className="h-5 w-5 text-pink-600" />
-                <span>Birthday wishes</span>
-              </CardTitle>
-              <CardDescription>
-                Sent once on the client&apos;s birthday at 12:00 PM. Requires date of birth on the client profile.
-                Uses the admin template &quot;Birthday wish&quot;.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <Label>Send birthday WhatsApp</Label>
-                  <p className="text-sm text-gray-500">One message per client per calendar year.</p>
-                </div>
-                <Switch
-                  checked={settings.clientBirthdayReminderNotifications?.enabled !== false}
-                  onCheckedChange={(checked) =>
-                    setSettings((prev) => ({
-                      ...prev,
-                      clientBirthdayReminderNotifications: {
-                        ...prev.clientBirthdayReminderNotifications,
-                        enabled: checked,
-                      },
-                    }))
-                  }
-                  disabled={!settings.enabled}
-                />
-              </div>
-            </CardContent>
-          </Card>
+          )}
 
           <Card>
             <CardHeader>

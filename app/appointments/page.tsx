@@ -69,6 +69,15 @@ function AppointmentsContent() {
     }
   }, [searchParams, router, openAppointmentForm])
 
+  useEffect(() => {
+    if (searchParams?.get("quickSale") !== "1") return
+    openAppointmentForm({ openCheckoutDirectly: true })
+    const view = searchParams?.get("view")
+    router.replace(view === "calendar" || view === "list" ? `/appointments?view=${view}` : "/appointments", {
+      scroll: false,
+    })
+  }, [searchParams, router, openAppointmentForm])
+
   const viewParam = searchParams?.get("view")
   const [view, setViewState] = useState<"list" | "calendar">(() => {
     if (viewParam === "calendar" || viewParam === "list") return viewParam

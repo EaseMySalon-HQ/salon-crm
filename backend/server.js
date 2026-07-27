@@ -27,6 +27,7 @@ const {
 } = require('./lib/sales-list-query');
 const { isAdminReceiptNotificationsEnabled } = require('./lib/whatsapp-admin-gates');
 const { getWhatsAppSettingsWithDefaults } = require('./lib/whatsapp-settings-defaults');
+const { isTenantReceiptNotificationEnabled } = require('./lib/whatsapp-template-notification-gates');
 const { sendAppointmentWhatsAppAfterCreate, sendAppointmentRescheduleWhatsApp, sendAppointmentCancellationWhatsApp } = require('./lib/send-appointment-whatsapp');
 const { logSmsMessage, logEmailMessage } = require('./lib/channel-logs');
 const { canDeductSms, deductSms, canDeductWhatsApp, deductWhatsApp } = require('./lib/wallet-deduction');
@@ -11144,7 +11145,10 @@ app.post('/api/receipts', authenticateToken, setupBusinessDatabase, async (req, 
           const rawWhatsappSettings = business?.settings?.whatsappNotificationSettings;
           const whatsappSettings = getWhatsAppSettingsWithDefaults(rawWhatsappSettings);
           const businessWhatsappEnabled = whatsappSettings.enabled === true;
-          const receiptNotificationsEnabled = whatsappSettings.receiptNotifications?.enabled === true;
+          const includeFeedbackLink = whatsappSettings.receiptNotifications?.includeFeedbackLink === true;
+          const receiptNotificationsEnabled = isTenantReceiptNotificationEnabled(whatsappSettings, {
+            includeFeedbackLink,
+          });
           const autoSendEnabled = whatsappSettings.receiptNotifications?.autoSendToClients === true;
           
           if (businessWhatsappEnabled && receiptNotificationsEnabled && autoSendEnabled) {
@@ -13423,7 +13427,10 @@ app.post('/api/sales', authenticateToken, setupBusinessDatabase, requirePermissi
           const rawWhatsappSettings = business?.settings?.whatsappNotificationSettings;
           const whatsappSettings = getWhatsAppSettingsWithDefaults(rawWhatsappSettings);
           const businessWhatsappEnabled = whatsappSettings.enabled === true;
-          const receiptNotificationsEnabled = whatsappSettings.receiptNotifications?.enabled === true;
+          const includeFeedbackLink = whatsappSettings.receiptNotifications?.includeFeedbackLink === true;
+          const receiptNotificationsEnabled = isTenantReceiptNotificationEnabled(whatsappSettings, {
+            includeFeedbackLink,
+          });
           const autoSendEnabled = whatsappSettings.receiptNotifications?.autoSendToClients === true;
           
           logger.debug('📱 [WhatsApp] Business settings:', {

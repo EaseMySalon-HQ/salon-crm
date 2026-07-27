@@ -1,5 +1,11 @@
 const { getStartOfDayIST, getEndOfDayIST } = require('./date-utils');
 const { billChangeCreditedToWalletCashAddition } = require('./bill-change-wallet-cash');
+const {
+  checkoutCardOnlineAmount,
+  checkoutCashAmount,
+  paymentHistoryCardOnlineInRange,
+  paymentHistoryCashInRange,
+} = require('../lib/cash-registry-payment-ledger');
 
 /**
  * Closing rows are often saved with openingBalance: 0 from the client modal; the real opening
@@ -70,28 +76,16 @@ async function computeDayCashLedger({ Sale, Expense, branchId, registryDate }) {
 
   let cashFromNewBills = 0;
   salesToday.forEach((sale) => {
-    let cashAmt = 0;
+    let cashAmt = checkoutCashAmount(sale);
     let isAllCash = false;
-    const paidAmount =
-      typeof sale.paymentStatus?.paidAmount === 'number'
-        ? Math.max(0, sale.paymentStatus.paidAmount)
-        : (sale.payments || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
     if (sale.payments && sale.payments.length > 0) {
-      sale.payments.forEach((p) => {
-        const m = (p.mode || p.type || '').toLowerCase();
-        if (m.includes('cash')) cashAmt += p.amount || 0;
-      });
       const hasNonCash = (sale.payments || []).some((p) => {
         const m = (p.mode || p.type || '').toLowerCase();
         return m.includes('card') || m.includes('online') || m.includes('upi');
       });
       isAllCash = cashAmt > 0 && !hasNonCash;
-    } else if (paidAmount > 0.005) {
-      const pm = (sale.paymentMode || '').toLowerCase();
-      if (pm.includes('cash') && !pm.includes('card') && !pm.includes('online')) {
-        cashAmt = paidAmount;
-        isAllCash = true;
-      }
+    } else if (cashAmt > 0.005) {
+      isAllCash = true;
     }
     cashAmt += billChangeCreditedToWalletCashAddition(sale);
     const tip = sale.tip || 0;
@@ -100,13 +94,7 @@ async function computeDayCashLedger({ Sale, Expense, branchId, registryDate }) {
 
   let cashFromDueCollected = 0;
   salesWithDuesToday.forEach((sale) => {
-    (sale.paymentHistory || []).forEach((ph) => {
-      if (!ph || (ph.method || '').toLowerCase() !== 'cash') return;
-      const phDate = ph.date ? new Date(ph.date) : null;
-      if (phDate && phDate >= startOfDay && phDate < endOfDay) {
-        cashFromDueCollected += ph.amount || 0;
-      }
-    });
+    cashFromDueCollected += paymentHistoryCashInRange(sale, startOfDay, endOfDay);
   });
 
   const cashCollected = cashFromNewBills + cashFromDueCollected;
@@ -204,45 +192,16 @@ async function computeDayOnlineSales({ Sale, branchId, registryDate }) {
   }).lean();
 
   let total = 0;
-
-  const addFromInvoiceDay = (sale) => {
-    if (sale.payments && sale.payments.length > 0) {
-      sale.payments.forEach((p) => {
-        const mode = p.mode || p.type || '';
-        if (mode === 'Card' || mode === 'Online') {
-          total += Number(p.amount) || 0;
-        }
-      });
-    } else {
-      const pm = sale.paymentMode || '';
-      if (pm === 'Card' || pm === 'Online') {
-        total += Number(sale.netTotal || sale.grossTotal || 0) || 0;
-      }
-    }
-  };
-
-  const addFromPaymentHistory = (sale) => {
-    (sale.paymentHistory || []).forEach((ph) => {
-      if (!ph) return;
-      const method = (ph.method || '').toLowerCase();
-      if (method !== 'card' && method !== 'online') return;
-      const phDate = ph.date ? new Date(ph.date) : null;
-      if (phDate && phDate >= startOfDay && phDate < endOfDay) {
-        total += Number(ph.amount) || 0;
-      }
-    });
-  };
-
   const todayIds = new Set(salesToday.map((s) => s._id.toString()));
 
   salesToday.forEach((sale) => {
-    addFromInvoiceDay(sale);
-    addFromPaymentHistory(sale);
+    total += checkoutCardOnlineAmount(sale);
+    total += paymentHistoryCardOnlineInRange(sale, startOfDay, endOfDay);
   });
 
   salesWithOnlineDuesToday.forEach((sale) => {
     if (!todayIds.has(sale._id.toString())) {
-      addFromPaymentHistory(sale);
+      total += paymentHistoryCardOnlineInRange(sale, startOfDay, endOfDay);
     }
   });
 

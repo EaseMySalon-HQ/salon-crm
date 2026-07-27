@@ -11,6 +11,7 @@ const {
   isAdminClientBirthdayReminderNotificationsEnabled,
 } = require('./whatsapp-admin-gates');
 const { getWhatsAppSettingsWithDefaults } = require('./whatsapp-settings-defaults');
+const { isTenantTemplateNotificationEnabled } = require('./whatsapp-template-notification-gates');
 const { canUseAddon } = require('./entitlements');
 const { canDeductWhatsApp, deductWhatsApp } = require('./wallet-deduction');
 const { formatDuesAmount } = require('./client-dues-aggregator');
@@ -37,7 +38,7 @@ async function sendClientDuesReminderWhatsApp({ branchId, client, duesAmount, sa
 
   const whatsappSettings = getWhatsAppSettingsWithDefaults(business?.settings?.whatsappNotificationSettings);
   if (whatsappSettings.enabled !== true) return { skipped: true };
-  if (whatsappSettings.clientDuesReminderNotifications?.enabled === false) return { skipped: true };
+  if (!isTenantTemplateNotificationEnabled(whatsappSettings, 'clientDuesReminder')) return { skipped: true };
 
   if (whatsappService.isQuietHours(wa?.quietHours)) {
     logger.debug('[dues-reminder-whatsapp] Skipped (quiet hours)');
@@ -116,7 +117,7 @@ async function sendClientBirthdayReminderWhatsApp({ branchId, client, salonName 
 
   const whatsappSettings = getWhatsAppSettingsWithDefaults(business?.settings?.whatsappNotificationSettings);
   if (whatsappSettings.enabled !== true) return { skipped: true };
-  if (whatsappSettings.clientBirthdayReminderNotifications?.enabled === false) return { skipped: true };
+  if (!isTenantTemplateNotificationEnabled(whatsappSettings, 'clientBirthdayReminder')) return { skipped: true };
 
   if (whatsappService.isQuietHours(wa?.quietHours)) {
     logger.debug('[birthday-whatsapp] Skipped (quiet hours)');

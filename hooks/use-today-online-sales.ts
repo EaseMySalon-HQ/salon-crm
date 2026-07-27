@@ -3,6 +3,10 @@
 import { useState, useEffect, useCallback } from "react"
 import { SalesAPI } from "@/lib/api"
 import { toDateStringIST } from "@/lib/date-utils"
+import {
+  checkoutCardOnlineAmount,
+  paymentHistoryCardOnlineInRange,
+} from "@/lib/cash-registry-payment-ledger"
 
 /**
  * Fetches today's online sales (Card + Online): checkout payments + dues in paymentHistory for today.
@@ -28,31 +32,9 @@ export function useTodayOnlineSales(enabled: boolean) {
       for (const sale of sales) {
         const saleDate = toDateStringIST(sale.date)
         if (saleDate === todayString) {
-          if (sale.payments && sale.payments.length > 0) {
-            result += sale.payments
-              .filter(
-                (payment: any) =>
-                  payment.mode === "Card" || payment.mode === "Online"
-              )
-              .reduce(
-                (paymentSum: number, payment: any) =>
-                  paymentSum + payment.amount,
-                0
-              )
-          } else if (sale.paymentMode === "Card" || sale.paymentMode === "Online") {
-            result += sale.netTotal ?? 0
-          }
+          result += checkoutCardOnlineAmount(sale)
         }
-        // Dues collected today via Card / Online (paymentHistory.date)
-        for (const ph of sale.paymentHistory || []) {
-          if (!ph) continue
-          const method = String(ph.method || "").toLowerCase()
-          if (method !== "card" && method !== "online") continue
-          const phDay = ph.date ? toDateStringIST(ph.date) : ""
-          if (phDay === todayString) {
-            result += ph.amount || 0
-          }
-        }
+        result += paymentHistoryCardOnlineInRange(sale, todayString, todayString, toDateStringIST)
       }
       setAmount(result)
     } catch (error) {

@@ -15,6 +15,7 @@ const {
   isAdminClientBirthdayReminderNotificationsEnabled,
 } = require('../lib/whatsapp-admin-gates');
 const { getWhatsAppSettingsWithDefaults } = require('../lib/whatsapp-settings-defaults');
+const { isTenantTemplateNotificationEnabled } = require('../lib/whatsapp-template-notification-gates');
 const { canDeductWhatsApp } = require('../lib/wallet-deduction');
 const { aggregateDuesByPhone } = require('../lib/client-dues-aggregator');
 const {
@@ -78,7 +79,7 @@ async function runClientDuesReminders(adminWa, WhatsAppMessageLog) {
       if (!canDeductWhatsApp(business, 'client_dues_reminder')) continue;
 
       const ws = getWhatsAppSettingsWithDefaults(business.settings?.whatsappNotificationSettings);
-      if (!ws.enabled || ws.clientDuesReminderNotifications?.enabled === false) continue;
+      if (!ws.enabled || !isTenantTemplateNotificationEnabled(ws, 'clientDuesReminder')) continue;
 
       const businessDb = await databaseManager.getConnection(business._id, mainConnection);
       const { Sale, Client } = modelFactory.createBusinessModels(businessDb);
@@ -134,7 +135,7 @@ async function runClientBirthdayWishes(adminWa, WhatsAppMessageLog) {
       if (!canDeductWhatsApp(business, 'client_birthday_reminder')) continue;
 
       const ws = getWhatsAppSettingsWithDefaults(business.settings?.whatsappNotificationSettings);
-      if (!ws.enabled || ws.clientBirthdayReminderNotifications?.enabled === false) continue;
+      if (!ws.enabled || !isTenantTemplateNotificationEnabled(ws, 'clientBirthdayReminder')) continue;
 
       const businessDb = await databaseManager.getConnection(business._id, mainConnection);
       const { Client } = modelFactory.createBusinessModels(businessDb);

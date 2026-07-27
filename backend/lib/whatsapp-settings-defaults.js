@@ -18,10 +18,14 @@ function normalizeWhatsappNestedSection(raw, defaultsSection) {
   return { ...defaultsSection };
 }
 
+const { buildTemplateNotificationsFromSettings } = require('./whatsapp-template-notification-sync');
+
 /**
  * Merge Business.settings.whatsappNotificationSettings with defaults (same rules as GET email-notifications).
+ * @param {object} [whatsappSettings]
+ * @param {{ publishedSlotKeys?: string[] }} [options]
  */
-function getWhatsAppSettingsWithDefaults(whatsappSettings) {
+function getWhatsAppSettingsWithDefaults(whatsappSettings, options = {}) {
   const defaults = {
     enabled: false,
     receiptNotifications: {
@@ -147,6 +151,13 @@ function getWhatsAppSettingsWithDefaults(whatsappSettings) {
       ...merged.appointmentNotifications,
       reschedule: true
     };
+  }
+
+  const publishedSlotKeys = Array.isArray(options.publishedSlotKeys) ? options.publishedSlotKeys : [];
+  if (publishedSlotKeys.length) {
+    merged.templateNotifications = buildTemplateNotificationsFromSettings(merged, publishedSlotKeys);
+  } else if (merged.templateNotifications && typeof merged.templateNotifications === 'object') {
+    merged.templateNotifications = { ...merged.templateNotifications };
   }
 
   return merged;
