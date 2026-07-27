@@ -1301,37 +1301,17 @@ async function exportCashRegistryReport({ branchId, format = 'xlsx', filters = {
           summary.cashCollected = cashFromNewBills + cashFromDueCollected;
 
           // Total Online Sales = Card/Online at checkout (invoice date = dateKey) + dues via paymentHistory (Card/Online)
+          const {
+            checkoutCardOnlineAmount,
+            paymentHistoryCardOnlineInRange,
+          } = require('../lib/cash-registry-payment-ledger');
           let onlineFromCheckout = 0;
           salesToday.forEach((s) => {
-            const paidAmount =
-              typeof s.paymentStatus?.paidAmount === 'number'
-                ? Math.max(0, s.paymentStatus.paidAmount)
-                : (s.payments || []).reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
-            if (s.payments && s.payments.length > 0) {
-              onlineFromCheckout += s.payments
-                .filter((p) => {
-                  const mode = (p.mode || '').toLowerCase();
-                  return mode === 'card' || mode === 'online';
-                })
-                .reduce((pSum, p) => pSum + (p.amount || 0), 0);
-            } else if (paidAmount > 0.005) {
-              const pm = (s.paymentMode || '').toLowerCase();
-              if (pm.includes('card') || pm.includes('online')) {
-                onlineFromCheckout += paidAmount;
-              }
-            }
+            onlineFromCheckout += checkoutCardOnlineAmount(s);
           });
           let onlineFromDues = 0;
           salesWithCardOnlineDuesToday.forEach((s) => {
-            (s.paymentHistory || []).forEach((ph) => {
-              if (!ph) return;
-              const m = (ph.method || '').toLowerCase();
-              if (m !== 'card' && m !== 'online') return;
-              const phDate = ph.date ? new Date(ph.date) : null;
-              if (phDate && phDate >= dateStart && phDate <= dateEnd) {
-                onlineFromDues += ph.amount || 0;
-              }
-            });
+            onlineFromDues += paymentHistoryCardOnlineInRange(s, dateStart, dateEnd);
           });
           summary.onlineSales = onlineFromCheckout + onlineFromDues;
           

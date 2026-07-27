@@ -224,6 +224,8 @@ const businessSchema = new mongoose.Schema({
       clientBirthdayReminderNotifications: {
         enabled: { type: Boolean, default: true },
       },
+      /** Per published template slot: { [slotKey]: { enabled: boolean } } */
+      templateNotifications: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
       /**
        * Per-business Gupshup template ids for transactional slots (connected own app).
        * Populated via WhatsApp → Templates → Map. Shared-number salons use AdminSettings.

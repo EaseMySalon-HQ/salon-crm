@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useRouter, usePathname } from "next/navigation"
-import { Bell, Plus, User, Receipt, Settings, LogOut, Banknote, Clock, Search, Wallet, AlertTriangle, CreditCard, MessageCircle } from "lucide-react"
+import { Bell, Plus, User, Receipt, Settings, LogOut, Banknote, Clock, Search, Wallet, AlertTriangle, CreditCard, MessageCircle, ReceiptText } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { NotificationCountBadgeLabel } from "@/components/notifications/notification-count-badge"
@@ -106,6 +106,7 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
   const { hasFeature, isLoading: entitlementsLoading } = useEntitlements()
 
   const canViewAppointments = hasPermission("appointments", "view")
+  const canQuickSale = hasPermission("sales", "create") && canViewAppointments
   const canViewReviews =
     hasPermission("feedback", "view") && !entitlementsLoading && hasFeature("feedback_management")
 
@@ -349,6 +350,20 @@ export function TopNav({ showQuickAdd = true, rightSlot }: TopNavProps) {
             fathersDayNav && navBannerConfig ? "" : "md:col-start-2"
           )}
         >
+          {canQuickSale ? (
+            <Button
+              type="button"
+              size="sm"
+              aria-label="Quick Sale"
+              title="Open Quick Sale checkout"
+              onClick={() => router.push("/appointments?quickSale=1")}
+              className="h-9 shrink-0 gap-2 rounded-lg border-0 bg-gradient-to-r from-indigo-600 to-violet-600 px-3 text-sm font-semibold text-white shadow-md shadow-indigo-500/30 transition-all duration-200 hover:scale-[1.02] hover:from-indigo-700 hover:to-violet-700 hover:shadow-lg hover:shadow-indigo-500/35 focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:from-indigo-500 dark:to-violet-500 dark:shadow-indigo-900/40 dark:hover:from-indigo-600 dark:hover:to-violet-600 sm:px-4"
+            >
+              <ReceiptText className="h-4 w-4 shrink-0" strokeWidth={2.25} aria-hidden />
+              <span>Quick Sale</span>
+            </Button>
+          ) : null}
+
           {/* Session Status */}
           <SessionStatus showAlways={false} />
 

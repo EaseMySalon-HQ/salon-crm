@@ -9,6 +9,7 @@ const { logger } = require('../utils/logger');
 const databaseManager = require('../config/database-manager');
 const { isAdminClientWalletExpiryReminderNotificationsEnabled } = require('./whatsapp-admin-gates');
 const { getWhatsAppSettingsWithDefaults } = require('./whatsapp-settings-defaults');
+const { isTenantTemplateNotificationEnabled } = require('./whatsapp-template-notification-gates');
 const { canUseAddon } = require('./entitlements');
 const { canDeductWhatsApp, deductWhatsApp } = require('./wallet-deduction');
 
@@ -47,7 +48,7 @@ async function sendClientWalletExpiryReminderWhatsApp(branchId, client, wallet, 
 
   const whatsappSettings = getWhatsAppSettingsWithDefaults(business?.settings?.whatsappNotificationSettings);
   if (whatsappSettings.enabled !== true) return;
-  if (whatsappSettings.clientWalletExpiryReminderNotifications?.enabled === false) return;
+  if (!isTenantTemplateNotificationEnabled(whatsappSettings, 'clientWalletExpiryReminder')) return;
 
   if (whatsappService.isQuietHours(wa?.quietHours)) {
     logger.debug('[wallet-expiry-whatsapp] Skipped (quiet hours)');

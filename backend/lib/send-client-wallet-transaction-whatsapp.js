@@ -9,6 +9,7 @@ const { logger } = require('../utils/logger');
 const databaseManager = require('../config/database-manager');
 const { isAdminClientWalletTransactionNotificationsEnabled } = require('./whatsapp-admin-gates');
 const { getWhatsAppSettingsWithDefaults } = require('./whatsapp-settings-defaults');
+const { isTenantTemplateNotificationEnabled } = require('./whatsapp-template-notification-gates');
 const { canUseAddon } = require('./entitlements');
 const { canDeductWhatsApp, deductWhatsApp } = require('./wallet-deduction');
 
@@ -72,7 +73,7 @@ async function sendClientWalletTransactionWhatsApp(branchId, businessModels, wal
 
   const whatsappSettings = getWhatsAppSettingsWithDefaults(business?.settings?.whatsappNotificationSettings);
   if (whatsappSettings.enabled !== true) return;
-  if (whatsappSettings.clientWalletTransactionNotifications?.enabled === false) return;
+  if (!isTenantTemplateNotificationEnabled(whatsappSettings, 'clientWalletTransaction')) return;
 
   const quietHours = wa?.quietHours;
   if (whatsappService.isQuietHours(quietHours)) {

@@ -380,6 +380,26 @@ router.get('/settings', authenticateToken, setupMainDatabase, async (req, res) =
         dbWhatsappSettings.clientWalletExpiryReminderNotifications,
         defaultWhatsappSettings.clientWalletExpiryReminderNotifications
       );
+      mergedWhatsappSettings.clientDuesReminderNotifications = normalizeSection(
+        dbWhatsappSettings.clientDuesReminderNotifications,
+        { enabled: true }
+      );
+      mergedWhatsappSettings.clientBirthdayReminderNotifications = normalizeSection(
+        dbWhatsappSettings.clientBirthdayReminderNotifications,
+        { enabled: true }
+      );
+
+      try {
+        const { listPublishedWhatsappTemplateSlots } = require('../lib/list-published-whatsapp-template-slots');
+        const { buildTemplateNotificationsFromSettings } = require('../lib/whatsapp-template-notification-sync');
+        const publishedSlotKeys = (await listPublishedWhatsappTemplateSlots()).map((s) => s.slotKey);
+        mergedWhatsappSettings.templateNotifications = buildTemplateNotificationsFromSettings(
+          mergedWhatsappSettings,
+          publishedSlotKeys
+        );
+      } catch (slotErr) {
+        logger.warn('[GET Settings] Could not merge templateNotifications:', slotErr.message);
+      }
       
       // FINAL CHECK: Ensure enabled is exactly what's in the database
       if (('enabled' in dbWhatsappSettings) && mergedWhatsappSettings.enabled !== dbWhatsappSettings.enabled) {
@@ -844,6 +864,58 @@ router.put('/settings', authenticateToken, setupMainDatabase, requireAdminOrMana
           newWhatsappSettings.clientWalletExpiryReminderNotifications = {
             ...(existingSettings.clientWalletExpiryReminderNotifications || { enabled: true })
           };
+        }
+
+        if (incomingSettings.clientDuesReminderNotifications) {
+          newWhatsappSettings.clientDuesReminderNotifications = {
+            ...(existingSettings.clientDuesReminderNotifications || { enabled: true }),
+            ...incomingSettings.clientDuesReminderNotifications,
+            enabled: incomingSettings.clientDuesReminderNotifications.hasOwnProperty('enabled')
+              ? incomingSettings.clientDuesReminderNotifications.enabled
+              : (existingSettings.clientDuesReminderNotifications?.enabled ?? true)
+          };
+        } else {
+          newWhatsappSettings.clientDuesReminderNotifications = {
+            ...(existingSettings.clientDuesReminderNotifications || { enabled: true })
+          };
+        }
+
+        if (incomingSettings.clientBirthdayReminderNotifications) {
+          newWhatsappSettings.clientBirthdayReminderNotifications = {
+            ...(existingSettings.clientBirthdayReminderNotifications || { enabled: true }),
+            ...incomingSettings.clientBirthdayReminderNotifications,
+            enabled: incomingSettings.clientBirthdayReminderNotifications.hasOwnProperty('enabled')
+              ? incomingSettings.clientBirthdayReminderNotifications.enabled
+              : (existingSettings.clientBirthdayReminderNotifications?.enabled ?? true)
+          };
+        } else {
+          newWhatsappSettings.clientBirthdayReminderNotifications = {
+            ...(existingSettings.clientBirthdayReminderNotifications || { enabled: true })
+          };
+        }
+
+        try {
+          const { listPublishedWhatsappTemplateSlots } = require('../lib/list-published-whatsapp-template-slots');
+          const {
+            syncLegacyFromTemplateNotifications,
+            syncTemplateNotificationsFromLegacy,
+          } = require('../lib/whatsapp-template-notification-sync');
+          const publishedSlotKeys = (await listPublishedWhatsappTemplateSlots()).map((s) => s.slotKey);
+
+          if (incomingSettings.templateNotifications) {
+            newWhatsappSettings.templateNotifications = {
+              ...(existingSettings.templateNotifications || {}),
+              ...incomingSettings.templateNotifications,
+            };
+            syncLegacyFromTemplateNotifications(newWhatsappSettings);
+          } else {
+            newWhatsappSettings.templateNotifications = syncTemplateNotificationsFromLegacy(
+              newWhatsappSettings,
+              publishedSlotKeys
+            );
+          }
+        } catch (slotErr) {
+          logger.warn('[PUT Settings] Could not sync templateNotifications:', slotErr.message);
         }
       
         // Set the entire object (only if we have a business)
@@ -1815,6 +1887,47 @@ router.get('/whatsapp/status', authenticateToken, setupMainDatabase, async (req,
     res.status(500).json({
       success: false,
       error: 'Failed to fetch WhatsApp status',
+    });
+  }
+});
+
+/**
+ * GET /api/email-notifications/whatsapp/template-slots
+ * Published platform templates (tenant library) with per-slot enable state.
+ */
+router.get('/whatsapp/template-slots', authenticateToken, setupMainDatabase, async (req, res) => {
+  try {
+    const { Business } = req.mainModels;
+    const { listPublishedWhatsappTemplateSlots } = require('../lib/list-published-whatsapp-template-slots');
+    const { getWhatsAppSettingsWithDefaults } = require('../lib/whatsapp-settings-defaults');
+    const { readTemplateNotificationEnabled } = require('../lib/whatsapp-template-notification-sync');
+
+    const publishedSlots = await listPublishedWhatsappTemplateSlots();
+    const publishedSlotKeys = publishedSlots.map((s) => s.slotKey);
+
+    const business = await Business.findById(req.user.branchId)
+      .select('settings.whatsappNotificationSettings')
+      .lean();
+
+    const whatsappSettings = getWhatsAppSettingsWithDefaults(
+      business?.settings?.whatsappNotificationSettings,
+      { publishedSlotKeys }
+    );
+
+    const slots = publishedSlots.map((slot) => ({
+      ...slot,
+      enabled: readTemplateNotificationEnabled(whatsappSettings, slot.slotKey),
+    }));
+
+    res.json({
+      success: true,
+      data: { slots },
+    });
+  } catch (error) {
+    logger.error('Error fetching WhatsApp template slots:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch WhatsApp template notification slots',
     });
   }
 });
