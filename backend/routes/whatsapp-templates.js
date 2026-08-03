@@ -65,6 +65,7 @@ const {
   gupshupSubmissionErrorMessage,
   isGupshupTemplateDuplicateError,
 } = require('../lib/gupshup-template-submit');
+const { canTenantSubmitTemplate } = require('../lib/whatsapp-template-submit-eligibility');
 
 /**
  * Zod v4 exposes `.issues` (v3 was `.errors`). Support both so bumping the
@@ -589,14 +590,22 @@ async function reconcileTenantLibraryTemplates(businessId, approvedPlatform, rem
       tpl.metaTemplateId = remoteId;
       dirty = true;
       if (!remoteId) {
-        tpl.status = tpl.submittedAt ? 'pending' : 'draft';
+        // Never mark pending when the template is not on the tenant WABA yet —
+        // that blocked resubmit after a failed or incomplete submission.
+        tpl.status = 'draft';
+        tpl.submittedAt = null;
         tpl.approvedAt = null;
         tpl.rejectionReason = null;
       }
     }
 
     if (tpl.status === 'approved' && !remoteId) {
-      tpl.status = tpl.submittedAt ? 'pending' : 'draft';
+      if (tpl.submittedAt && !tpl.gupshupTemplateId && !tpl.metaTemplateId) {
+        tpl.status = 'draft';
+        tpl.submittedAt = null;
+      } else {
+        tpl.status = tpl.submittedAt ? 'pending' : 'draft';
+      }
       tpl.approvedAt = null;
       if (!tpl.submittedAt) {
         tpl.gupshupTemplateId = null;
@@ -1198,7 +1207,7 @@ router.post('/:id/submit', authenticateToken, requireManager, setupMainDatabase,
     const Template = await getModel();
     const tpl = await Template.findOne({ _id: req.params.id, businessId });
     if (!tpl) return res.status(404).json({ success: false, error: 'Template not found' });
-    if (tpl.status !== 'draft' && tpl.status !== 'rejected') {
+    if (!canTenantSubmitTemplate(tpl)) {
       return res.status(400).json({ success: false, error: `Cannot submit a template in status "${tpl.status}"` });
     }
 
@@ -1318,6 +1327,21 @@ router.post('/:id/submit', authenticateToken, requireManager, setupMainDatabase,
     tpl.gupshupTemplateId = remoteId ? String(remoteId) : tpl.gupshupTemplateId;
     tpl.metaTemplateId = tpl.gupshupTemplateId;
     const nextStatus = statusAfterGupshupApply(submission.data);
+    if (!remoteId && !tpl.gupshupTemplateId && nextStatus === 'pending') {
+      tpl.status = 'draft';
+      tpl.submittedAt = null;
+      tpl.lastSyncedAt = new Date();
+      tpl.rejectionReason =
+        'Gupshup accepted the request but did not return a template id. Try Submit again.';
+      await tpl.save();
+      return res.status(502).json({
+        success: false,
+        error: tpl.rejectionReason,
+        code: 'GUPSHUP_SUBMIT_INCOMPLETE',
+        data: tpl,
+        gupshup: gupshupMeta,
+      });
+    }
     tpl.status = nextStatus;
     tpl.submittedAt = new Date();
     tpl.lastSyncedAt = new Date();

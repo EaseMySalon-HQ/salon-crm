@@ -262,6 +262,7 @@ export function WhatsAppTemplatesPage() {
               : "Status will update once Meta reviews the template.",
         })
         refresh()
+        reloadLibraries()
       } else {
         const err = typeof res.error === "string" ? res.error : JSON.stringify(res.error)
         toast({
@@ -270,6 +271,7 @@ export function WhatsAppTemplatesPage() {
           variant: "destructive",
         })
         refresh()
+        reloadLibraries()
       }
     } catch (err: any) {
       const apiErr = err?.response?.data
@@ -283,6 +285,7 @@ export function WhatsAppTemplatesPage() {
         variant: "destructive",
       })
       refresh()
+      reloadLibraries()
     } finally {
       setBusy(null)
     }
@@ -626,41 +629,58 @@ export function WhatsAppTemplatesPage() {
                         <StatusBadge status={entry.localStatus || lt.status} />
                       </TableCell>
                       <TableCell className="text-right space-x-1">
-                        {(lt.status === "draft" || lt.status === "rejected") && (
-                          <Button
-                            size="sm"
-                            variant="default"
-                            className="bg-emerald-600 hover:bg-emerald-700"
-                            disabled={busy === `submit-${lt._id}`}
-                            onClick={() => handleSubmit(lt._id)}
-                          >
-                            {busy === `submit-${lt._id}` ? (
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                            ) : (
-                              <Send className="h-3 w-3" />
-                            )}
-                            <span className="ml-1">Submit</span>
-                          </Button>
-                        )}
-                        {(lt.status === "pending" ||
-                          lt.status === "approved" ||
-                          lt.status === "paused" ||
-                          lt.status === "in_appeal" ||
-                          lt.status === "flagged") && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={busy === `sync-${lt._id}`}
-                            onClick={() => handleSync(lt._id)}
-                          >
-                            {busy === `sync-${lt._id}` ? (
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                            ) : (
-                              <RefreshCw className="h-3 w-3" />
-                            )}
-                            <span className="ml-1">Sync</span>
-                          </Button>
-                        )}
+                        {(() => {
+                          const canSubmitLibrary =
+                            lt.status === "draft" ||
+                            lt.status === "rejected" ||
+                            (isTransactional && lt.status === "pending")
+                          const submitLabel =
+                            lt.status === "pending" || lt.status === "rejected" ? "Resubmit" : "Submit"
+                          return (
+                            <>
+                              {canSubmitLibrary && (
+                                <Button
+                                  size="sm"
+                                  variant="default"
+                                  className="bg-emerald-600 hover:bg-emerald-700"
+                                  disabled={busy === `submit-${lt._id}`}
+                                  onClick={() => handleSubmit(lt._id)}
+                                  title={
+                                    lt.status === "pending"
+                                      ? "Submit again if the previous attempt did not reach your WhatsApp account"
+                                      : undefined
+                                  }
+                                >
+                                  {busy === `submit-${lt._id}` ? (
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                  ) : (
+                                    <Send className="h-3 w-3" />
+                                  )}
+                                  <span className="ml-1">{submitLabel}</span>
+                                </Button>
+                              )}
+                              {(lt.status === "pending" ||
+                                lt.status === "approved" ||
+                                lt.status === "paused" ||
+                                lt.status === "in_appeal" ||
+                                lt.status === "flagged") && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={busy === `sync-${lt._id}`}
+                                  onClick={() => handleSync(lt._id)}
+                                >
+                                  {busy === `sync-${lt._id}` ? (
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                  ) : (
+                                    <RefreshCw className="h-3 w-3" />
+                                  )}
+                                  <span className="ml-1">Sync</span>
+                                </Button>
+                              )}
+                            </>
+                          )
+                        })()}
                         {isTransactional &&
                           (lt.status === "approved" ? (
                             <Button
