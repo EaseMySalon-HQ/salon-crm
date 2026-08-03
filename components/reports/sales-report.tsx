@@ -34,6 +34,11 @@ import { ProductFilterCombobox } from "@/components/reports/product-filter-combo
 import { ServiceFilterCombobox } from "@/components/reports/service-filter-combobox"
 import { RecordConsumptionDialog } from "@/components/bills/record-consumption-dialog"
 import { canShowRecordConsumptionCta } from "@/lib/record-consumption-cta"
+import {
+  allocateTipByPaymentModes,
+  getTipPaymentModeLabel,
+  formatTipModeBreakdown,
+} from "@/lib/tip-payment-allocation"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter, usePathname, useSearchParams } from "next/navigation"
 import { useFeature } from "@/hooks/use-entitlements"
@@ -1206,57 +1211,108 @@ export function SalesReport() {
           return hasTip && matchesStaff
         })
       : []
-  const getTipPaymentMode = (sale: SalesRecord): "Cash" | "Card" | "Online" | "Mixed" => {
-    const norm = (s: string) => (s || "").toLowerCase()
-    if (sale.payments && sale.payments.length > 0) {
-      const modes = [...new Set(sale.payments.map((p: any) => norm(p.mode || p.type || "")))]
-      const hasCash = modes.some(m => m.includes("cash"))
-      const hasCard = modes.some(m => m.includes("card"))
-      const hasOnline = modes.some(m => m.includes("online") || m.includes("upi"))
-      if (hasCash && !hasCard && !hasOnline) return "Cash"
-      if (hasCard && !hasCash && !hasOnline) return "Card"
-      if (hasOnline && !hasCash && !hasCard) return "Online"
-      return "Mixed"
-    }
-    const pm = norm(sale.paymentMode || "")
-    if (pm.includes("cash") && !pm.includes("card") && !pm.includes("online")) return "Cash"
-    if (pm.includes("card") && !pm.includes("cash") && !pm.includes("online")) return "Card"
-    if (pm.includes("online") || pm.includes("upi")) return "Online"
-    return "Mixed"
-  }
-
-  const staffTipAggregated = (() => {
-    const map = new Map<string, { staffId: string; staffName: string; tipAmount: number; cashTipAmount: number; nonCashTipAmount: number; paymentModes: string[] }>()
+  const staffTipAggregated = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        staffId: string
+        staffName: string
+        tipAmount: number
+        cashTipAmount: number
+        cardTipAmount: number
+        onlineTipAmount: number
+      }
+    >()
     staffTipSales.forEach((sale) => {
-      const mode = getTipPaymentMode(sale)
-      const isCash = mode === "Cash"
       expandSaleTipAllocations(sale).forEach((alloc) => {
         const id = (alloc.staffId || alloc.staffName || "—").toString()
         const name =
           alloc.staffName ||
           (salesStaff.find((s) => s._id === alloc.staffId || String(s._id) === alloc.staffId)?.name) ||
           "—"
-        const tipAmt = alloc.amount
+        const split = allocateTipByPaymentModes(sale, alloc.amount)
         const existing = map.get(id)
         if (existing) {
-          existing.tipAmount += tipAmt
-          if (isCash) existing.cashTipAmount += tipAmt
-          else existing.nonCashTipAmount += tipAmt
-          if (!existing.paymentModes.includes(mode)) existing.paymentModes.push(mode)
+          existing.tipAmount += alloc.amount
+          existing.cashTipAmount += split.cash
+          existing.cardTipAmount += split.card
+          existing.onlineTipAmount += split.online
         } else {
           map.set(id, {
             staffId: id,
             staffName: name,
-            tipAmount: tipAmt,
-            cashTipAmount: isCash ? tipAmt : 0,
-            nonCashTipAmount: isCash ? 0 : tipAmt,
-            paymentModes: [mode],
+            tipAmount: alloc.amount,
+            cashTipAmount: split.cash,
+            cardTipAmount: split.card,
+            onlineTipAmount: split.online,
           })
         }
       })
     })
     return Array.from(map.values()).sort((a, b) => b.tipAmount - a.tipAmount)
-  })()
+  }, [staffTipSales, salesStaff])
+
+  const staffTipByDate = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        dateKey: string
+        total: number
+        cash: number
+        card: number
+        online: number
+        billIds: Set<string>
+      }
+    >()
+    staffTipSales.forEach((sale) => {
+      const day = toDateStringIST(sale.date)
+      expandSaleTipAllocations(sale).forEach((alloc) => {
+        if (staffTipFilter !== "all" && alloc.staffId !== staffTipFilter) return
+        const split = allocateTipByPaymentModes(sale, alloc.amount)
+        let row = map.get(day)
+        if (!row) {
+          row = {
+            dateKey: day,
+            total: 0,
+            cash: 0,
+            card: 0,
+            online: 0,
+            billIds: new Set<string>(),
+          }
+          map.set(day, row)
+        }
+        row.total += alloc.amount
+        row.cash += split.cash
+        row.card += split.card
+        row.online += split.online
+        row.billIds.add(sale.id)
+      })
+    })
+    return Array.from(map.values())
+      .map(({ dateKey, total, cash, card, online, billIds }) => ({
+        dateKey,
+        total,
+        cash,
+        card,
+        online,
+        billCount: billIds.size,
+      }))
+      .sort((a, b) => b.dateKey.localeCompare(a.dateKey))
+  }, [staffTipSales, staffTipFilter])
+
+  const staffTipTotals = useMemo(
+    () =>
+      staffTipAggregated.reduce(
+        (acc, row) => ({
+          total: acc.total + row.tipAmount,
+          cash: acc.cash + row.cashTipAmount,
+          card: acc.card + row.cardTipAmount,
+          online: acc.online + row.onlineTipAmount,
+        }),
+        { total: 0, cash: 0, card: 0, online: 0 }
+      ),
+    [staffTipAggregated]
+  )
   const staffTipPaidAmountByStaff = (() => {
     const map = new Map<string, number>()
     tipPayouts.forEach((p: any) => {
@@ -1266,11 +1322,19 @@ export function SalesReport() {
     return map
   })()
 
-  const handleMarkTipAsPaid = async (row: { staffId: string; staffName: string; tipAmount: number; nonCashTipAmount: number }) => {
+  const handleMarkTipAsPaid = async (row: {
+    staffId: string
+    staffName: string
+    tipAmount: number
+    cashTipAmount: number
+    cardTipAmount: number
+    onlineTipAmount: number
+  }) => {
     const from = staffTipDateRange?.from
     const to = staffTipDateRange?.to
     if (!from || !to) return
-    const amountToMark = row.nonCashTipAmount > 0 ? row.nonCashTipAmount : row.tipAmount
+    const nonCash = row.cardTipAmount + row.onlineTipAmount
+    const amountToMark = nonCash > 0.005 ? nonCash : row.tipAmount
     try {
       const res = await ReportsAPI.createTipPayout({
         staffId: row.staffId,
@@ -3595,63 +3659,170 @@ export function SalesReport() {
           )}
         </div>
       ) : reportType === "staff-tip" ? (
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-          <div className="p-6">
-            <h3 className="text-lg font-semibold text-slate-800 mb-4">Staff Tip Report</h3>
-            {!staffTipDateRange ? (
-              <div className="text-center py-12 text-slate-500">Select a date range to view staff tips.</div>
-            ) : tipPayoutsLoading ? (
-              <div className="text-center py-12 text-slate-500">Loading...</div>
-            ) : staffTipAggregated.length === 0 ? (
-              <div className="text-center py-12 text-slate-500">No tips found for the selected period and staff.</div>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Staff Name</TableHead>
-                    <TableHead className="text-right">Tip Amount</TableHead>
-                    <TableHead>Mode of Payment</TableHead>
-                    <TableHead className="w-[140px] text-right">Action</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {staffTipAggregated.map((row) => {
-                    const isAllCash = row.nonCashTipAmount < 0.01
-                    const paidAmount = staffTipPaidAmountByStaff.get(row.staffId) || 0
-                    const paid = isAllCash || paidAmount >= row.nonCashTipAmount - 0.01
-                    const paymentModeLabel = row.paymentModes.length === 1 ? row.paymentModes[0] : "Mixed"
-                    return (
-                      <TableRow key={row.staffId}>
-                        <TableCell className="font-medium">{row.staffName}</TableCell>
-                        <TableCell className="text-right">₹{row.tipAmount.toFixed(2)}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className="font-normal">
-                            {paymentModeLabel}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {isAllCash ? (
-                            <span className="text-slate-500 text-sm">—</span>
-                          ) : paid ? (
-                            <Badge variant="secondary" className="bg-green-100 text-green-800">Paid</Badge>
-                          ) : (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="border-amber-200 text-amber-700 hover:bg-amber-50"
-                              onClick={() => handleMarkTipAsPaid(row)}
-                            >
-                              Mark as Paid
-                            </Button>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })}
-                </TableBody>
-              </Table>
-            )}
+        <div className="space-y-6">
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+            <div className="p-6">
+              <h3 className="text-lg font-semibold text-slate-800 mb-1">Staff Tip Report</h3>
+              <p className="text-sm text-slate-500 mb-4">
+                Tips are split Cash / Card / Online in proportion to how each bill was paid (including mixed payments).
+              </p>
+              {!staffTipDateRange ? (
+                <div className="text-center py-12 text-slate-500">Select a date range to view staff tips.</div>
+              ) : tipPayoutsLoading ? (
+                <div className="text-center py-12 text-slate-500">Loading...</div>
+              ) : staffTipAggregated.length === 0 ? (
+                <div className="text-center py-12 text-slate-500">No tips found for the selected period and staff.</div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+                    <div className="rounded-lg border border-slate-100 bg-slate-50/80 p-3">
+                      <p className="text-xs text-slate-500">Total tips</p>
+                      <p className="text-lg font-semibold text-slate-900">₹{staffTipTotals.total.toFixed(2)}</p>
+                    </div>
+                    <div className="rounded-lg border border-emerald-100 bg-emerald-50/50 p-3">
+                      <p className="text-xs text-emerald-700">Cash</p>
+                      <p className="text-lg font-semibold text-emerald-900">₹{staffTipTotals.cash.toFixed(2)}</p>
+                    </div>
+                    <div className="rounded-lg border border-blue-100 bg-blue-50/50 p-3">
+                      <p className="text-xs text-blue-700">Card</p>
+                      <p className="text-lg font-semibold text-blue-900">₹{staffTipTotals.card.toFixed(2)}</p>
+                    </div>
+                    <div className="rounded-lg border border-indigo-100 bg-indigo-50/50 p-3">
+                      <p className="text-xs text-indigo-700">Online</p>
+                      <p className="text-lg font-semibold text-indigo-900">₹{staffTipTotals.online.toFixed(2)}</p>
+                    </div>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Staff Name</TableHead>
+                          <TableHead className="text-right">Cash</TableHead>
+                          <TableHead className="text-right">Card</TableHead>
+                          <TableHead className="text-right">Online</TableHead>
+                          <TableHead className="text-right">Total</TableHead>
+                          <TableHead>Payment</TableHead>
+                          <TableHead className="w-[140px] text-right">Action</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {staffTipAggregated.map((row) => {
+                          const nonCash = row.cardTipAmount + row.onlineTipAmount
+                          const isAllCash = nonCash < 0.01
+                          const paidAmount = staffTipPaidAmountByStaff.get(row.staffId) || 0
+                          const paid = isAllCash || paidAmount >= nonCash - 0.01
+                          const modeLabel = getTipPaymentModeLabel({
+                            cash: row.cashTipAmount,
+                            card: row.cardTipAmount,
+                            online: row.onlineTipAmount,
+                          })
+                          const modeBreakdown = formatTipModeBreakdown({
+                            cash: row.cashTipAmount,
+                            card: row.cardTipAmount,
+                            online: row.onlineTipAmount,
+                          })
+                          return (
+                            <TableRow key={row.staffId}>
+                              <TableCell className="font-medium">{row.staffName}</TableCell>
+                              <TableCell className="text-right tabular-nums">
+                                {row.cashTipAmount > 0.005 ? `₹${row.cashTipAmount.toFixed(2)}` : "—"}
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums">
+                                {row.cardTipAmount > 0.005 ? `₹${row.cardTipAmount.toFixed(2)}` : "—"}
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums">
+                                {row.onlineTipAmount > 0.005 ? `₹${row.onlineTipAmount.toFixed(2)}` : "—"}
+                              </TableCell>
+                              <TableCell className="text-right font-medium tabular-nums">
+                                ₹{row.tipAmount.toFixed(2)}
+                              </TableCell>
+                              <TableCell>
+                                <div className="space-y-0.5">
+                                  <Badge variant="outline" className="font-normal">
+                                    {modeLabel}
+                                  </Badge>
+                                  {modeLabel === "Mixed" && (
+                                    <p className="text-xs text-slate-500">{modeBreakdown}</p>
+                                  )}
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-right">
+                                {isAllCash ? (
+                                  <span className="text-slate-500 text-sm">—</span>
+                                ) : paid ? (
+                                  <Badge variant="secondary" className="bg-green-100 text-green-800">
+                                    Paid
+                                  </Badge>
+                                ) : (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="border-amber-200 text-amber-700 hover:bg-amber-50"
+                                    onClick={() => handleMarkTipAsPaid(row)}
+                                  >
+                                    Mark as Paid
+                                  </Button>
+                                )}
+                              </TableCell>
+                            </TableRow>
+                          )
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
+
+          {staffTipDateRange && staffTipByDate.length > 0 && (
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+              <div className="p-6">
+                <h3 className="text-lg font-semibold text-slate-800 mb-1">Tips by date</h3>
+                <p className="text-sm text-slate-500 mb-4">
+                  Daily tip collection for the selected period
+                  {staffTipFilter !== "all"
+                    ? ` (${salesStaff.find((s) => s._id === staffTipFilter)?.name || "selected staff"})`
+                    : ""}
+                  .
+                </p>
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Date</TableHead>
+                        <TableHead className="text-right">Bills</TableHead>
+                        <TableHead className="text-right">Cash</TableHead>
+                        <TableHead className="text-right">Card</TableHead>
+                        <TableHead className="text-right">Online</TableHead>
+                        <TableHead className="text-right">Total</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {staffTipByDate.map((row) => (
+                        <TableRow key={row.dateKey}>
+                          <TableCell className="font-medium">{formatDateIST(row.dateKey)}</TableCell>
+                          <TableCell className="text-right tabular-nums">{row.billCount}</TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {row.cash > 0.005 ? `₹${row.cash.toFixed(2)}` : "—"}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {row.card > 0.005 ? `₹${row.card.toFixed(2)}` : "—"}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {row.online > 0.005 ? `₹${row.online.toFixed(2)}` : "—"}
+                          </TableCell>
+                          <TableCell className="text-right font-medium tabular-nums">
+                            ₹{row.total.toFixed(2)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         <TooltipProvider delayDuration={200}>
