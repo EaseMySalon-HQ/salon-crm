@@ -981,6 +981,7 @@ export async function completeServiceCheckoutInline(opts: {
   /** Payment-step data already loaded in checkout — skips duplicate wallet/reward API calls. */
   prefetchedRedemption?: ServiceCheckoutPrefetchedRedemption
   invoicePrefix?: string
+  tipPaymentMode?: "cash" | "card" | "online" | null
 }): Promise<CompleteServiceCheckoutInlineResult> {
   const {
     saleData: appointmentData,
@@ -1003,6 +1004,7 @@ export async function completeServiceCheckoutInline(opts: {
     originalRecordedPaid,
     prefetchedRedemption,
     invoicePrefix,
+    tipPaymentMode,
   } = opts
 
   const isBillUpdate = Boolean(existingSaleId?.trim())
@@ -2031,6 +2033,7 @@ export async function completeServiceCheckoutInline(opts: {
       tip,
       tipStaffId: tipStaffId || undefined,
       tipStaffName: tipStaff?.name || undefined,
+      ...(tipPaymentMode && tip > 0.005 ? { tipPaymentMode } : {}),
       discount: isValueDiscountActive ? built.discountValue : isGlobalDiscountActive ? built.discountPercentage : 0,
       discountType: isValueDiscountActive ? "fixed" : "percentage",
       paymentStatus: {

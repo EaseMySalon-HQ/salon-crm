@@ -349,14 +349,22 @@ export function WhatsAppTemplatesPage() {
     const msg =
       t.status === "draft"
         ? "Delete this draft? It has not been sent to Meta."
-        : `Delete "${t.name}" from Meta and locally? This cannot be undone.`
+        : t.status === "pending" || t.status === "rejected"
+          ? `Remove this ${t.status} template from your library? You can add it again from Add templates.`
+          : `Delete "${t.name}" from Meta and locally? This cannot be undone.`
     if (!confirm(msg)) return
     setBusy(`delete-${t._id}`)
     try {
       try {
         const res = await WhatsAppTemplatesAPI.remove(t._id)
         if (res.success) {
-          toast({ title: "Template deleted" })
+          toast({
+            title: "Template removed",
+            description:
+              t.status === "pending" || t.status === "rejected"
+                ? "Add it again from Add templates when ready."
+                : undefined,
+          })
         }
       } catch (err: any) {
         /**
@@ -681,6 +689,30 @@ export function WhatsAppTemplatesPage() {
                             </>
                           )
                         })()}
+                        {(lt.status === "pending" || lt.status === "rejected") && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-red-600 hover:text-red-700"
+                            disabled={busy === `delete-${lt._id}`}
+                            onClick={() =>
+                              handleDelete({
+                                _id: lt._id,
+                                name: entry.elementName,
+                                language: entry.language,
+                                category: (lt.category as Category) || "UTILITY",
+                                status: lt.status,
+                              })
+                            }
+                            title="Remove and re-add from Add templates"
+                          >
+                            {busy === `delete-${lt._id}` ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3 w-3" />
+                            )}
+                          </Button>
+                        )}
                         {isTransactional &&
                           (lt.status === "approved" ? (
                             <Button
@@ -886,18 +918,22 @@ export function WhatsAppTemplatesPage() {
                             </span>
                           </TableCell>
                           <TableCell className="text-right space-x-1">
-                            {(t.status === "draft" || t.status === "rejected") && (
+                            {(t.status === "draft" ||
+                              t.status === "rejected" ||
+                              t.status === "pending") && (
                               <>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() => {
-                                    setEditing(t)
-                                    setShowForm(true)
-                                  }}
-                                >
-                                  Edit
-                                </Button>
+                                {(t.status === "draft" || t.status === "rejected") && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => {
+                                      setEditing(t)
+                                      setShowForm(true)
+                                    }}
+                                  >
+                                    Edit
+                                  </Button>
+                                )}
                                 <Button
                                   size="sm"
                                   variant="default"
@@ -910,7 +946,11 @@ export function WhatsAppTemplatesPage() {
                                   ) : (
                                     <Send className="h-3 w-3" />
                                   )}
-                                  <span className="ml-1">Submit</span>
+                                  <span className="ml-1">
+                                    {t.status === "pending" || t.status === "rejected"
+                                      ? "Resubmit"
+                                      : "Submit"}
+                                  </span>
                                 </Button>
                               </>
                             )}
@@ -939,6 +979,11 @@ export function WhatsAppTemplatesPage() {
                               className="text-red-600 hover:text-red-700"
                               disabled={busy === `delete-${t._id}`}
                               onClick={() => handleDelete(t)}
+                              title={
+                                t.status === "pending" || t.status === "rejected"
+                                  ? "Remove and re-add from Add templates"
+                                  : undefined
+                              }
                             >
                               <Trash2 className="h-3 w-3" />
                             </Button>

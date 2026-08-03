@@ -41,4 +41,20 @@ describe("tip-payment-allocation", () => {
     expect(split.card).toBe(300)
     expect(getTipPaymentModeLabel(split)).toBe("Card")
   })
+
+  it("uses explicit tipPaymentMode when set at checkout", () => {
+    const split = allocateTipByPaymentModes(
+      {
+        tipPaymentMode: "cash",
+        payments: [
+          { mode: "Cash", amount: 2000 },
+          { mode: "Card", amount: 1500 },
+        ],
+      },
+      400
+    )
+    expect(split.cash).toBe(400)
+    expect(split.card).toBe(0)
+    expect(getTipPaymentModeLabel(split)).toBe("Cash")
+  })
 })

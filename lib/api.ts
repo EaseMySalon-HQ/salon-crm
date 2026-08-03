@@ -2642,6 +2642,11 @@ export interface SalesListResponse extends ApiResponse<any[]> {
 }
 
 export interface SalesSummaryData {
+  /** Top-line bill (services + products) before discounts/loyalty; excludes tips. */
+  grossRevenue: number
+  /** Final bill after discounts, loyalty, and returns; excludes tips. */
+  netRevenue: number
+  /** Same as `netRevenue` (sum of `grossTotal`). Kept for backward compatibility. */
   totalRevenue: number
   cashCollected: number
   serviceCashCollected?: number
@@ -2651,6 +2656,9 @@ export interface SalesSummaryData {
   onlinePayCollected?: number
   unpaidValue: number
   tips: number
+  tipsCash?: number
+  tipsCard?: number
+  tipsOnline?: number
   completedSales: number
   partialSales: number
   unpaidSales: number

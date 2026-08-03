@@ -8,8 +8,11 @@ export type SalePaymentLike = {
   payments?: Array<{ mode?: string; type?: string; amount?: number }>
   paymentHistory?: Array<{ method?: string; amount?: number }>
   paymentMode?: string
+  /** When set at checkout (mixed tender + tip), entire tip is attributed to this mode. */
+  tipPaymentMode?: string | null
   paymentStatus?: { paidAmount?: number }
   netTotal?: number
+  grossTotal?: number
 }
 
 export function classifyPaymentModeLabel(mode: string): TipPaymentBucket | null {
@@ -43,7 +46,7 @@ export function getSalePaymentAmountsByMode(sale: SalePaymentLike): Record<TipPa
   const paid =
     typeof sale.paymentStatus?.paidAmount === "number" && sale.paymentStatus.paidAmount > 0
       ? sale.paymentStatus.paidAmount
-      : Number(sale.netTotal) || 0
+      : Number(sale.grossTotal) || 0
   const bucket = classifyPaymentModeLabel(sale.paymentMode || "")
   if (bucket && paid > 0.005) amounts[bucket] = paid
   return amounts
@@ -53,9 +56,22 @@ export function allocateTipByPaymentModes(
   sale: SalePaymentLike,
   tipAmount: number
 ): Record<TipPaymentBucket, number> {
+  if (tipAmount <= 0.005) {
+    return { cash: 0, card: 0, online: 0 }
+  }
+
+  const explicit = classifyPaymentModeLabel(sale.tipPaymentMode || "")
+  if (explicit) {
+    return {
+      cash: explicit === "cash" ? tipAmount : 0,
+      card: explicit === "card" ? tipAmount : 0,
+      online: explicit === "online" ? tipAmount : 0,
+    }
+  }
+
   const amounts = getSalePaymentAmountsByMode(sale)
   const total = amounts.cash + amounts.card + amounts.online
-  if (tipAmount <= 0.005 || total <= 0.005) {
+  if (total <= 0.005) {
     return { cash: 0, card: 0, online: 0 }
   }
   return {

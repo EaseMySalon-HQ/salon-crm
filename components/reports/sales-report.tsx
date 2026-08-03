@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react"
+import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react"
 import { Download, Filter, TrendingUp, DollarSign, Users, MoreHorizontal, Eye, Pencil, Trash2, Receipt, AlertCircle, FileText, FileSpreadsheet, ChevronDown, Edit, CalendarIcon, HelpCircle, Wallet, CreditCard, Banknote, ArrowUpRight, Mail, ReceiptText, Package } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -61,6 +61,111 @@ function formatSalesRecordDateTimeParts(sale: { date: string; time?: string }): 
   return { dateLine, timeLine }
 }
 
+const SALES_STAT_CARD_CLASS =
+  "h-full min-w-0 overflow-hidden bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200"
+const SALES_STAT_HEADER_CLASS = "flex flex-row items-start justify-between gap-2 space-y-0 pb-3"
+const SALES_STAT_TITLE_CLASS = "min-w-0 flex-1 text-sm font-medium leading-snug text-gray-900 break-words"
+const SALES_STAT_VALUE_CLASS = "text-2xl font-bold text-gray-900 tabular-nums"
+const SALES_STAT_BODY_CLASS = "space-y-1"
+
+function SalesStatHint({ visible }: { visible: boolean }) {
+  return (
+    <p className={`min-h-[1rem] text-xs leading-snug text-gray-400 ${visible ? "" : "invisible"}`}>
+      Hover for breakdown
+    </p>
+  )
+}
+
+function SalesStatCard({
+  title,
+  icon,
+  loading,
+  loadingSkeleton,
+  showHoverHint = false,
+  children,
+}: {
+  title: string
+  icon: ReactNode
+  loading: boolean
+  loadingSkeleton: ReactNode
+  showHoverHint?: boolean
+  children: ReactNode
+}) {
+  return (
+    <Card className={`${SALES_STAT_CARD_CLASS} flex flex-col`}>
+      <CardHeader className={SALES_STAT_HEADER_CLASS}>
+        <CardTitle className={SALES_STAT_TITLE_CLASS}>{title}</CardTitle>
+        <div className="shrink-0 p-2 bg-gray-100 rounded-lg">{icon}</div>
+      </CardHeader>
+      <CardContent className="flex-1 pt-0">
+        {loading ? (
+          <div className={SALES_STAT_BODY_CLASS}>
+            {loadingSkeleton}
+            <SalesStatHint visible={showHoverHint} />
+          </div>
+        ) : (
+          <div className={SALES_STAT_BODY_CLASS}>
+            {children}
+            <SalesStatHint visible={showHoverHint} />
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function SalesStatBreakdownFlipCard({
+  title,
+  icon,
+  total,
+  loading,
+  loadingSkeleton,
+  breakdown,
+}: {
+  title: string
+  icon: ReactNode
+  total: number
+  loading: boolean
+  loadingSkeleton: ReactNode
+  breakdown: ReactNode
+}) {
+  return (
+    <div
+      tabIndex={0}
+      className="group/stat-flip h-full min-h-0 [perspective:1000px] outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 rounded-lg"
+      aria-label={`${title}. Hover for breakdown.`}
+    >
+      <div className="relative h-full w-full transition-transform duration-500 ease-in-out [transform-style:preserve-3d] group-hover/stat-flip:[transform:rotateY(180deg)] group-focus-within/stat-flip:[transform:rotateY(180deg)]">
+        <Card className={`relative flex h-full w-full flex-col ${SALES_STAT_CARD_CLASS} transition-shadow duration-200 [backface-visibility:hidden] group-hover/stat-flip:shadow-md`}>
+          <CardHeader className={SALES_STAT_HEADER_CLASS}>
+            <CardTitle className={SALES_STAT_TITLE_CLASS}>{title}</CardTitle>
+            <div className="shrink-0 p-2 bg-gray-100 rounded-lg">{icon}</div>
+          </CardHeader>
+          <CardContent className="flex-1 pt-0">
+            {loading ? (
+              <div className={SALES_STAT_BODY_CLASS}>
+                {loadingSkeleton}
+                <SalesStatHint visible />
+              </div>
+            ) : (
+              <div className={SALES_STAT_BODY_CLASS}>
+                <div className={SALES_STAT_VALUE_CLASS}>₹{total.toFixed(2)}</div>
+                <SalesStatHint visible />
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className={`absolute inset-0 flex flex-col ${SALES_STAT_CARD_CLASS} [backface-visibility:hidden] [transform:rotateY(180deg)]`}>
+          <CardContent className="flex flex-1 flex-col justify-center pt-6">
+            {loading ? loadingSkeleton : breakdown}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  )
+}
+
 interface SalesRecord {
   id: string
   billNo: string
@@ -88,6 +193,7 @@ interface SalesRecord {
   tipStaffId?: string
   tipStaffName?: string
   tipLines?: Array<{ staffId?: string; staffName?: string; amount: number }>
+  tipPaymentMode?: string
   isEdited?: boolean // Track if bill has been edited
   editedAt?: Date | string
   items?: Array<{ type: string; [key: string]: unknown }>
@@ -151,6 +257,7 @@ function mapApiSaleToRecord(sale: Record<string, unknown>): SalesRecord {
           }
         })
       : undefined,
+    tipPaymentMode: sale.tipPaymentMode != null ? String(sale.tipPaymentMode) : undefined,
     netTotal: Number(sale.netTotal ?? 0),
     taxAmount: Number(sale.taxAmount ?? 0),
     grossTotal: Number(sale.grossTotal ?? 0),
@@ -273,9 +380,6 @@ export function SalesReport() {
   const [selectedSale, setSelectedSale] = useState<SalesRecord | null>(null)
   const [salesPageIndex, setSalesPageIndex] = useState(0)
   const [salesPageSize, setSalesPageSize] = useState(10)
-  /** Sales stat card: click Cash Collected for service vs wallet breakdown */
-  const [showCashCollectedBreakdown, setShowCashCollectedBreakdown] = useState(false)
-  const [showOnlineCashCollectedBreakdown, setShowOnlineCashCollectedBreakdown] = useState(false)
   // Service List filters (when report type is service-list; shown in same bar)
   const [serviceListDatePeriod, setServiceListDatePeriod] = useState<ServiceListDatePeriod>("today")
   const [serviceListDateRange, setServiceListDateRange] = useState<{ from?: Date; to?: Date }>({})
@@ -1358,12 +1462,6 @@ export function SalesReport() {
   }
 
 
-  // Reset stat card breakdowns when filters change
-  useEffect(() => {
-    setShowCashCollectedBreakdown(false)
-    setShowOnlineCashCollectedBreakdown(false)
-  }, [debouncedSearchTerm, paymentFilter, statusFilter, staffTipFilter, datePeriod, dateRange])
-
   // Pagination for the sales table (server-side; order matches API — newest saved bill first)
   const totalSalesRows = salesTotalCount
   const displayTotalPages = Math.max(1, salesTotalPages)
@@ -1372,12 +1470,16 @@ export function SalesReport() {
   const salesStartRow = totalSalesRows === 0 ? 0 : safeSalesPageIndex * salesPageSize + 1
   const salesEndRow = totalSalesRows === 0 ? 0 : Math.min(salesStartRow + Math.max(0, paginatedSales.length - 1), totalSalesRows)
 
-  const totalRevenue = summaryStats?.totalRevenue ?? 0
+  const grossRevenue = summaryStats?.grossRevenue ?? summaryStats?.netRevenue ?? summaryStats?.totalRevenue ?? 0
+  const netRevenue = summaryStats?.netRevenue ?? summaryStats?.totalRevenue ?? grossRevenue
   const completedSales = summaryStats?.completedSales ?? 0
   const partialSales = summaryStats?.partialSales ?? 0
   const unpaidSales = summaryStats?.unpaidSales ?? 0
   const unpaidValue = summaryStats?.unpaidValue ?? 0
   const tipsCollected = summaryStats?.tips ?? 0
+  const tipsCashCollected = summaryStats?.tipsCash ?? 0
+  const tipsCardCollected = summaryStats?.tipsCard ?? 0
+  const tipsOnlineCollected = summaryStats?.tipsOnline ?? 0
   const cashCollected = summaryStats?.cashCollected ?? 0
   const serviceCashCollected = summaryStats?.serviceCashCollected ?? cashCollected
   const walletCashCollected = summaryStats?.walletCashCollected ?? 0
@@ -3828,221 +3930,202 @@ export function SalesReport() {
         <TooltipProvider delayDuration={200}>
         <>
       {/* Enhanced Stats Cards */}
-      <div className="grid min-w-0 grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-4 2xl:grid-cols-7">
+      <div className="grid min-w-0 auto-rows-fr grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-8">
         <CursorTooltip wrapperClassName="h-full min-h-0" className="text-center" content="Successfully completed">
-          <Card className="h-full min-w-0 overflow-hidden bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
-            <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0 pb-3">
-              <CardTitle className="min-w-0 flex-1 text-sm font-medium leading-snug text-gray-900 break-words">Completed Sales</CardTitle>
-              <div className="shrink-0 p-2 bg-gray-100 rounded-lg">
-                <TrendingUp className="h-4 w-4 text-gray-600" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="text-xl font-bold text-gray-900 sm:text-2xl">
-                {salesStatsLoading ? salesStatSkeleton : completedSales}
-              </div>
-            </CardContent>
-          </Card>
-        </CursorTooltip>
-
-        <CursorTooltip
-          wrapperClassName="h-full min-h-0"
-          className="text-center"
-          content="Bills with partial payment vs fully unpaid for current filters."
-        >
-          <Card className="h-full min-w-0 overflow-hidden bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
-            <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0 pb-3">
-              <CardTitle className="min-w-0 flex-1 text-sm font-medium leading-snug text-gray-900 break-words">Partial/Unpaid Payments</CardTitle>
-              <div className="shrink-0 p-2 bg-gray-100 rounded-lg">
-                <Users className="h-4 w-4 text-gray-600" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              {salesStatsLoading ? (
-                salesStatSkeleton
-              ) : (
-                <div className="space-y-2">
-                  <div className="text-xl font-bold text-gray-900 sm:text-2xl">{partialSales + unpaidSales}</div>
-                  <div className="flex flex-col gap-1 text-xs text-gray-600 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
-                    <span>
-                      Partial{" "}
-                      <span className="font-semibold text-gray-900">{partialSales}</span>
-                    </span>
-                    <span>
-                      Unpaid{" "}
-                      <span className="font-semibold text-gray-900">{unpaidSales}</span>
-                    </span>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </CursorTooltip>
-
-        <CursorTooltip
-          wrapperClassName="h-full min-h-0"
-          className="text-center"
-          content={<>From {totalSalesRows} sales</>}
-        >
-          <Card className="h-full min-w-0 overflow-hidden bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
-            <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0 pb-3">
-              <CardTitle className="min-w-0 flex-1 text-sm font-medium leading-snug text-gray-900 break-words">Total Revenue</CardTitle>
-              <div className="shrink-0 p-2 bg-gray-100 rounded-lg">
-                <DollarSign className="h-4 w-4 text-gray-600" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-gray-900">
-                {salesStatsLoading ? salesStatSkeleton : `₹${totalRevenue.toFixed(2)}`}
-              </div>
-            </CardContent>
-          </Card>
+          <SalesStatCard
+            title="Completed Sales"
+            icon={<TrendingUp className="h-4 w-4 text-gray-600" />}
+            loading={salesStatsLoading}
+            loadingSkeleton={salesStatSkeleton}
+          >
+            <div className={SALES_STAT_VALUE_CLASS}>{completedSales}</div>
+          </SalesStatCard>
         </CursorTooltip>
 
         <CursorTooltip
           wrapperClassName="h-full min-h-0"
           className="text-center"
           content={
-            <>
-              Total outstanding · {partialSales + unpaidSales} bill{partialSales + unpaidSales === 1 ? "" : "s"}
-            </>
+            salesStatsLoading
+              ? "Bills with partial payment vs fully unpaid for current filters."
+              : `${partialSales} partial · ${unpaidSales} unpaid for current filters.`
           }
         >
-          <Card className="h-full min-w-0 overflow-hidden bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
-            <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0 pb-3">
-              <CardTitle className="min-w-0 flex-1 text-sm font-medium leading-snug text-gray-900 break-words">Unpaid Value</CardTitle>
-              <div className="shrink-0 p-2 bg-gray-100 rounded-lg">
-                <Wallet className="h-4 w-4 text-gray-600" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-gray-900">
-                {salesStatsLoading ? salesStatSkeleton : `₹${unpaidValue.toFixed(2)}`}
-              </div>
-            </CardContent>
-          </Card>
+          <SalesStatCard
+            title="Partial/Unpaid Payments"
+            icon={<Users className="h-4 w-4 text-gray-600" />}
+            loading={salesStatsLoading}
+            loadingSkeleton={salesStatSkeleton}
+          >
+            <div className={SALES_STAT_VALUE_CLASS}>{partialSales + unpaidSales}</div>
+          </SalesStatCard>
+        </CursorTooltip>
+
+        <CursorTooltip
+          wrapperClassName="h-full min-h-0"
+          className="max-w-xs px-4 py-3 text-left"
+          content={
+            <div className="space-y-1.5 text-sm leading-snug">
+              <p className="font-semibold text-slate-900">Gross Revenue</p>
+              <p className="text-slate-600">
+                Total billed for services and products before loyalty or bill discounts are applied.
+                This is your top-line sales value — tips are not included.
+              </p>
+              <p className="text-xs text-slate-500 pt-1">
+                {totalSalesRows} sale{totalSalesRows === 1 ? "" : "s"} in this view.
+              </p>
+            </div>
+          }
+        >
+          <SalesStatCard
+            title="Gross Revenue"
+            icon={<DollarSign className="h-4 w-4 text-gray-600" />}
+            loading={salesStatsLoading}
+            loadingSkeleton={salesStatSkeleton}
+          >
+            <div className={SALES_STAT_VALUE_CLASS}>₹{grossRevenue.toFixed(2)}</div>
+          </SalesStatCard>
+        </CursorTooltip>
+
+        <CursorTooltip
+          wrapperClassName="h-full min-h-0"
+          className="max-w-xs px-4 py-3 text-left"
+          content={
+            <div className="space-y-1.5 text-sm leading-snug">
+              <p className="font-semibold text-slate-900">Net Revenue</p>
+              <p className="text-slate-600">
+                Final bill amount after discounts, loyalty redemptions, and returns. This is earned
+                business revenue — tips are tracked separately in Tips Collected.
+              </p>
+              <p className="text-xs text-slate-500 pt-1">
+                {totalSalesRows} sale{totalSalesRows === 1 ? "" : "s"} in this view.
+              </p>
+            </div>
+          }
+        >
+          <SalesStatCard
+            title="Net Revenue"
+            icon={<Receipt className="h-4 w-4 text-gray-600" />}
+            loading={salesStatsLoading}
+            loadingSkeleton={salesStatSkeleton}
+          >
+            <div className={SALES_STAT_VALUE_CLASS}>₹{netRevenue.toFixed(2)}</div>
+          </SalesStatCard>
+        </CursorTooltip>
+
+        <CursorTooltip
+          wrapperClassName="h-full min-h-0"
+          className="text-center"
+          content={
+            salesStatsLoading ? (
+              "Total outstanding for current filters."
+            ) : (
+              <>
+                Total outstanding · {partialSales + unpaidSales} bill{partialSales + unpaidSales === 1 ? "" : "s"}
+              </>
+            )
+          }
+        >
+          <SalesStatCard
+            title="Unpaid Value"
+            icon={<Wallet className="h-4 w-4 text-gray-600" />}
+            loading={salesStatsLoading}
+            loadingSkeleton={salesStatSkeleton}
+          >
+            <div className={SALES_STAT_VALUE_CLASS}>₹{unpaidValue.toFixed(2)}</div>
+          </SalesStatCard>
         </CursorTooltip>
 
         <CursorTooltip
           wrapperClassName="h-full min-h-0"
           wrapperTabIndex={-1}
           className="text-center"
-          content={
-            showCashCollectedBreakdown
-              ? "Click to show combined cash total."
-              : "Service cash from bills; wallet cash is change credited to prepaid wallet. Click for breakdown."
-          }
+          content="Service cash from bills; wallet cash is change credited to prepaid wallet. Hover for breakdown."
         >
-          <Card
-            className="h-full min-w-0 overflow-hidden cursor-pointer select-none rounded-lg border border-gray-200 bg-white shadow-sm outline-none transition-shadow duration-200 hover:shadow-md focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2"
-            role="button"
-            tabIndex={0}
-            aria-expanded={showCashCollectedBreakdown}
-            onClick={() => setShowCashCollectedBreakdown((v) => !v)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault()
-                setShowCashCollectedBreakdown((v) => !v)
-              }
-            }}
-          >
-            <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0 pb-3">
-              <CardTitle className="min-w-0 flex-1 text-sm font-medium leading-snug text-gray-900 break-words">Cash Collected</CardTitle>
-              <div className="shrink-0 p-2 bg-gray-100 rounded-lg">
-                <DollarSign className="h-4 w-4 text-gray-600" />
+          <SalesStatBreakdownFlipCard
+            title="Cash Collected"
+            icon={<DollarSign className="h-4 w-4 text-gray-600" />}
+            total={cashCollected}
+            loading={salesStatsLoading}
+            loadingSkeleton={salesStatSkeleton}
+            breakdown={
+              <div className="space-y-2">
+                <div>
+                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Service Cash</p>
+                  <p className="text-xl font-bold text-gray-900">₹{serviceCashCollected.toFixed(2)}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Wallet Cash</p>
+                  <p className="text-xl font-bold text-gray-900">₹{walletCashCollected.toFixed(2)}</p>
+                </div>
               </div>
-            </CardHeader>
-            <CardContent>
-              {salesStatsLoading ? (
-                salesStatSkeleton
-              ) : !showCashCollectedBreakdown ? (
-                <div className="space-y-1">
-                  <div className="text-2xl font-bold text-gray-900">₹{cashCollected.toFixed(2)}</div>
-                  <p className="text-xs leading-snug text-gray-400 break-words">Click for breakdown</p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  <div>
-                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Service Cash</p>
-                    <p className="text-xl font-bold text-gray-900">₹{serviceCashCollected.toFixed(2)}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Wallet Cash</p>
-                    <p className="text-xl font-bold text-gray-900">₹{walletCashCollected.toFixed(2)}</p>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+            }
+          />
         </CursorTooltip>
 
         <CursorTooltip
           wrapperClassName="h-full min-h-0"
           wrapperTabIndex={-1}
           className="text-center"
-          content={
-            showOnlineCashCollectedBreakdown
-              ? "Click to show combined online total."
-              : "Card and online/UPI payments for current filters. Click for breakdown."
-          }
+          content="Card and online/UPI payments for current filters. Hover for breakdown."
         >
-          <Card
-            className="h-full min-w-0 overflow-hidden cursor-pointer select-none rounded-lg border border-gray-200 bg-white shadow-sm outline-none transition-shadow duration-200 hover:shadow-md focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2"
-            role="button"
-            tabIndex={0}
-            aria-expanded={showOnlineCashCollectedBreakdown}
-            onClick={() => setShowOnlineCashCollectedBreakdown((v) => !v)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault()
-                setShowOnlineCashCollectedBreakdown((v) => !v)
-              }
-            }}
-          >
-            <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0 pb-3">
-              <CardTitle className="min-w-0 flex-1 text-sm font-medium leading-snug text-gray-900 break-words">Online Cash Collected</CardTitle>
-              <div className="shrink-0 p-2 bg-gray-100 rounded-lg">
-                <TrendingUp className="h-4 w-4 text-gray-600" />
+          <SalesStatBreakdownFlipCard
+            title="Online Cash Collected"
+            icon={<TrendingUp className="h-4 w-4 text-gray-600" />}
+            total={onlineCashCollected}
+            loading={salesStatsLoading}
+            loadingSkeleton={salesStatSkeleton}
+            breakdown={
+              <div className="space-y-2">
+                <div>
+                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Card</p>
+                  <p className="text-xl font-bold text-gray-900">₹{cardCollected.toFixed(2)}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Online</p>
+                  <p className="text-xl font-bold text-gray-900">₹{onlinePayCollected.toFixed(2)}</p>
+                </div>
               </div>
-            </CardHeader>
-            <CardContent>
-              {salesStatsLoading ? (
-                salesStatSkeleton
-              ) : !showOnlineCashCollectedBreakdown ? (
-                <div className="space-y-1">
-                  <div className="text-2xl font-bold text-gray-900">₹{onlineCashCollected.toFixed(2)}</div>
-                  <p className="text-xs leading-snug text-gray-400 break-words">Click for breakdown</p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  <div>
-                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Card</p>
-                    <p className="text-xl font-bold text-gray-900">₹{cardCollected.toFixed(2)}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Online</p>
-                    <p className="text-xl font-bold text-gray-900">₹{onlinePayCollected.toFixed(2)}</p>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+            }
+          />
         </CursorTooltip>
 
-        <CursorTooltip wrapperClassName="h-full min-h-0" className="text-center" content="Tips from selected sales">
-          <Card className="h-full min-w-0 overflow-hidden bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow duration-200">
-            <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0 pb-3">
-              <CardTitle className="min-w-0 flex-1 text-sm font-medium leading-snug text-gray-900 break-words">Tips Collected</CardTitle>
-              <div className="shrink-0 p-2 bg-gray-100 rounded-lg">
-                <DollarSign className="h-4 w-4 text-gray-600" />
+        <CursorTooltip
+          wrapperClassName="h-full min-h-0"
+          wrapperTabIndex={-1}
+          className="max-w-xs px-4 py-3 text-left"
+          content={
+            <div className="space-y-1.5 text-sm leading-snug">
+              <p className="font-semibold text-slate-900">Tips Collected</p>
+              <p className="text-slate-600">
+                Tips paid by customers on bills in this period. Not included in Gross or Net Revenue — tracked separately for staff payout. Hover for breakdown.
+              </p>
+            </div>
+          }
+        >
+          <SalesStatBreakdownFlipCard
+            title="Tips Collected"
+            icon={<DollarSign className="h-4 w-4 text-gray-600" />}
+            total={tipsCollected}
+            loading={salesStatsLoading}
+            loadingSkeleton={salesStatSkeleton}
+            breakdown={
+              <div className="space-y-1">
+                <div className="flex items-baseline justify-between gap-2 text-sm leading-tight">
+                  <span className="text-gray-500">Cash</span>
+                  <span className="font-bold tabular-nums text-gray-900">₹{tipsCashCollected.toFixed(2)}</span>
+                </div>
+                <div className="flex items-baseline justify-between gap-2 text-sm leading-tight">
+                  <span className="text-gray-500">Card</span>
+                  <span className="font-bold tabular-nums text-gray-900">₹{tipsCardCollected.toFixed(2)}</span>
+                </div>
+                <div className="flex items-baseline justify-between gap-2 text-sm leading-tight">
+                  <span className="text-gray-500">Online</span>
+                  <span className="font-bold tabular-nums text-gray-900">₹{tipsOnlineCollected.toFixed(2)}</span>
+                </div>
               </div>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-gray-900">
-                {salesStatsLoading ? salesStatSkeleton : `₹${tipsCollected.toFixed(2)}`}
-              </div>
-            </CardContent>
-          </Card>
+            }
+          />
         </CursorTooltip>
       </div>
 
