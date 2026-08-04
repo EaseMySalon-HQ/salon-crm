@@ -25,6 +25,7 @@ const {
   computeSalesSummaryTotals,
   computeSalesSummaryTotalsSplit,
 } = require('./lib/sales-list-query');
+const { saleNetRevenue } = require('./lib/sale-revenue-metrics');
 const { isAdminReceiptNotificationsEnabled } = require('./lib/whatsapp-admin-gates');
 const { getWhatsAppSettingsWithDefaults } = require('./lib/whatsapp-settings-defaults');
 const { isTenantReceiptNotificationEnabled } = require('./lib/whatsapp-template-notification-gates');
@@ -12525,7 +12526,7 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
     const totalBillCount = salesInInvoiceRange.length;
     const uniqueCustomers = new Set(salesInInvoiceRange.map(s => (s.customerName || '').trim()).filter(Boolean));
     const totalCustomerCount = uniqueCustomers.size || totalBillCount;
-    const totalSales = salesInInvoiceRange.reduce((sum, s) => sum + (s.grossTotal || s.totalAmount || s.netTotal || 0), 0);
+    const totalSales = salesInInvoiceRange.reduce((sum, s) => sum + saleNetRevenue(s), 0);
     let totalSalesCash = 0, totalSalesOnline = 0, totalSalesCard = 0, totalSalesWallet = 0, totalSalesRewardPoint = 0;
     let cashAddedToWallet = 0;
     salesInInvoiceRange.forEach(s => {
@@ -12547,7 +12548,7 @@ app.get('/api/reports/summary', authenticateToken, setupBusinessDatabase, requir
         });
         isAllCash = cashAmt > 0 && !hasNonCash;
       } else {
-        const amt = s.grossTotal || s.netTotal || 0;
+        const amt = saleNetRevenue(s);
         const pm = String(s.paymentMode || '').toLowerCase();
         if (pm === 'cash') { totalSalesCash += amt; cashAmt = amt; isAllCash = true; }
         else if (pm === 'online') totalSalesOnline += amt;
@@ -12658,6 +12659,8 @@ app.get('/api/sales/summary', authenticateToken, setupBusinessDatabase, requireS
     res.json({
       success: true,
       data: {
+        grossRevenue: totals.grossRevenue,
+        netRevenue: totals.netRevenue,
         totalRevenue: totals.totalRevenue,
         cashCollected: totals.cashCollected,
         serviceCashCollected: totals.serviceCashCollected,
@@ -12667,6 +12670,9 @@ app.get('/api/sales/summary', authenticateToken, setupBusinessDatabase, requireS
         onlinePayCollected: totals.onlinePayCollected,
         unpaidValue: totals.unpaidValue,
         tips: totals.tips,
+        tipsCash: totals.tipsCash,
+        tipsCard: totals.tipsCard,
+        tipsOnline: totals.tipsOnline,
         completedSales: totals.completedSales,
         partialSales: totals.partialSales || 0,
         unpaidSales: totals.unpaidSales || 0,

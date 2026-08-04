@@ -72,6 +72,7 @@ import { useCurrency } from "@/hooks/use-currency"
 import { effectiveMembershipPlanDiscountPercent } from "@/lib/membership-plan-discount"
 import { cn } from "@/lib/utils"
 import { MultiStaffSelector, type StaffContribution } from "@/components/ui/multi-staff-selector"
+import { StaffSearchCombobox } from "@/components/ui/staff-search-combobox"
 import {
   STAFF_SHARE_VALIDATION_MESSAGE,
   contributionsFromLegacyStaff,
@@ -146,6 +147,8 @@ import {
   readPinnedServiceIds,
   writePinnedServiceIds,
 } from "@/lib/pinned-checkout-services"
+import { TipPaymentModeDialog } from "@/components/checkout/tip-payment-mode-dialog"
+import { useTipPaymentModePrompt } from "@/lib/use-tip-payment-mode-prompt"
 
 export type CheckoutTipLine = {
   id: string
@@ -1993,6 +1996,26 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     [checkoutTipLines]
   )
 
+  const {
+    tipPaymentMode,
+    setTipPaymentMode,
+    getResolvedTipPaymentMode,
+    getBlockReason: getTipPaymentModeBlockReason,
+    showTipPaymentModeDialog,
+    setShowTipPaymentModeDialog,
+    dialogSelection: tipPaymentModeDialogSelection,
+    setDialogSelection: setTipPaymentModeDialogSelection,
+    requireTipPaymentModeOrPrompt,
+    confirmTipPaymentModeDialog,
+    cancelTipPaymentModeDialog,
+  } = useTipPaymentModePrompt(checkoutTipTotal, payCash, payCard, payOnline)
+
+  useEffect(() => {
+    if (initialBillEditState?.tipPaymentMode) {
+      setTipPaymentMode(initialBillEditState.tipPaymentMode)
+    }
+  }, [initialBillEditState?.tipPaymentMode, setTipPaymentMode])
+
   /** Scale tax & pre-tax base by cart discount so GST matches amount payable (same proportion as total). */
   const cartPostDiscountFactor =
     cartPricing.toPay > 1e-9
@@ -3399,6 +3422,24 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       return
     }
 
+    const tipModeBlockReason = getTipPaymentModeBlockReason()
+    if (tipModeBlockReason) {
+      toast({
+        title: "Tip payment mode",
+        description: tipModeBlockReason,
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (
+      !requireTipPaymentModeOrPrompt(() => {
+        void confirmPaymentMethodAndContinue(opts)
+      })
+    ) {
+      return
+    }
+
     setNavigating(true)
     try {
       if (persistedDraftRef.current) {
@@ -3503,6 +3544,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
           walletSettings: paymentDialogWalletSettings,
           clientWalletsUsable: paymentDialogWalletsUncombined,
         },
+        tipPaymentMode: getResolvedTipPaymentMode(),
       })
 
       if (inlineResult.ok) {
@@ -5934,24 +5976,16 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                             />
                             {staffOptions.length > 0 ? (
                               <div className="min-w-0 w-full sm:w-[9.5rem] sm:max-w-[9.5rem] sm:flex-1">
-                                <Select
-                                  value={line.staffId || undefined}
+                                <StaffSearchCombobox
+                                  id={staffTriggerId}
+                                  value={line.staffId}
                                   onValueChange={(v) => setProductLineStaff(line.id, v)}
-                                >
-                                  <SelectTrigger
-                                    id={staffTriggerId}
-                                    className="h-8 w-full max-w-none rounded-lg px-2 text-xs"
-                                  >
-                                    <SelectValue placeholder={CHECKOUT_NO_STAFF_LABEL} />
-                                  </SelectTrigger>
-                                  <SelectContent position="popper" className={cartSelectContentClass}>
-                                    {staffOptions.map((s) => (
-                                      <SelectItem key={s.id} value={s.id}>
-                                        {s.name}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
+                                  staff={staffOptions}
+                                  placeholder={CHECKOUT_NO_STAFF_LABEL}
+                                  contentClassName={cartSelectContentClass}
+                                  portalContainer={checkoutPopoverPortal}
+                                  triggerClassName="rounded-lg text-xs"
+                                />
                               </div>
                             ) : null}
                           </div>
@@ -6088,24 +6122,16 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                             />
                             {staffOptions.length > 0 ? (
                               <div className="min-w-0 w-full sm:w-[9.5rem] sm:max-w-[9.5rem] sm:flex-1">
-                                <Select
-                                  value={line.staffId || undefined}
+                                <StaffSearchCombobox
+                                  id={staffTriggerId}
+                                  value={line.staffId}
                                   onValueChange={(v) => setMembershipLineStaff(line.id, v)}
-                                >
-                                  <SelectTrigger
-                                    id={staffTriggerId}
-                                    className="h-8 w-full max-w-none rounded-lg px-2 text-xs"
-                                  >
-                                    <SelectValue placeholder={CHECKOUT_NO_STAFF_LABEL} />
-                                  </SelectTrigger>
-                                  <SelectContent position="popper" className={cartSelectContentClass}>
-                                    {staffOptions.map((s) => (
-                                      <SelectItem key={s.id} value={s.id}>
-                                        {s.name}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
+                                  staff={staffOptions}
+                                  placeholder={CHECKOUT_NO_STAFF_LABEL}
+                                  contentClassName={cartSelectContentClass}
+                                  portalContainer={checkoutPopoverPortal}
+                                  triggerClassName="rounded-lg text-xs"
+                                />
                               </div>
                             ) : null}
                           </div>
@@ -6244,24 +6270,16 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                             />
                             {staffOptions.length > 0 ? (
                               <div className="min-w-0 w-full sm:w-[9.5rem] sm:max-w-[9.5rem] sm:flex-1">
-                                <Select
-                                  value={line.staffId || undefined}
+                                <StaffSearchCombobox
+                                  id={staffTriggerId}
+                                  value={line.staffId}
                                   onValueChange={(v) => setPrepaidLineStaff(line.id, v)}
-                                >
-                                  <SelectTrigger
-                                    id={staffTriggerId}
-                                    className="h-8 w-full max-w-none rounded-lg px-2 text-xs"
-                                  >
-                                    <SelectValue placeholder={CHECKOUT_NO_STAFF_LABEL} />
-                                  </SelectTrigger>
-                                  <SelectContent position="popper" className={cartSelectContentClass}>
-                                    {staffOptions.map((s) => (
-                                      <SelectItem key={s.id} value={s.id}>
-                                        {s.name}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
+                                  staff={staffOptions}
+                                  placeholder={CHECKOUT_NO_STAFF_LABEL}
+                                  contentClassName={cartSelectContentClass}
+                                  portalContainer={checkoutPopoverPortal}
+                                  triggerClassName="rounded-lg text-xs"
+                                />
                               </div>
                             ) : null}
                           </div>
@@ -6400,24 +6418,16 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
                             />
                             {staffOptions.length > 0 ? (
                               <div className="min-w-0 w-full sm:w-[9.5rem] sm:max-w-[9.5rem] sm:flex-1">
-                                <Select
-                                  value={line.staffId || undefined}
+                                <StaffSearchCombobox
+                                  id={staffTriggerId}
+                                  value={line.staffId}
                                   onValueChange={(v) => setPackageLineStaff(line.id, v)}
-                                >
-                                  <SelectTrigger
-                                    id={staffTriggerId}
-                                    className="h-8 w-full max-w-none rounded-lg px-2 text-xs"
-                                  >
-                                    <SelectValue placeholder={CHECKOUT_NO_STAFF_LABEL} />
-                                  </SelectTrigger>
-                                  <SelectContent position="popper" className={cartSelectContentClass}>
-                                    {staffOptions.map((s) => (
-                                      <SelectItem key={s.id} value={s.id}>
-                                        {s.name}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
+                                  staff={staffOptions}
+                                  placeholder={CHECKOUT_NO_STAFF_LABEL}
+                                  contentClassName={cartSelectContentClass}
+                                  portalContainer={checkoutPopoverPortal}
+                                  triggerClassName="rounded-lg text-xs"
+                                />
                               </div>
                             ) : null}
                           </div>
@@ -7214,6 +7224,28 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
     </Dialog>
   )
 
+  const checkoutTipPaymentModeDialog = (
+    <TipPaymentModeDialog
+      open={showTipPaymentModeDialog}
+      onOpenChange={(open) => {
+        if (navigating) return
+        if (!open) cancelTipPaymentModeDialog()
+        else setShowTipPaymentModeDialog(true)
+      }}
+      tipAmount={checkoutTipTotal}
+      cash={payCash}
+      card={payCard}
+      online={payOnline}
+      selection={tipPaymentModeDialogSelection}
+      onSelectionChange={setTipPaymentModeDialogSelection}
+      onConfirm={confirmTipPaymentModeDialog}
+      confirmDisabled={navigating}
+      confirmLabel="Complete billing"
+      contentClassName="z-[9999] gap-4 sm:max-w-md"
+      overlayClassName="z-[9998]"
+    />
+  )
+
   const checkoutCreditChangeConfirmDialog = (
     <Dialog
       open={showCreditChangeConfirm}
@@ -7289,30 +7321,19 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
               <div key={row.id} className="flex flex-wrap items-end gap-2">
                 <div className="min-w-0 flex-1 space-y-1.5">
                   <Label className="text-xs text-muted-foreground">Staff</Label>
-                  <Select
-                    value={row.staffId || undefined}
+                  <StaffSearchCombobox
+                    value={row.staffId}
                     onValueChange={(v) =>
                       setTipDraftLines((prev) =>
                         prev.map((r) => (r.id === row.id ? { ...r, staffId: v } : r))
                       )
                     }
+                    staff={staffOptions}
                     disabled={staffOptions.length === 0}
-                  >
-                    <SelectTrigger className="h-9 rounded-lg">
-                      <SelectValue placeholder={CHECKOUT_NO_STAFF_LABEL} />
-                    </SelectTrigger>
-                    <SelectContent
-                      position="popper"
-                      className={cn(checkoutModalSelectContentClass, "max-h-[min(24rem,70vh)]")}
-                      style={{ zIndex: 9999 }}
-                    >
-                      {staffOptions.map((s) => (
-                        <SelectItem key={s.id} value={s.id}>
-                          {s.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    placeholder={CHECKOUT_NO_STAFF_LABEL}
+                    contentClassName={checkoutModalSelectContentClass}
+                    triggerClassName="h-9 rounded-lg text-sm"
+                  />
                 </div>
                 <div className="w-[7.5rem] space-y-1.5">
                   <Label className="text-xs text-muted-foreground">Amount (₹)</Label>
@@ -7552,6 +7573,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
         {cancelDraftConfirmDialog}
         {billRefundDialog}
         {checkoutPartialPaymentConfirmDialog}
+        {checkoutTipPaymentModeDialog}
         {checkoutCreditChangeConfirmDialog}
         {checkoutExtrasDialogs}
         <ClientDetailsDrawer
@@ -7598,6 +7620,7 @@ export const ServiceCheckoutDialog = forwardRef<ServiceCheckoutDialogHandle, Ser
       {cancelDraftConfirmDialog}
       {billRefundDialog}
       {checkoutPartialPaymentConfirmDialog}
+      {checkoutTipPaymentModeDialog}
       {checkoutCreditChangeConfirmDialog}
       {checkoutExtrasDialogs}
       <ClientDetailsDrawer

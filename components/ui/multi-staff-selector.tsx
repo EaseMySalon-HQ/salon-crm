@@ -13,6 +13,7 @@ import {
   equalStaffSharePercentages,
   isStaffShareValid,
 } from "@/lib/staff-share-utils"
+import { filterStaffByNamePrefix } from "@/lib/staff-name-search"
 
 export interface StaffContribution {
   staffId: string
@@ -69,6 +70,8 @@ export function MultiStaffSelector({
   const [portalContainerLocal, setPortalContainerLocal] = useState<HTMLElement | null>(null)
   const portalContainer = portalContainerProp ?? portalContainerLocal
   const [open, setOpen] = useState(false)
+  const [staffSearch, setStaffSearch] = useState("")
+  const staffSearchInputRef = useRef<HTMLInputElement>(null)
   const [selectedStaffIds, setSelectedStaffIds] = useState<string[]>(() =>
     initialContributions.map((c) => c.staffId).filter(Boolean)
   )
@@ -114,6 +117,12 @@ export function MultiStaffSelector({
   useEffect(() => {
     onValidationChange?.(shareValid)
   }, [shareValid, onValidationChange])
+
+  useEffect(() => {
+    if (!open) return
+    const t = window.setTimeout(() => staffSearchInputRef.current?.focus(), 0)
+    return () => window.clearTimeout(t)
+  }, [open])
 
   const toggleStaff = (staffId: string, checked: boolean) => {
     if (disabled) return
@@ -164,6 +173,11 @@ export function MultiStaffSelector({
   const showShareEditor = !hideShareEditor && selectedStaffIds.length >= 2
   const showShareInDropdown =
     shareEditorInDropdown && hideShareEditor && selectedStaffIds.length >= 2
+
+  const filteredStaffList = useMemo(
+    () => filterStaffByNamePrefix(staffList, staffSearch),
+    [staffList, staffSearch]
+  )
 
   const sharePercentInput = (index: number, staffName: string, className?: string) => (
     <div
@@ -271,7 +285,14 @@ export function MultiStaffSelector({
       )}
     >
       {!portalContainerProp ? <div ref={setPortalContainerLocal} aria-hidden /> : null}
-      <Popover open={open} onOpenChange={setOpen} modal={false}>
+      <Popover
+        open={open}
+        onOpenChange={(next) => {
+          setOpen(next)
+          if (!next) setStaffSearch("")
+        }}
+        modal={false}
+      >
         <PopoverTrigger asChild>
           <Button
             type="button"
@@ -305,8 +326,21 @@ export function MultiStaffSelector({
           onOpenAutoFocus={(e) => e.preventDefault()}
           onCloseAutoFocus={(e) => e.preventDefault()}
         >
+          <Input
+            ref={staffSearchInputRef}
+            type="search"
+            value={staffSearch}
+            onChange={(e) => setStaffSearch(e.target.value)}
+            placeholder="Search staff…"
+            className="mb-2 h-8 border-0 border-b border-border/60 rounded-none px-2 text-sm shadow-none focus-visible:ring-0"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+          />
           <div className="max-h-56 space-y-0.5 overflow-y-auto" role="listbox" aria-multiselectable>
-            {staffList.map((staff) => {
+            {filteredStaffList.length === 0 ? (
+              <p className="px-2 py-3 text-center text-xs text-muted-foreground">No staff found.</p>
+            ) : null}
+            {filteredStaffList.map((staff) => {
               const id = staffKey(staff)
               if (!id) return null
               const checked = selectedStaffIds.includes(id)

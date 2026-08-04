@@ -12,6 +12,7 @@ const {
   getSameMonthLastYearKey,
   lastNMonthKeys,
 } = require('../utils/date-utils');
+const { saleNetRevenue, sumNetRevenueFromSales } = require('./sale-revenue-metrics');
 
 const REVENUE_MILESTONES = [
   { threshold: 500000, label: '₹5L' },
@@ -28,9 +29,7 @@ function round2(n) {
 }
 
 function netRevenueFromSales(sales) {
-  return round2(
-    sales.reduce((sum, s) => sum + (s.netTotal ?? s.grossTotal ?? s.totalAmount ?? 0), 0)
-  );
+  return round2(sumNetRevenueFromSales(sales));
 }
 
 function sumRevenueByCategory(sales) {
@@ -152,13 +151,13 @@ async function aggregateTopClients(Sale, Client, branchId, dateFrom, dateTo, lim
     status: { $nin: ['cancelled', 'Cancelled'] },
     clientId: { $exists: true, $ne: null },
   })
-    .select('clientId netTotal grossTotal totalAmount')
+    .select('clientId grossTotal totalAmount loyaltyDiscountAmount receiptTotalsBreakdown')
     .lean();
 
   const map = new Map();
   sales.forEach((s) => {
     const id = String(s.clientId);
-    const amt = s.netTotal ?? s.grossTotal ?? s.totalAmount ?? 0;
+    const amt = saleNetRevenue(s);
     const prev = map.get(id) || { totalSpend: 0, visitCount: 0 };
     prev.totalSpend += amt;
     prev.visitCount += 1;
@@ -258,7 +257,7 @@ async function computeMonthlyAggregate(businessModels, branchId, monthKey) {
   const monthTotalBills = sales.length;
   const revenueByCategory = sumRevenueByCategory(sales);
   const cancelledBillsTotal = round2(
-    cancelledSales.reduce((s, r) => s + (r.netTotal ?? r.grossTotal ?? r.totalAmount ?? 0), 0)
+    cancelledSales.reduce((s, r) => s + saleNetRevenue(r), 0)
   );
 
   const monthTotalAppointments = await Appointment.countDocuments({

@@ -8,6 +8,7 @@ const {
   weekdayShortIST,
   getPreviousMonSunWeekIST,
 } = require('../utils/date-utils');
+const { sumNetRevenueFromSales } = require('./sale-revenue-metrics');
 
 function round2(n) {
   const x = Number(n);
@@ -16,9 +17,7 @@ function round2(n) {
 }
 
 function netRevenueFromSales(sales) {
-  return round2(
-    sales.reduce((sum, s) => sum + (s.netTotal ?? s.grossTotal ?? s.totalAmount ?? 0), 0)
-  );
+  return round2(sumNetRevenueFromSales(sales));
 }
 
 function itemLineAmount(item) {
