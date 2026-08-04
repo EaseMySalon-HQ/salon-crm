@@ -5010,11 +5010,16 @@ export class WhatsAppTemplatesAPI {
     return response.data
   }
 
-  static async importLibraryBatch(platformTemplateIds: string[]): Promise<
+  /** `names` optionally renames templates on import, keyed by platform template id. */
+  static async importLibraryBatch(
+    platformTemplateIds: string[],
+    names?: Record<string, string>
+  ): Promise<
     ApiResponse<{ imported: number; skipped: Array<{ id: string; reason: string; name?: string }>; templateIds: string[] }>
   > {
     const response = await apiClient.post(`${WhatsAppTemplatesAPI.basePath}/library/import-batch`, {
       platformTemplateIds,
+      ...(names && Object.keys(names).length ? { names } : {}),
     })
     return response.data
   }

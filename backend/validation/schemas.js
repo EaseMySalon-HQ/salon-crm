@@ -531,16 +531,25 @@ const whatsappTemplateBodySchema = z
 
 const whatsappTemplateUpdateBodySchema = whatsappTemplateBodySchema.partial();
 
+const whatsappTemplateNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(512)
+  .regex(/^[a-z0-9_]+$/, 'name must be lowercase snake_case (a-z, 0-9, _)');
+
 const whatsappTemplateSubmitBodySchema = z
   .object({
     /** Optional rename before submit (Meta rejects duplicate elementName on resubmit). */
-    name: z
-      .string()
-      .trim()
-      .min(1)
-      .max(512)
-      .regex(/^[a-z0-9_]+$/, 'name must be lowercase snake_case (a-z, 0-9, _)')
-      .optional(),
+    name: whatsappTemplateNameSchema.optional(),
+  })
+  .strict();
+
+const whatsappTemplateImportBatchBodySchema = z
+  .object({
+    platformTemplateIds: z.array(z.string().trim().min(1)).min(1),
+    /** Optional per-template rename, keyed by platform template id. */
+    names: z.record(z.string(), whatsappTemplateNameSchema).optional(),
   })
   .strict();
 
@@ -701,6 +710,7 @@ module.exports = {
   whatsappTemplateBodySchema,
   whatsappTemplateUpdateBodySchema,
   whatsappTemplateSubmitBodySchema,
+  whatsappTemplateImportBatchBodySchema,
   whatsappTemplateListQuerySchema,
   whatsappTemplateLibraryQuerySchema,
   whatsappTemplateHeaderMediaUploadSchema,

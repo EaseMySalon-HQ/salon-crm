@@ -132,6 +132,9 @@ const STATUS_LOOK: Record<string, { label: string; cls: string; icon: any }> = {
   disabled: { label: "Disabled", cls: "bg-slate-100 text-slate-600", icon: XCircle },
 }
 
+/** Meta elementName rules, mirrored from the backend schema. */
+const TEMPLATE_NAME_PATTERN = /^[a-z0-9_]+$/
+
 function submitFailureTitle(code?: string) {
   if (code === "WHATSAPP_APP_NOT_CONNECTED") return "WhatsApp not connected"
   if (code === "GUPSHUP_SUBMIT_RETRYABLE") return "Try again in a minute"
@@ -196,6 +199,8 @@ export function WhatsAppTemplatesPage() {
   const [availableTemplates, setAvailableTemplates] = useState<LibraryEntry[]>([])
   const [availableLoading, setAvailableLoading] = useState(false)
   const [selectedPlatformIds, setSelectedPlatformIds] = useState<string[]>([])
+  /** Per-template name overrides in the Add dialog, keyed by platform template id. */
+  const [addNameOverrides, setAddNameOverrides] = useState<Record<string, string>>({})
   const [renameDialog, setRenameDialog] = useState<{
     templateId: string
     currentName: string
@@ -329,7 +334,7 @@ export function WhatsAppTemplatesPage() {
   const handleRenameAndSubmit = async () => {
     if (!renameDialog) return
     const next = renameValue.trim().toLowerCase()
-    if (!/^[a-z0-9_]+$/.test(next)) {
+    if (!TEMPLATE_NAME_PATTERN.test(next)) {
       toast({
         title: "Invalid template name",
         description: "Use lowercase letters, numbers, and underscores only.",
@@ -448,6 +453,7 @@ export function WhatsAppTemplatesPage() {
   const openAddTemplatesDialog = async (scope: "promotional" | "transactional") => {
     setAddDialogScope(scope)
     setSelectedPlatformIds([])
+    setAddNameOverrides({})
     setAddDialogOpen(true)
     setAvailableLoading(true)
     try {
@@ -469,14 +475,48 @@ export function WhatsAppTemplatesPage() {
     })
   }
 
+  const addDialogNameFor = (entry: LibraryEntry) =>
+    addNameOverrides[entry.platformTemplateId] ?? entry.elementName
+
+  const setAddDialogName = (platformTemplateId: string, value: string) => {
+    setAddNameOverrides((prev) => ({ ...prev, [platformTemplateId]: value.toLowerCase() }))
+  }
+
   const handleAddSelectedTemplates = async () => {
     if (!selectedPlatformIds.length) {
       toast({ title: "Select templates", description: "Choose at least one template to add.", variant: "destructive" })
       return
     }
+
+    const names: Record<string, string> = {}
+    const seen = new Map<string, string>()
+    for (const id of selectedPlatformIds) {
+      const entry = availableTemplates.find((e) => e.platformTemplateId === id)
+      if (!entry) continue
+      const name = addDialogNameFor(entry).trim()
+      if (!TEMPLATE_NAME_PATTERN.test(name)) {
+        toast({
+          title: "Invalid template name",
+          description: `"${name}" must use lowercase letters, numbers, and underscores only.`,
+          variant: "destructive",
+        })
+        return
+      }
+      if (seen.has(name)) {
+        toast({
+          title: "Duplicate template name",
+          description: `"${name}" is used for more than one template. Names must be unique.`,
+          variant: "destructive",
+        })
+        return
+      }
+      seen.set(name, id)
+      if (name !== entry.elementName) names[id] = name
+    }
+
     setBusy(`add-selected-${addDialogScope}`)
     try {
-      const res = await WhatsAppTemplatesAPI.importLibraryBatch(selectedPlatformIds)
+      const res = await WhatsAppTemplatesAPI.importLibraryBatch(selectedPlatformIds, names)
       if (res.success) {
         toast({
           title: "Templates added",
@@ -484,10 +524,19 @@ export function WhatsAppTemplatesPage() {
         })
         setAddDialogOpen(false)
         setSelectedPlatformIds([])
+        setAddNameOverrides({})
         await Promise.all([refresh(), reloadLibraries()])
       } else {
         toast({ title: "Add failed", description: String(res.error || ""), variant: "destructive" })
       }
+    } catch (err: any) {
+      const apiErr = err?.response?.data
+      toast({
+        title: "Add failed",
+        description:
+          (typeof apiErr?.error === "string" ? apiErr.error : "") || err?.message || "Could not add templates",
+        variant: "destructive",
+      })
     } finally {
       setBusy(null)
     }
@@ -673,8 +722,13 @@ export function WhatsAppTemplatesPage() {
                       )}
                       <TableCell>
                         <code className="text-xs bg-slate-100 px-1.5 py-0.5 rounded">
-                          {entry.elementName}
+                          {lt.name || entry.elementName}
                         </code>
+                        {lt.name && lt.name !== entry.elementName && (
+                          <p className="mt-1 text-[11px] text-slate-500">
+                            Catalog: {entry.elementName}
+                          </p>
+                        )}
                       </TableCell>
                       <TableCell className="max-w-md">
                         <p className="text-xs text-slate-600 line-clamp-2">{entry.content}</p>
@@ -692,8 +746,16 @@ export function WhatsAppTemplatesPage() {
                       </TableCell>
                       <TableCell className="text-right space-x-1">
                         {(() => {
-                          const canSubmitLibrary = lt.status === "draft" || lt.status === "rejected"
-                          const submitLabel = lt.status === "rejected" ? "Resubmit" : "Submit"
+                          const canSubmitLibrary =
+                            lt.status === "draft" ||
+                            lt.status === "rejected" ||
+                            (isTransactional && lt.status === "pending")
+                          const submitLabel =
+                            lt.status === "rejected"
+                              ? "Resubmit"
+                              : lt.status === "pending"
+                                ? "Retry submit"
+                                : "Submit"
                           return (
                             <>
                               {canSubmitLibrary && (
@@ -1089,28 +1151,56 @@ export function WhatsAppTemplatesPage() {
               <div className="space-y-2">
                 {availableTemplates.map((entry) => {
                   const checked = selectedPlatformIds.includes(entry.platformTemplateId)
+                  const name = addDialogNameFor(entry)
+                  const nameInvalid = checked && !TEMPLATE_NAME_PATTERN.test(name.trim())
                   return (
-                    <label
+                    <div
                       key={entry.platformTemplateId}
-                      className="flex items-start gap-3 rounded-lg border p-3 cursor-pointer hover:bg-slate-50"
+                      className="flex items-start gap-3 rounded-lg border p-3 hover:bg-slate-50"
                     >
                       <Checkbox
+                        id={`add-tpl-${entry.platformTemplateId}`}
                         checked={checked}
                         onCheckedChange={(v) => togglePlatformSelection(entry.platformTemplateId, v === true)}
                         className="mt-0.5"
                       />
                       <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 flex-wrap">
+                        <label
+                          htmlFor={`add-tpl-${entry.platformTemplateId}`}
+                          className="flex items-center gap-2 flex-wrap cursor-pointer"
+                        >
                           <code className="text-xs bg-slate-100 px-1.5 py-0.5 rounded">{entry.elementName}</code>
                           {entry.slotKey ? (
                             <Badge variant="outline" className="text-xs">
                               {NOTIFICATION_SLOT_LABELS[entry.slotKey] || entry.slotKey}
                             </Badge>
                           ) : null}
-                        </div>
+                        </label>
                         <p className="text-xs text-slate-600 mt-1 line-clamp-2">{entry.content}</p>
+                        {checked && (
+                          <div className="mt-2 space-y-1">
+                            <Label
+                              htmlFor={`add-tpl-name-${entry.platformTemplateId}`}
+                              className="text-xs text-slate-500"
+                            >
+                              Name on your WhatsApp account
+                            </Label>
+                            <Input
+                              id={`add-tpl-name-${entry.platformTemplateId}`}
+                              value={name}
+                              onChange={(e) => setAddDialogName(entry.platformTemplateId, e.target.value)}
+                              className={`h-8 font-mono text-xs ${nameInvalid ? "border-red-400" : ""}`}
+                              autoComplete="off"
+                            />
+                            <p className={`text-[11px] ${nameInvalid ? "text-red-600" : "text-slate-500"}`}>
+                              {nameInvalid
+                                ? "Lowercase letters, numbers, and underscores only."
+                                : "Change this if Meta already has a template with this name."}
+                            </p>
+                          </div>
+                        )}
                       </div>
-                    </label>
+                    </div>
                   )
                 })}
               </div>
