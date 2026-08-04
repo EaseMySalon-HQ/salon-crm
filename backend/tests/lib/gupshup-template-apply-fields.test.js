@@ -1,7 +1,5 @@
 'use strict';
 
-const { describe, it } = require('node:test');
-const assert = require('node:assert/strict');
 const {
   buildGupshupApplyFields,
   buildUrlButtonPayload,
@@ -11,8 +9,8 @@ const {
 
 describe('gupshup-template-apply-fields', () => {
   it('detects dynamic URL placeholders', () => {
-    assert.equal(hasDynamicUrlPlaceholders('https://example.com/{{1}}'), true);
-    assert.equal(hasDynamicUrlPlaceholders('https://example.com/static'), false);
+    expect(hasDynamicUrlPlaceholders('https://example.com/{{1}}')).toBe(true);
+    expect(hasDynamicUrlPlaceholders('https://example.com/static')).toBe(false);
   });
 
   it('includes example array on dynamic URL buttons for Gupshup submit', () => {
@@ -22,7 +20,7 @@ describe('gupshup-template-apply-fields', () => {
       url: 'https://www.easemysalon.in/receipt/public/{{1}}',
       urlExample: 'https://www.easemysalon.in/receipt/public/INV-000001/abc123',
     });
-    assert.deepEqual(payload.example, [
+    expect(payload.example).toEqual([
       'https://www.easemysalon.in/receipt/public/INV-000001/abc123',
     ]);
   });
@@ -48,7 +46,7 @@ describe('gupshup-template-apply-fields', () => {
       },
     });
     const buttons = JSON.parse(fields.buttons);
-    assert.equal(buttons[0].example[0], 'https://www.easemysalon.in/receipt/public/INV-000001/abc123');
+    expect(buttons[0].example[0]).toBe('https://www.easemysalon.in/receipt/public/INV-000001/abc123');
   });
 
   it('normalizeGupshupTemplateRecord unwraps success envelope from GET template', () => {
@@ -60,9 +58,9 @@ describe('gupshup-template-apply-fields', () => {
         status: 'APPROVED',
       },
     });
-    assert.equal(normalized.status, 'APPROVED');
-    assert.equal(normalized.id, 'tpl-123');
-    assert.equal(normalized.elementName, 'ems_receipt');
+    expect(normalized.status).toBe('APPROVED');
+    expect(normalized.id).toBe('tpl-123');
+    expect(normalized.elementName).toBe('ems_receipt');
   });
 
   it('normalizeGupshupTemplateRecord keeps flat list item shape', () => {
@@ -71,7 +69,7 @@ describe('gupshup-template-apply-fields', () => {
       elementName: 'ems_receipt',
       status: 'PENDING',
     });
-    assert.equal(normalized.status, 'PENDING');
-    assert.equal(normalized.id, 'tpl-456');
+    expect(normalized.status).toBe('PENDING');
+    expect(normalized.id).toBe('tpl-456');
   });
 });
