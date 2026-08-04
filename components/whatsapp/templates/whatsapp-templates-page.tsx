@@ -53,6 +53,12 @@ import {
   Receipt,
 } from "lucide-react"
 import { format } from "date-fns"
+import {
+  type DynamicUrlButton,
+  missingDynamicUrlExamples,
+  suggestUrlExample,
+  urlExamplesPayload,
+} from "@/lib/whatsapp-template-url-buttons"
 
 const NOTIFICATION_SLOT_LABELS: Record<string, string> = {
   appointmentConfirmation: "Appointment confirmation",
@@ -105,6 +111,7 @@ type LibraryEntry = {
   category: string
   language: string
   content: string
+  dynamicUrlButtons?: DynamicUrlButton[]
   localTemplateId?: string | null
   localStatus?: string | null
   mappedSlotKey?: string | null
@@ -135,9 +142,19 @@ const STATUS_LOOK: Record<string, { label: string; cls: string; icon: any }> = {
 /** Meta elementName rules, mirrored from the backend schema. */
 const TEMPLATE_NAME_PATTERN = /^[a-z0-9_]+$/
 
+function isValidSampleUrl(url: string): boolean {
+  try {
+    const u = new URL(url.trim())
+    return u.protocol === "http:" || u.protocol === "https:"
+  } catch {
+    return false
+  }
+}
+
 function submitFailureTitle(code?: string) {
   if (code === "WHATSAPP_APP_NOT_CONNECTED") return "WhatsApp not connected"
   if (code === "GUPSHUP_SUBMIT_RETRYABLE") return "Try again in a minute"
+  if (code === "TEMPLATE_URL_EXAMPLE_REQUIRED") return "Sample URL required"
   return "Submission failed"
 }
 
@@ -201,12 +218,22 @@ export function WhatsAppTemplatesPage() {
   const [selectedPlatformIds, setSelectedPlatformIds] = useState<string[]>([])
   /** Per-template name overrides in the Add dialog, keyed by platform template id. */
   const [addNameOverrides, setAddNameOverrides] = useState<Record<string, string>>({})
+  /** platformTemplateId → buttonIndex → sample URL */
+  const [addUrlExampleOverrides, setAddUrlExampleOverrides] = useState<
+    Record<string, Record<number, string>>
+  >({})
   const [renameDialog, setRenameDialog] = useState<{
     templateId: string
     currentName: string
     suggestedName: string
   } | null>(null)
   const [renameValue, setRenameValue] = useState("")
+  const [urlExampleDialog, setUrlExampleDialog] = useState<{
+    templateId: string
+    templateName: string
+    buttons: DynamicUrlButton[]
+    values: Record<number, string>
+  } | null>(null)
 
   function openRenameDialog(payload: {
     templateId: string
@@ -275,13 +302,39 @@ export function WhatsAppTemplatesPage() {
     reloadLibraries()
   }, [statusFilter])
 
-  const handleSubmit = async (id: string, opts?: { name?: string }) => {
+  const handleSubmit = async (
+    id: string,
+    opts?: { name?: string; urlExamples?: Record<string, string> }
+  ) => {
+    if (!opts?.urlExamples) {
+      const tpl = items.find((t) => t._id === id)
+      const missing = missingDynamicUrlExamples(tpl?.components)
+      if (missing.length) {
+        setUrlExampleDialog({
+          templateId: id,
+          templateName: tpl?.name || "",
+          buttons: missing,
+          values: Object.fromEntries(
+            missing.map((b) => [
+              b.index,
+              b.urlExample?.trim() || b.suggestedExample || suggestUrlExample(b.url),
+            ])
+          ),
+        })
+        return
+      }
+    }
+
     setBusy(`submit-${id}`)
     try {
-      const res = await WhatsAppTemplatesAPI.submit(id, opts?.name ? { name: opts.name } : undefined)
+      const res = await WhatsAppTemplatesAPI.submit(id, {
+        ...(opts?.name ? { name: opts.name } : {}),
+        ...(opts?.urlExamples ? { urlExamples: opts.urlExamples } : {}),
+      })
       if (res.success) {
         const status = res.data?.status
         setRenameDialog(null)
+        setUrlExampleDialog(null)
         toast({
           title: status === "approved" ? "Template approved" : "Submitted to Meta",
           description:
@@ -299,6 +352,22 @@ export function WhatsAppTemplatesPage() {
             currentName: res.data?.name || renameDialog?.currentName || "",
             suggestedName: res.suggestedName || `${res.data?.name || "template"}_v2`,
           })
+        }
+        if (res.code === "TEMPLATE_URL_EXAMPLE_REQUIRED") {
+          const missing = (res as { missing?: DynamicUrlButton[] }).missing
+          if (Array.isArray(missing) && missing.length) {
+            setUrlExampleDialog({
+              templateId: id,
+              templateName: res.data?.name || items.find((t) => t._id === id)?.name || "",
+              buttons: missing,
+              values: Object.fromEntries(
+                missing.map((b) => [
+                  b.index,
+                  b.suggestedExample || suggestUrlExample(b.url),
+                ])
+              ),
+            })
+          }
         }
         toast({
           title: submitFailureTitle(res.code),
@@ -343,6 +412,24 @@ export function WhatsAppTemplatesPage() {
       return
     }
     await handleSubmit(renameDialog.templateId, { name: next })
+  }
+
+  const handleUrlExampleSubmit = async () => {
+    if (!urlExampleDialog) return
+    for (const btn of urlExampleDialog.buttons) {
+      const ex = String(urlExampleDialog.values[btn.index] || "").trim()
+      if (!isValidSampleUrl(ex)) {
+        toast({
+          title: "Invalid sample URL",
+          description: `Enter a full https:// URL for the "${btn.text || "URL"}" button.`,
+          variant: "destructive",
+        })
+        return
+      }
+    }
+    await handleSubmit(urlExampleDialog.templateId, {
+      urlExamples: urlExamplesPayload(urlExampleDialog.values),
+    })
   }
 
   const handleSync = async (id: string) => {
@@ -454,6 +541,7 @@ export function WhatsAppTemplatesPage() {
     setAddDialogScope(scope)
     setSelectedPlatformIds([])
     setAddNameOverrides({})
+    setAddUrlExampleOverrides({})
     setAddDialogOpen(true)
     setAvailableLoading(true)
     try {
@@ -482,6 +570,20 @@ export function WhatsAppTemplatesPage() {
     setAddNameOverrides((prev) => ({ ...prev, [platformTemplateId]: value.toLowerCase() }))
   }
 
+  const addDialogUrlExampleFor = (entry: LibraryEntry, buttonIndex: number) => {
+    const override = addUrlExampleOverrides[entry.platformTemplateId]?.[buttonIndex]
+    if (override !== undefined) return override
+    const btn = entry.dynamicUrlButtons?.find((b) => b.index === buttonIndex)
+    return btn?.urlExample?.trim() || btn?.suggestedExample || suggestUrlExample(btn?.url || "")
+  }
+
+  const setAddDialogUrlExample = (platformTemplateId: string, buttonIndex: number, value: string) => {
+    setAddUrlExampleOverrides((prev) => ({
+      ...prev,
+      [platformTemplateId]: { ...(prev[platformTemplateId] || {}), [buttonIndex]: value },
+    }))
+  }
+
   const handleAddSelectedTemplates = async () => {
     if (!selectedPlatformIds.length) {
       toast({ title: "Select templates", description: "Choose at least one template to add.", variant: "destructive" })
@@ -489,6 +591,7 @@ export function WhatsAppTemplatesPage() {
     }
 
     const names: Record<string, string> = {}
+    const urlExamples: Record<string, Record<string, string>> = {}
     const seen = new Map<string, string>()
     for (const id of selectedPlatformIds) {
       const entry = availableTemplates.find((e) => e.platformTemplateId === id)
@@ -512,11 +615,32 @@ export function WhatsAppTemplatesPage() {
       }
       seen.set(name, id)
       if (name !== entry.elementName) names[id] = name
+
+      if (entry.dynamicUrlButtons?.length) {
+        const perBtn: Record<string, string> = {}
+        for (const btn of entry.dynamicUrlButtons) {
+          const ex = addDialogUrlExampleFor(entry, btn.index).trim()
+          if (!isValidSampleUrl(ex)) {
+            toast({
+              title: "Sample URL required",
+              description: `"${entry.elementName}" — enter a full https:// sample URL for the "${btn.text || "URL"}" button.`,
+              variant: "destructive",
+            })
+            return
+          }
+          perBtn[String(btn.index)] = ex
+        }
+        urlExamples[id] = perBtn
+      }
     }
 
     setBusy(`add-selected-${addDialogScope}`)
     try {
-      const res = await WhatsAppTemplatesAPI.importLibraryBatch(selectedPlatformIds, names)
+      const res = await WhatsAppTemplatesAPI.importLibraryBatch(
+        selectedPlatformIds,
+        names,
+        urlExamples
+      )
       if (res.success) {
         toast({
           title: "Templates added",
@@ -525,6 +649,7 @@ export function WhatsAppTemplatesPage() {
         setAddDialogOpen(false)
         setSelectedPlatformIds([])
         setAddNameOverrides({})
+        setAddUrlExampleOverrides({})
         await Promise.all([refresh(), reloadLibraries()])
       } else {
         toast({ title: "Add failed", description: String(res.error || ""), variant: "destructive" })
@@ -1199,6 +1324,40 @@ export function WhatsAppTemplatesPage() {
                             </p>
                           </div>
                         )}
+                        {checked && (entry.dynamicUrlButtons?.length ?? 0) > 0 && (
+                          <div className="mt-3 space-y-3 rounded-md border border-amber-100 bg-amber-50/50 p-2">
+                            <p className="text-[11px] text-amber-900">
+                              This template has URL buttons with variables. Meta requires a sample URL for each.
+                            </p>
+                            {entry.dynamicUrlButtons!.map((btn) => {
+                              const sample = addDialogUrlExampleFor(entry, btn.index)
+                              const sampleInvalid = sample.trim() !== "" && !isValidSampleUrl(sample)
+                              return (
+                                <div key={`${entry.platformTemplateId}-btn-${btn.index}`} className="space-y-1">
+                                  <Label className="text-xs text-slate-600">
+                                    Sample URL — {btn.text || "URL button"}
+                                  </Label>
+                                  <Input
+                                    value={sample}
+                                    onChange={(e) =>
+                                      setAddDialogUrlExample(entry.platformTemplateId, btn.index, e.target.value)
+                                    }
+                                    className={`h-8 font-mono text-xs ${sampleInvalid ? "border-red-400" : ""}`}
+                                    placeholder={btn.suggestedExample || suggestUrlExample(btn.url)}
+                                    autoComplete="off"
+                                  />
+                                  <p className="text-[11px] text-slate-500 font-mono break-all">{btn.url}</p>
+                                  <p className="text-[11px] text-slate-500">
+                                    Example:{" "}
+                                    <span className="font-mono">
+                                      {btn.suggestedExample || suggestUrlExample(btn.url)}
+                                    </span>
+                                  </p>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
                       </div>
                     </div>
                   )
@@ -1231,6 +1390,71 @@ export function WhatsAppTemplatesPage() {
                 Add {selectedPlatformIds.length ? `(${selectedPlatformIds.length})` : ""}
               </Button>
             </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!urlExampleDialog} onOpenChange={(open) => !open && setUrlExampleDialog(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Sample URLs for Meta approval</DialogTitle>
+            <DialogDescription>
+              Dynamic URL buttons need a full example URL with variables filled in. Meta will reject
+              the template without these.
+            </DialogDescription>
+          </DialogHeader>
+          {urlExampleDialog && (
+            <div className="space-y-4 py-2">
+              <div className="text-sm text-slate-600">
+                Template:{" "}
+                <code className="text-xs bg-slate-100 px-1 rounded">{urlExampleDialog.templateName}</code>
+              </div>
+              {urlExampleDialog.buttons.map((btn) => (
+                <div key={btn.index} className="space-y-1">
+                  <Label htmlFor={`submit-url-ex-${btn.index}`}>
+                    Sample URL — {btn.text || "URL button"}
+                  </Label>
+                  <Input
+                    id={`submit-url-ex-${btn.index}`}
+                    value={urlExampleDialog.values[btn.index] || ""}
+                    onChange={(e) =>
+                      setUrlExampleDialog((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              values: { ...prev.values, [btn.index]: e.target.value },
+                            }
+                          : prev
+                      )
+                    }
+                    placeholder={btn.suggestedExample || suggestUrlExample(btn.url)}
+                    autoComplete="off"
+                  />
+                  <p className="text-xs text-slate-500 font-mono break-all">{btn.url}</p>
+                  <p className="text-xs text-muted-foreground">
+                    Example:{" "}
+                    <span className="font-mono">
+                      {btn.suggestedExample || suggestUrlExample(btn.url)}
+                    </span>
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setUrlExampleDialog(null)}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-emerald-600 hover:bg-emerald-700"
+              disabled={!urlExampleDialog || busy === `submit-${urlExampleDialog.templateId}`}
+              onClick={handleUrlExampleSubmit}
+            >
+              {urlExampleDialog && busy === `submit-${urlExampleDialog.templateId}` ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-1" />
+              ) : null}
+              Save &amp; submit
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

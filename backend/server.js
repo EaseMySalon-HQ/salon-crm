@@ -165,6 +165,27 @@ require('dotenv').config();
 /** Fail fast in production if JWT_SECRET missing */
 const { JWT_SECRET } = require('./config/jwt');
 
+/**
+ * Fail fast in production if WHATSAPP_TOKEN_ENC_KEY is missing or malformed — the key
+ * is otherwise only touched lazily on the first encrypt/decrypt, which would surface
+ * as a runtime error mid-request instead of a clear boot failure. In development we
+ * only warn so local work without WhatsApp configured still starts.
+ */
+(() => {
+  const isProd = process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'prod';
+  try {
+    require('./lib/crypto').assertKeyLoaded();
+  } catch (err) {
+    if (isProd) {
+      logger.error('[SECURITY] FATAL: WHATSAPP_TOKEN_ENC_KEY invalid or missing:', err.message);
+      throw err;
+    }
+    logger.warn(
+      '[SECURITY] WHATSAPP_TOKEN_ENC_KEY not configured — WhatsApp token encryption will fail if used. Set it in .env.'
+    );
+  }
+})();
+
 const cookieParser = require('cookie-parser');
 const {
   configureTrustProxy,
@@ -179,6 +200,7 @@ const {
 } = require('./middleware/rate-limit');
 const { apiV1AliasMiddleware } = require('./middleware/api-v1-alias');
 const { perfLogMiddleware, markCache } = require('./middleware/perf-log');
+const { startPoolMonitor, stopPoolMonitor } = require('./utils/pool-monitor');
 const {
   getDashboardCacheEntry,
   setDashboardCache,
@@ -200,6 +222,12 @@ dbPromise
   .catch((error) => {
     logger.error('Failed to initialize admin access defaults:', error);
   });
+
+// Watch every open MongoDB pool (main + per-tenant) for queued/exhausted requests.
+// Production-only; no-op elsewhere.
+dbPromise
+  .then(() => startPoolMonitor(() => databaseManager.getConnectionEntries()))
+  .catch(() => {});
 
 // Warm the plan-template cache so the first entitlement checks use the
 // admin-editable DB plans rather than the static config fallback.
@@ -249,6 +277,40 @@ const allowedOrigins = expandAllowedOrigins(rawCorsOrigins);
 logger.info('Environment: %s, CORS Origins: %s, MongoDB URI: %s, JWT Secret: %s',
   process.env.NODE_ENV || 'development', allowedOrigins,
   process.env.MONGODB_URI ? 'Set' : 'Not set', process.env.JWT_SECRET ? 'Set' : 'Not set');
+
+/**
+ * Boot-time secret checklist. Logs only configured/missing per secret — never the
+ * value itself — so a redeploy makes it obvious when an env var was dropped.
+ */
+(() => {
+  const SECRET_ENV_VARS = [
+    'JWT_SECRET',
+    'WHATSAPP_TOKEN_ENC_KEY',
+    'MONGODB_URI',
+    'GUPSHUP_CLIENT_SECRET',
+    'GUPSHUP_WEBHOOK_SECRET',
+    'EMAIL_API_KEY',
+    'MSG91_SMS_AUTH_KEY',
+    'REDIS_PASSWORD',
+    'GOOGLE_CLIENT_SECRET',
+    'RAZORPAY_KEY_SECRET',
+    'RAZORPAY_WEBHOOK_SECRET',
+    'STRIPE_SECRET_KEY',
+    'STRIPE_WEBHOOK_SECRET',
+    'ZOHO_CLIENT_SECRET',
+    'ZOHO_REFRESH_TOKEN',
+    'OPENAI_API_KEY',
+    'ANTHROPIC_API_KEY',
+    'GMB_OAUTH_STATE_SECRET',
+    'RATE_LIMIT_SKIP_SECRET',
+  ];
+  const summary = {};
+  for (const name of SECRET_ENV_VARS) {
+    const raw = process.env[name];
+    summary[name] = raw != null && String(raw).trim() !== '' ? 'configured' : 'missing';
+  }
+  logger.info('[secrets] boot config audit', summary);
+})();
 
 const tenantCorsOptions = {
   origin(origin, callback) {
@@ -18989,6 +19051,12 @@ registerGracefulShutdown(server, [
   { name: 'rate-limit-redis', close: shutdownRateLimitInfrastructure },
   { name: 'shared-redis', close: closeRedis },
   { name: 'whatsapp-campaign-queue', close: closeCampaignQueue },
+  {
+    name: 'db-pool-monitor',
+    close: () => {
+      stopPoolMonitor();
+    },
+  },
   {
     name: 'tenant-database-connections',
     close: () => databaseManager.closeAllConnections(),

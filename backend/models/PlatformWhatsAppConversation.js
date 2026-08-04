@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 
 const platformWhatsAppConversationSchema = new mongoose.Schema(
   {
-    recipientPhone: { type: String, required: true, index: true },
+    recipientPhone: { type: String, required: true },
     platformLeadId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'PlatformLead',

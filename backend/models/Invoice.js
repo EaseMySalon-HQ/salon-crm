@@ -74,7 +74,7 @@ const invoiceSchema = new mongoose.Schema(
       index: true,
     },
 
-    invoiceDate: { type: Date, required: true, index: true },
+    invoiceDate: { type: Date, required: true },
 
     // Derived on write — kept as plain strings so indexed range queries and
     // "filter by period" dropdowns are trivial. Format: "2025-26", "2026-03".

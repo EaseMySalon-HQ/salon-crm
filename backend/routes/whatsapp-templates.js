@@ -47,11 +47,37 @@ const {
 const {
   buildGupshupApplyFields,
   extractTemplateList,
+  hasDynamicUrlPlaceholders,
   remoteElementName,
   remoteTemplateId,
   remoteTemplateStatus,
   normalizeGupshupTemplateRecord,
 } = require('../lib/gupshup-template-apply-fields');
+const {
+  suggestUrlExample,
+  missingDynamicUrlExamples,
+  applyButtonUrlExamples,
+} = require('../lib/whatsapp-template-url-buttons');
+
+function dynamicUrlButtonsForApi(components) {
+  const buttons = components?.buttons;
+  if (!Array.isArray(buttons)) return [];
+  const out = [];
+  for (let index = 0; index < buttons.length; index += 1) {
+    const btn = buttons[index];
+    if (btn?.type !== 'URL') continue;
+    const url = String(btn.url || '');
+    if (!hasDynamicUrlPlaceholders(url)) continue;
+    out.push({
+      index,
+      text: btn.text || '',
+      url,
+      urlExample: btn.urlExample || null,
+      suggestedExample: suggestUrlExample(url),
+    });
+  }
+  return out;
+}
 const {
   PLATFORM_TEMPLATE_CATALOG,
   NOTIFICATION_SLOT_KEYS,
@@ -153,6 +179,7 @@ function sanitizeComponentsForPersist(components) {
         text: btn.text ?? '',
         url: btn.url ?? null,
         phone: btn.phone ?? null,
+        urlExample: btn.urlExample ?? null,
       }))
     : [];
 
@@ -260,6 +287,7 @@ function availableCatalogItem(platformTpl) {
     language: platformTpl.language,
     content: platformTpl.components?.body?.text || '',
     platformStatus: 'approved',
+    dynamicUrlButtons: dynamicUrlButtonsForApi(platformTpl.components),
   };
 }
 
@@ -516,7 +544,7 @@ function componentsForElementName(elementName, localTemplates, platformTemplates
   return catalogEntryToApplyPayload(catalogEntry).components;
 }
 
-async function importPlatformTemplateToBusiness(businessId, platformTpl, createdBy, { name } = {}) {
+async function importPlatformTemplateToBusiness(businessId, platformTpl, createdBy, { name, urlExamples } = {}) {
   const Template = await getModel();
   // Tenants may rename on import; Meta refuses an elementName already used on
   // their WABA, so the local copy is not tied to the platform catalog name.
@@ -546,13 +574,16 @@ async function importPlatformTemplateToBusiness(businessId, platformTpl, created
     }
   }
 
+  const components = sanitizeComponentsForPersist(platformTpl.components);
+  applyButtonUrlExamples(components, urlExamples);
+
   const doc = await Template.create({
     businessId,
     name: templateName,
     language: platformTpl.language,
     category: platformTpl.category,
     slotKey: platformTpl.slotKey || null,
-    components: sanitizeComponentsForPersist(platformTpl.components),
+    components,
     status: 'draft',
     sourcePlatformTemplateId: String(platformTpl._id),
     createdBy: normalizeOptionalObjectId(createdBy),
@@ -977,6 +1008,7 @@ router.post('/library/import-batch', authenticateToken, requireManager, setupMai
       return res.status(400).json({ success: false, error: 'platformTemplateIds array is required' });
     }
     const requestedNames = parsed.data.names || {};
+    const requestedUrlExamples = parsed.data.urlExamples || {};
 
     const duplicateName = firstDuplicateRequestedName(ids, requestedNames);
     if (duplicateName) {
@@ -995,6 +1027,26 @@ router.post('/library/import-batch', authenticateToken, requireManager, setupMai
     }).lean();
     const byId = new Map(platformRows.map((p) => [String(p._id), p]));
 
+    for (const id of ids) {
+      const platformTpl = byId.get(id);
+      if (!platformTpl) continue;
+      const needed = missingDynamicUrlExamples(sanitizeComponentsForPersist(platformTpl.components));
+      if (!needed.length) continue;
+      const provided = requestedUrlExamples[id] || {};
+      for (const m of needed) {
+        const ex = String(provided[String(m.index)] || '').trim();
+        if (!ex) {
+          return res.status(400).json({
+            success: false,
+            code: 'TEMPLATE_URL_EXAMPLE_REQUIRED',
+            error: `Template "${platformTpl.name}" has dynamic URL buttons that need a sample URL before import.`,
+            platformTemplateId: id,
+            missing: needed,
+          });
+        }
+      }
+    }
+
     const imported = [];
     const skipped = [];
     for (const id of ids) {
@@ -1004,11 +1056,12 @@ router.post('/library/import-batch', authenticateToken, requireManager, setupMai
         continue;
       }
       const name = requestedNames[id];
+      const urlExamples = requestedUrlExamples[id];
       const result = await importPlatformTemplateToBusiness(
         businessId,
         platformTpl,
         req.user._id || req.user.id,
-        { name }
+        { name, urlExamples }
       );
       if (result.imported) {
         imported.push(String(result.template._id));
@@ -1466,6 +1519,35 @@ router.post('/:id/submit', authenticateToken, requireManager, setupMainDatabase,
     );
     if (renameErr) {
       return res.status(409).json({ success: false, error: renameErr, code: 'TEMPLATE_NAME_CONFLICT' });
+    }
+
+    if (parsedBody.data.urlExamples) {
+      const prior =
+        tpl.components && typeof tpl.components.toObject === 'function'
+          ? tpl.components.toObject()
+          : tpl.components && typeof tpl.components === 'object'
+            ? { ...tpl.components }
+            : {};
+      applyButtonUrlExamples(prior, parsedBody.data.urlExamples);
+      tpl.components = sanitizeComponentsForPersist(prior);
+      await tpl.save();
+    }
+
+    const submitMissingExamples = missingDynamicUrlExamples(
+      sanitizeComponentsForPersist(
+        tpl.components && typeof tpl.components.toObject === 'function'
+          ? tpl.components.toObject()
+          : tpl.components
+      )
+    );
+    if (submitMissingExamples.length) {
+      return res.status(400).json({
+        success: false,
+        code: 'TEMPLATE_URL_EXAMPLE_REQUIRED',
+        error: 'Dynamic URL buttons need a sample URL before submit.',
+        missing: submitMissingExamples,
+        data: tpl,
+      });
     }
 
     const tenantApp = await resolveTenantGupshupApp(businessId);

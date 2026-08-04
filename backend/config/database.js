@@ -34,15 +34,18 @@ const connectDB = async () => {
   const uri = buildMainDbUri();
   const maxRetries = 3;
   const retryDelayMs = 5000;
-  const serverSelectionTimeoutMs = 60000; // 60s for Railway cold start
+  // A generous server-selection window is only justified on the very first attempt
+  // (Railway/Atlas cold start). Later attempts fall back to the pool default (10s)
+  // so a real outage fails fast instead of hanging for a full minute each retry.
+  const coldStartServerSelectionMs = 60000;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       logger.info(`🔄 MongoDB connection attempt ${attempt}/${maxRetries}...`);
       const conn = await mongoose.connect(uri, {
-        serverSelectionTimeoutMS: serverSelectionTimeoutMs,
         monitorCommands: true,
         ...databaseManager.getMainPoolOptions(),
+        ...(attempt === 1 ? { serverSelectionTimeoutMS: coldStartServerSelectionMs } : {}),
       });
       registerSlowQueryMonitoring(mongoose.connection);
       databaseManager.adoptDefaultMainConnection(conn.connection);

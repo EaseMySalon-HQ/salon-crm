@@ -4958,7 +4958,10 @@ export class WhatsAppTemplatesAPI {
     return response.data
   }
 
-  static async submit(id: string, body?: { name?: string }): Promise<ApiResponse<any>> {
+  static async submit(
+    id: string,
+    body?: { name?: string; urlExamples?: Record<string, string> }
+  ): Promise<ApiResponse<any>> {
     const response = await apiClient.post(`${WhatsAppTemplatesAPI.basePath}/${id}/submit`, body ?? {})
     return response.data
   }
@@ -5013,13 +5016,15 @@ export class WhatsAppTemplatesAPI {
   /** `names` optionally renames templates on import, keyed by platform template id. */
   static async importLibraryBatch(
     platformTemplateIds: string[],
-    names?: Record<string, string>
+    names?: Record<string, string>,
+    urlExamples?: Record<string, Record<string, string>>
   ): Promise<
     ApiResponse<{ imported: number; skipped: Array<{ id: string; reason: string; name?: string }>; templateIds: string[] }>
   > {
     const response = await apiClient.post(`${WhatsAppTemplatesAPI.basePath}/library/import-batch`, {
       platformTemplateIds,
       ...(names && Object.keys(names).length ? { names } : {}),
+      ...(urlExamples && Object.keys(urlExamples).length ? { urlExamples } : {}),
     })
     return response.data
   }
