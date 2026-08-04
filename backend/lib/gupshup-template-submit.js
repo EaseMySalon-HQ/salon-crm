@@ -20,6 +20,9 @@ function extractRemoteTemplateId(submissionData) {
 }
 
 function gupshupSubmissionErrorMessage(submission) {
+  if (submission?.status === 429) {
+    return 'Gupshup rate limit: max 10 template calls per minute per app. Wait 60 seconds, then submit again.';
+  }
   if (typeof submission?.error === 'string') return submission.error;
   if (submission?.error?.message) return submission.error.message;
   return 'Gupshup rejected the template submission';
@@ -29,6 +32,15 @@ function gupshupSubmissionErrorMessage(submission) {
 function isGupshupTemplateDuplicateError(message) {
   const text = String(message || '').toLowerCase();
   return text.includes('already exists') && text.includes('elementname');
+}
+
+/**
+ * Throttling / upstream outages are retryable — they must not flip a draft to
+ * "rejected", which would hide the template behind a rename prompt.
+ */
+function isGupshupTransientSubmitFailure(submission) {
+  const status = submission?.status;
+  return status === 408 || status === 429 || (typeof status === 'number' && status >= 500);
 }
 
 /**
@@ -54,5 +66,6 @@ module.exports = {
   extractRemoteTemplateId,
   gupshupSubmissionErrorMessage,
   isGupshupTemplateDuplicateError,
+  isGupshupTransientSubmitFailure,
   submitTemplateForGupshupApproval,
 };

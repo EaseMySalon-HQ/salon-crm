@@ -33,6 +33,7 @@ const { logEvent } = require('../lib/whatsapp-audit');
 const {
   whatsappTemplateBodySchema,
   whatsappTemplateUpdateBodySchema,
+  whatsappTemplateSubmitBodySchema,
   whatsappTemplateListQuerySchema,
   whatsappTemplateLibraryQuerySchema,
   whatsappTemplateHeaderMediaUploadSchema,
@@ -64,12 +65,20 @@ const {
   submitTemplateForGupshupApproval,
   gupshupSubmissionErrorMessage,
   isGupshupTemplateDuplicateError,
+  isGupshupTransientSubmitFailure,
 } = require('../lib/gupshup-template-submit');
 const { canTenantSubmitTemplate } = require('../lib/whatsapp-template-submit-eligibility');
 const {
   canDeleteTenantTemplateWithoutForce,
   isReplaceableTenantTemplateStatus,
 } = require('../lib/whatsapp-template-library-lifecycle');
+const {
+  suggestAlternateTemplateName,
+  findRemoteByNameLang,
+  clearStaleTenantTemplateIds,
+  duplicateSubmitAction,
+  remoteApprovalStatus,
+} = require('../lib/gupshup-template-tenant-submit-prep');
 
 /**
  * Zod v4 exposes `.issues` (v3 was `.errors`). Support both so bumping the
@@ -193,7 +202,9 @@ async function listTenantSelectedLibraryEntries(businessId, scope, { byName } = 
   if (category) localQuery.category = category;
 
   const locals = await Template.find(localQuery)
-    .select('name language status slotKey gupshupTemplateId category submittedAt sourcePlatformTemplateId')
+    .select(
+      'name language status slotKey gupshupTemplateId category submittedAt sourcePlatformTemplateId rejectionReason'
+    )
     .lean();
   if (!locals.length) return [];
 
@@ -649,6 +660,95 @@ async function reconcileTenantLibraryTemplates(businessId, approvedPlatform, rem
   return fixed;
 }
 
+function canEditTenantTemplate(tpl) {
+  if (tpl.status === 'draft' || tpl.status === 'rejected') return true;
+  if (tpl.status === 'pending' && tpl.sourcePlatformTemplateId) return true;
+  return false;
+}
+
+/** A never-submitted draft cannot collide with a stale remote id, so skip the list call. */
+function needsRemoteTemplatePreflight(tpl) {
+  return Boolean(tpl.gupshupTemplateId || tpl.metaTemplateId || tpl.submittedAt) || tpl.status !== 'draft';
+}
+
+async function applySubmitRenameIfRequested(Template, tpl, businessId, requestedName) {
+  const nextName = typeof requestedName === 'string' ? requestedName.trim() : '';
+  if (!nextName || nextName === tpl.name) return null;
+
+  const conflict = await Template.findOne({
+    businessId,
+    name: nextName,
+    language: tpl.language,
+    _id: { $ne: tpl._id },
+  });
+  if (conflict) {
+    return `Template name "${nextName}" already exists for this language`;
+  }
+
+  tpl.name = nextName;
+  tpl.gupshupTemplateId = null;
+  tpl.metaTemplateId = null;
+  tpl.metaTemplateName = nextName;
+  return null;
+}
+
+async function linkExistingTenantRemoteTemplate({ tpl, businessId, actorId, remote, appId }) {
+  applyRemoteToLocal(tpl, remote);
+  tpl.submittedAt = tpl.submittedAt || new Date();
+  tpl.rejectionReason = null;
+  tpl.lastSyncedAt = new Date();
+  await tpl.save();
+
+  const status = tpl.status;
+  await logEvent({
+    businessId,
+    actorType: 'user',
+    actorId,
+    event: 'template_submit',
+    summary: `Linked existing Gupshup template ${tpl.name}/${tpl.language} (${status})`,
+    metadata: {
+      templateId: String(tpl._id),
+      gupshupTemplateId: tpl.gupshupTemplateId,
+      status,
+      linkedExisting: true,
+    },
+  });
+
+  const message =
+    status === 'pending'
+      ? 'Template is already on your WhatsApp account and pending Meta review.'
+      : status === 'approved'
+        ? 'Template is already approved on your WhatsApp account.'
+        : 'Template already exists on your WhatsApp account — linked to the existing submission.';
+
+  return {
+    success: true,
+    data: tpl,
+    gupshup: { appId },
+    linkedExisting: true,
+    message,
+  };
+}
+
+async function duplicateNeedsRenameResponse(tpl, remote) {
+  const suggestedName = suggestAlternateTemplateName(tpl.name);
+  const reason =
+    remoteApprovalStatus(remote) === 'rejected'
+      ? 'Meta rejected this template name on your WhatsApp account. Choose a new name and submit again.'
+      : 'This template name is already registered on your WhatsApp account. Choose a new name and submit again.';
+
+  return {
+    status: 409,
+    body: {
+      success: false,
+      error: reason,
+      code: 'GUPSHUP_TEMPLATE_DUPLICATE_NEEDS_RENAME',
+      suggestedName,
+      data: tpl,
+    },
+  };
+}
+
 function isLibraryLinkedLocal(platformTpl, local) {
   if (!local?.sourcePlatformTemplateId) return false;
   return String(local.sourcePlatformTemplateId) === String(platformTpl._id);
@@ -679,6 +779,7 @@ function platformLibraryItem(platformTpl, localByName) {
           slotKey: local.slotKey || null,
           gupshupTemplateId: local.gupshupTemplateId || null,
           category: local.category,
+          rejectionReason: local.rejectionReason || null,
         }
       : null,
   };
@@ -738,7 +839,7 @@ router.get('/library', authenticateToken, setupMainDatabase, requireWabaAddon, a
 
     const existing = await Template.find({ businessId })
       .select(
-        'name language status slotKey gupshupTemplateId category submittedAt sourcePlatformTemplateId'
+        'name language status slotKey gupshupTemplateId category submittedAt sourcePlatformTemplateId rejectionReason'
       )
       .lean();
     const byName = new Map(existing.map((t) => [`${t.name}:${t.language}`, t]));
@@ -1145,7 +1246,7 @@ router.put('/:id', authenticateToken, requireManager, setupMainDatabase, require
     const Template = await getModel();
     const tpl = await Template.findOne({ _id: req.params.id, businessId });
     if (!tpl) return res.status(404).json({ success: false, error: 'Template not found' });
-    if (tpl.status !== 'draft' && tpl.status !== 'rejected') {
+    if (!canEditTenantTemplate(tpl)) {
       return res.status(400).json({
         success: false,
         error: `Templates in status "${tpl.status}" cannot be edited; create a new version.`,
@@ -1164,7 +1265,26 @@ router.put('/:id', authenticateToken, requireManager, setupMainDatabase, require
       });
     }
     const { name, language, category, components, variables, samples } = parsed.data;
-    if (name !== undefined) tpl.name = name;
+    if (name !== undefined) {
+      if (name !== tpl.name) {
+        const conflict = await Template.findOne({
+          businessId,
+          name,
+          language: language !== undefined ? language : tpl.language,
+          _id: { $ne: tpl._id },
+        });
+        if (conflict) {
+          return res.status(409).json({
+            success: false,
+            error: `Template name "${name}" already exists for this language`,
+          });
+        }
+        tpl.name = name;
+        tpl.gupshupTemplateId = null;
+        tpl.metaTemplateId = null;
+        tpl.metaTemplateName = name;
+      }
+    }
     if (language !== undefined) tpl.language = language;
     if (category !== undefined) tpl.category = category.toUpperCase();
     if (components !== undefined) {
@@ -1224,6 +1344,14 @@ router.delete('/:id', authenticateToken, requireManager, setupMainDatabase, requ
 
 router.post('/:id/submit', authenticateToken, requireManager, setupMainDatabase, requireWabaAddon, async (req, res) => {
   try {
+    const parsedBody = whatsappTemplateSubmitBodySchema.safeParse(req.body || {});
+    if (!parsedBody.success) {
+      return res.status(400).json({
+        success: false,
+        error: firstZodMessage(parsedBody.error, 'Invalid payload'),
+      });
+    }
+
     const businessId = await tenantBusinessObjectId(req, res);
     if (!businessId) return;
     const Template = await getModel();
@@ -1231,6 +1359,16 @@ router.post('/:id/submit', authenticateToken, requireManager, setupMainDatabase,
     if (!tpl) return res.status(404).json({ success: false, error: 'Template not found' });
     if (!canTenantSubmitTemplate(tpl)) {
       return res.status(400).json({ success: false, error: `Cannot submit a template in status "${tpl.status}"` });
+    }
+
+    const renameErr = await applySubmitRenameIfRequested(
+      Template,
+      tpl,
+      businessId,
+      parsedBody.data.name
+    );
+    if (renameErr) {
+      return res.status(409).json({ success: false, error: renameErr, code: 'TEMPLATE_NAME_CONFLICT' });
     }
 
     const tenantApp = await resolveTenantGupshupApp(businessId);
@@ -1258,6 +1396,60 @@ router.post('/:id/submit', authenticateToken, requireManager, setupMainDatabase,
       });
     }
 
+    let platformGupshupId = null;
+    if (tpl.sourcePlatformTemplateId) {
+      const PlatformTemplate = await getPlatformTemplateModel();
+      const platformTpl = await PlatformTemplate.findById(tpl.sourcePlatformTemplateId)
+        .select('gupshupTemplateId name language')
+        .lean();
+      platformGupshupId = platformTpl?.gupshupTemplateId ? String(platformTpl.gupshupTemplateId) : null;
+    }
+
+    // Pre-flight list costs one call against the 10/min/app template quota, so only
+    // run it when the local row may already point at a remote template. A clean
+    // draft goes straight to POST; Gupshup's duplicate error covers collisions.
+    if (needsRemoteTemplatePreflight(tpl)) {
+      const listResult = await gupshupWhatsApp.listTemplates({ appId: tenantApp.appId });
+      if (listResult.success) {
+        const remoteList = extractTemplateList(listResult.data);
+        const existingRemote = findRemoteByNameLang(remoteList, tpl.name, tpl.language);
+        clearStaleTenantTemplateIds(tpl, { remote: existingRemote, platformGupshupId });
+
+        const preSubmitAction = duplicateSubmitAction(existingRemote);
+        if (preSubmitAction === 'needs_rename') {
+          const resp = await duplicateNeedsRenameResponse(tpl, existingRemote);
+          return res.status(resp.status).json(resp.body);
+        }
+        if (preSubmitAction === 'link_existing' && existingRemote) {
+          const linked = await linkExistingTenantRemoteTemplate({
+            tpl,
+            businessId,
+            actorId: req.user._id,
+            remote: existingRemote,
+            appId: tenantApp.appId,
+          });
+          return res.json({
+            ...linked,
+            gupshup: {
+              appId: tenantApp.appId,
+              sourceNumber: tenantApp.sourceNumber,
+              appName: tenantApp.appName,
+            },
+          });
+        }
+      } else {
+        // Could not read the tenant WABA — never treat that as "template absent",
+        // otherwise we would wipe a valid remote id.
+        logger.warn(
+          '[whatsapp-templates] pre-submit list failed appId=%s template=%s/%s error=%j',
+          tenantApp.appId,
+          tpl.name,
+          tpl.language,
+          listResult.error
+        );
+      }
+    }
+
     const {
       partnerApiPath,
       submission,
@@ -1280,9 +1472,28 @@ router.post('/:id/submit', authenticateToken, requireManager, setupMainDatabase,
     };
     if (!submission.success) {
       const errMsg = submitErrMsg || gupshupSubmissionErrorMessage(submission);
+      logger.error(
+        '[whatsapp-templates] Gupshup submit rejected appId=%s template=%s/%s status=%s error=%j',
+        tenantApp.appId,
+        tpl.name,
+        tpl.language,
+        submission.status || 'n/a',
+        submission.error
+      );
 
-      // Name already registered on this WABA (common after app switch or a prior
-      // submit) — link the existing remote row instead of failing outright.
+      if (isGupshupTransientSubmitFailure(submission)) {
+        tpl.rejectionReason = errMsg;
+        tpl.lastSyncedAt = new Date();
+        await tpl.save();
+        return res.status(503).json({
+          success: false,
+          error: errMsg,
+          code: 'GUPSHUP_SUBMIT_RETRYABLE',
+          data: tpl,
+          gupshup: gupshupMeta,
+        });
+      }
+
       if (isGupshupTemplateDuplicateError(errMsg)) {
         const existing = await resolveTenantTemplateRemote({
           appId: tenantApp.appId,
@@ -1291,34 +1502,22 @@ router.post('/:id/submit', authenticateToken, requireManager, setupMainDatabase,
           language: tpl.language,
         });
         if (existing.success) {
-          applyRemoteToLocal(tpl, existing.data);
-          tpl.submittedAt = tpl.submittedAt || new Date();
-          tpl.rejectionReason = null;
-          await tpl.save();
-
-          await logEvent({
+          const action = duplicateSubmitAction(existing.data);
+          if (action === 'needs_rename') {
+            const resp = await duplicateNeedsRenameResponse(tpl, existing.data);
+            return res.status(resp.status).json(resp.body);
+          }
+          const linked = await linkExistingTenantRemoteTemplate({
+            tpl,
             businessId,
-            actorType: 'user',
             actorId: req.user._id,
-            event: 'template_submit',
-            summary: `Linked existing Gupshup template ${tpl.name}/${tpl.language} (${tpl.status})`,
-            metadata: {
-              templateId: String(tpl._id),
-              gupshupTemplateId: tpl.gupshupTemplateId,
-              status: tpl.status,
-              linkedExisting: true,
-            },
+            remote: existing.data,
+            appId: tenantApp.appId,
           });
-
-          return res.json({
-            success: true,
-            data: tpl,
-            gupshup: gupshupMeta,
-            linkedExisting: true,
-            message:
-              'Template already exists on your WhatsApp account — linked to the existing submission.',
-          });
+          return res.json({ ...linked, gupshup: gupshupMeta });
         }
+        const resp = await duplicateNeedsRenameResponse(tpl, null);
+        return res.status(resp.status).json(resp.body);
       }
 
       tpl.status = 'rejected';

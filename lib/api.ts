@@ -452,6 +452,10 @@ export interface ApiResponse<T = any> {
   data: T
   message?: string
   error?: string
+  /** Machine-readable error/success code from the API (e.g. GUPSHUP_TEMPLATE_DUPLICATE_NEEDS_RENAME). */
+  code?: string
+  /** Suggested alternate template name when Meta rejects duplicate elementName. */
+  suggestedName?: string
   /** GET /sales and other list endpoints may include timing/pagination hints */
   meta?: {
     durationMs?: number
@@ -4954,8 +4958,8 @@ export class WhatsAppTemplatesAPI {
     return response.data
   }
 
-  static async submit(id: string): Promise<ApiResponse<any>> {
-    const response = await apiClient.post(`${WhatsAppTemplatesAPI.basePath}/${id}/submit`)
+  static async submit(id: string, body?: { name?: string }): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`${WhatsAppTemplatesAPI.basePath}/${id}/submit`, body ?? {})
     return response.data
   }
 

@@ -531,6 +531,19 @@ const whatsappTemplateBodySchema = z
 
 const whatsappTemplateUpdateBodySchema = whatsappTemplateBodySchema.partial();
 
+const whatsappTemplateSubmitBodySchema = z
+  .object({
+    /** Optional rename before submit (Meta rejects duplicate elementName on resubmit). */
+    name: z
+      .string()
+      .trim()
+      .min(1)
+      .max(512)
+      .regex(/^[a-z0-9_]+$/, 'name must be lowercase snake_case (a-z, 0-9, _)')
+      .optional(),
+  })
+  .strict();
+
 const whatsappTemplateListQuerySchema = z
   .object({
     status: z.string().optional(),
@@ -687,6 +700,7 @@ module.exports = {
   gstStatusBodySchema,
   whatsappTemplateBodySchema,
   whatsappTemplateUpdateBodySchema,
+  whatsappTemplateSubmitBodySchema,
   whatsappTemplateListQuerySchema,
   whatsappTemplateLibraryQuerySchema,
   whatsappTemplateHeaderMediaUploadSchema,

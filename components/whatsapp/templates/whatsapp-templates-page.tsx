@@ -115,6 +115,7 @@ type LibraryEntry = {
     slotKey?: string | null
     gupshupTemplateId?: string | null
     category?: string
+    rejectionReason?: string | null
   } | null
 }
 
@@ -129,6 +130,12 @@ const STATUS_LOOK: Record<string, { label: string; cls: string; icon: any }> = {
   paused: { label: "Paused", cls: "bg-amber-100 text-amber-700", icon: AlertCircle },
   flagged: { label: "Flagged", cls: "bg-red-100 text-red-700", icon: AlertCircle },
   disabled: { label: "Disabled", cls: "bg-slate-100 text-slate-600", icon: XCircle },
+}
+
+function submitFailureTitle(code?: string) {
+  if (code === "WHATSAPP_APP_NOT_CONNECTED") return "WhatsApp not connected"
+  if (code === "GUPSHUP_SUBMIT_RETRYABLE") return "Try again in a minute"
+  return "Submission failed"
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -189,6 +196,21 @@ export function WhatsAppTemplatesPage() {
   const [availableTemplates, setAvailableTemplates] = useState<LibraryEntry[]>([])
   const [availableLoading, setAvailableLoading] = useState(false)
   const [selectedPlatformIds, setSelectedPlatformIds] = useState<string[]>([])
+  const [renameDialog, setRenameDialog] = useState<{
+    templateId: string
+    currentName: string
+    suggestedName: string
+  } | null>(null)
+  const [renameValue, setRenameValue] = useState("")
+
+  function openRenameDialog(payload: {
+    templateId: string
+    currentName: string
+    suggestedName: string
+  }) {
+    setRenameDialog(payload)
+    setRenameValue(payload.suggestedName)
+  }
 
   async function loadMeta() {
     try {
@@ -248,30 +270,37 @@ export function WhatsAppTemplatesPage() {
     reloadLibraries()
   }, [statusFilter])
 
-  const handleSubmit = async (id: string) => {
+  const handleSubmit = async (id: string, opts?: { name?: string }) => {
     setBusy(`submit-${id}`)
     try {
-      const res = await WhatsAppTemplatesAPI.submit(id)
+      const res = await WhatsAppTemplatesAPI.submit(id, opts?.name ? { name: opts.name } : undefined)
       if (res.success) {
         const status = res.data?.status
+        setRenameDialog(null)
         toast({
           title: status === "approved" ? "Template approved" : "Submitted to Meta",
           description:
-            status === "approved"
+            res.message ||
+            (status === "approved"
               ? "This template is ready to use."
-              : "Status will update once Meta reviews the template.",
+              : "Status will update once Meta reviews the template."),
         })
-        refresh()
-        reloadLibraries()
+        await Promise.all([refresh(), reloadLibraries()])
       } else {
         const err = typeof res.error === "string" ? res.error : JSON.stringify(res.error)
+        if (res.code === "GUPSHUP_TEMPLATE_DUPLICATE_NEEDS_RENAME") {
+          openRenameDialog({
+            templateId: id,
+            currentName: res.data?.name || renameDialog?.currentName || "",
+            suggestedName: res.suggestedName || `${res.data?.name || "template"}_v2`,
+          })
+        }
         toast({
-          title: res.code === "WHATSAPP_APP_NOT_CONNECTED" ? "WhatsApp not connected" : "Submission failed",
+          title: submitFailureTitle(res.code),
           description: err,
           variant: "destructive",
         })
-        refresh()
-        reloadLibraries()
+        await Promise.all([refresh(), reloadLibraries()])
       }
     } catch (err: any) {
       const apiErr = err?.response?.data
@@ -279,16 +308,36 @@ export function WhatsAppTemplatesPage() {
         (typeof apiErr?.error === "string" ? apiErr.error : "") ||
         err?.message ||
         "Submission failed"
+      if (apiErr?.code === "GUPSHUP_TEMPLATE_DUPLICATE_NEEDS_RENAME") {
+        openRenameDialog({
+          templateId: id,
+          currentName: apiErr.data?.name || "",
+          suggestedName: apiErr.suggestedName || `${apiErr.data?.name || "template"}_v2`,
+        })
+      }
       toast({
-        title: apiErr?.code === "WHATSAPP_APP_NOT_CONNECTED" ? "WhatsApp not connected" : "Submission failed",
+        title: submitFailureTitle(apiErr?.code),
         description,
         variant: "destructive",
       })
-      refresh()
-      reloadLibraries()
+      await Promise.all([refresh(), reloadLibraries()])
     } finally {
       setBusy(null)
     }
+  }
+
+  const handleRenameAndSubmit = async () => {
+    if (!renameDialog) return
+    const next = renameValue.trim().toLowerCase()
+    if (!/^[a-z0-9_]+$/.test(next)) {
+      toast({
+        title: "Invalid template name",
+        description: "Use lowercase letters, numbers, and underscores only.",
+        variant: "destructive",
+      })
+      return
+    }
+    await handleSubmit(renameDialog.templateId, { name: next })
   }
 
   const handleSync = async (id: string) => {
@@ -635,15 +684,16 @@ export function WhatsAppTemplatesPage() {
                       </TableCell>
                       <TableCell>
                         <StatusBadge status={entry.localStatus || lt.status} />
+                        {lt.rejectionReason && lt.status !== "approved" && (
+                          <p className="mt-1 max-w-[220px] text-[11px] leading-snug text-red-600">
+                            {lt.rejectionReason}
+                          </p>
+                        )}
                       </TableCell>
                       <TableCell className="text-right space-x-1">
                         {(() => {
-                          const canSubmitLibrary =
-                            lt.status === "draft" ||
-                            lt.status === "rejected" ||
-                            (isTransactional && lt.status === "pending")
-                          const submitLabel =
-                            lt.status === "pending" || lt.status === "rejected" ? "Resubmit" : "Submit"
+                          const canSubmitLibrary = lt.status === "draft" || lt.status === "rejected"
+                          const submitLabel = lt.status === "rejected" ? "Resubmit" : "Submit"
                           return (
                             <>
                               {canSubmitLibrary && (
@@ -653,11 +703,7 @@ export function WhatsAppTemplatesPage() {
                                   className="bg-emerald-600 hover:bg-emerald-700"
                                   disabled={busy === `submit-${lt._id}`}
                                   onClick={() => handleSubmit(lt._id)}
-                                  title={
-                                    lt.status === "pending"
-                                      ? "Submit again if the previous attempt did not reach your WhatsApp account"
-                                      : undefined
-                                  }
+                                  title={lt.rejectionReason || undefined}
                                 >
                                   {busy === `submit-${lt._id}` ? (
                                     <Loader2 className="h-3 w-3 animate-spin" />
@@ -918,22 +964,18 @@ export function WhatsAppTemplatesPage() {
                             </span>
                           </TableCell>
                           <TableCell className="text-right space-x-1">
-                            {(t.status === "draft" ||
-                              t.status === "rejected" ||
-                              t.status === "pending") && (
+                            {(t.status === "draft" || t.status === "rejected") && (
                               <>
-                                {(t.status === "draft" || t.status === "rejected") && (
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() => {
-                                      setEditing(t)
-                                      setShowForm(true)
-                                    }}
-                                  >
-                                    Edit
-                                  </Button>
-                                )}
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => {
+                                    setEditing(t)
+                                    setShowForm(true)
+                                  }}
+                                >
+                                  Edit
+                                </Button>
                                 <Button
                                   size="sm"
                                   variant="default"
@@ -947,9 +989,7 @@ export function WhatsAppTemplatesPage() {
                                     <Send className="h-3 w-3" />
                                   )}
                                   <span className="ml-1">
-                                    {t.status === "pending" || t.status === "rejected"
-                                      ? "Resubmit"
-                                      : "Submit"}
+                                    {t.status === "rejected" ? "Resubmit" : "Submit"}
                                   </span>
                                 </Button>
                               </>
@@ -1101,6 +1141,52 @@ export function WhatsAppTemplatesPage() {
                 Add {selectedPlatformIds.length ? `(${selectedPlatformIds.length})` : ""}
               </Button>
             </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!renameDialog} onOpenChange={(open) => !open && setRenameDialog(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Rename template for Meta</DialogTitle>
+            <DialogDescription>
+              Meta does not allow resubmitting under the same template name after rejection or a
+              duplicate registration. Choose a new name — the message content stays the same.
+            </DialogDescription>
+          </DialogHeader>
+          {renameDialog && (
+            <div className="space-y-3 py-2">
+              <div className="text-sm text-slate-600">
+                Current name:{" "}
+                <code className="text-xs bg-slate-100 px-1 rounded">{renameDialog.currentName}</code>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="rename-template-name">New template name</Label>
+                <Input
+                  id="rename-template-name"
+                  value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value.toLowerCase())}
+                  placeholder="ems_receipt_v2"
+                  autoComplete="off"
+                />
+                <p className="text-xs text-slate-500">Lowercase snake_case only (a-z, 0-9, _)</p>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRenameDialog(null)}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-emerald-600 hover:bg-emerald-700"
+              disabled={!renameDialog || busy === `submit-${renameDialog.templateId}`}
+              onClick={handleRenameAndSubmit}
+            >
+              {renameDialog && busy === `submit-${renameDialog.templateId}` ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-1" />
+              ) : null}
+              Submit with new name
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
