@@ -271,6 +271,28 @@ async function applyTemplate({ appId, fields }) {
 }
 
 /**
+ * Delete a template by element name (partner-docs DELETE
+ * /partner/app/{appId}/template/{elementName}). Frees the name so it can be
+ * re-applied for; Meta still reserves names of previously approved templates
+ * for 30 days, which surfaces as an error on the next applyTemplate.
+ */
+async function deleteTemplate({ appId, elementName }) {
+  try {
+    const data = await gupshupAuth.withAppToken(appId, async (token) => {
+      const { data } = await axios.delete(
+        `${appBase(appId)}/template/${encodeURIComponent(elementName)}`,
+        { headers: { Authorization: token }, timeout: 15000 }
+      );
+      return data;
+    });
+    if (data?.status === 'error') return { success: false, error: data };
+    return { success: true, data };
+  } catch (err) {
+    return failure('deleteTemplate', err);
+  }
+}
+
+/**
  * Set the webhook subscription for an app (rate limit 5/60s/app).
  * @param {object} args
  * @param {string} args.appId
@@ -612,6 +634,7 @@ module.exports = {
   listTemplates,
   getTemplate,
   applyTemplate,
+  deleteTemplate,
   setSubscription,
   ensureSubscription,
   updateSubscription,

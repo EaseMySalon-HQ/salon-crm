@@ -42,6 +42,19 @@ function mapRemoteApprovalStatus(remoteStatus) {
     case 'PENDING':
     case 'SUBMITTED':
       return 'pending';
+    case 'PAUSED':
+    case 'DEACTIVATED':
+      return 'paused';
+    case 'IN_APPEAL':
+      return 'in_appeal';
+    // Gupshup keeps the row (and holds the elementName) after Meta refuses or
+    // drops the template, even though it never becomes visible in WhatsApp Manager.
+    case 'FAILED':
+      return 'failed';
+    case 'DELETED':
+      return 'deleted';
+    case 'DISABLED':
+      return 'disabled';
     default:
       return null;
   }
@@ -73,12 +86,39 @@ function clearStaleTenantTemplateIds(tpl, { remote, platformGupshupId }) {
   return false;
 }
 
+/** Only these remote states are live on Meta, so only these are worth linking to. */
+const LINKABLE_REMOTE_STATUSES = new Set(['approved', 'pending', 'paused', 'in_appeal']);
+
+/**
+ * A remote in any other state (rejected, failed, deleted, or a status we cannot
+ * map) is not live on Meta but still holds the elementName. Linking to it would
+ * silently leave the local row a draft Meta never sees, so the name has to be
+ * deleted and re-applied for instead.
+ */
 function duplicateSubmitAction(remote) {
   if (!remote) return 'submit';
-  const status = remoteApprovalStatus(remote);
-  if (status === 'rejected') return 'needs_rename';
-  if (status === 'pending' || status === 'approved') return 'link_existing';
-  return 'link_existing';
+  return LINKABLE_REMOTE_STATUSES.has(remoteApprovalStatus(remote))
+    ? 'link_existing'
+    : 'reclaim_name';
+}
+
+/** Deleting a remote that is live on Meta would take a working template down. */
+function canReclaimRemoteName(remote) {
+  if (!remote) return false;
+  return !LINKABLE_REMOTE_STATUSES.has(remoteApprovalStatus(remote));
+}
+
+function duplicateBlockReason(remote) {
+  switch (remoteApprovalStatus(remote)) {
+    case 'rejected':
+      return 'Meta rejected this template name on your WhatsApp account. Choose a new name and submit again.';
+    case 'failed':
+    case 'deleted':
+    case 'disabled':
+      return 'An earlier attempt is holding this name on your WhatsApp account but Meta never accepted it, so it cannot be reused. Choose a new name and submit again.';
+    default:
+      return 'This template name is already registered on your WhatsApp account. Choose a new name and submit again.';
+  }
 }
 
 module.exports = {
@@ -88,4 +128,6 @@ module.exports = {
   remoteApprovalStatus,
   clearStaleTenantTemplateIds,
   duplicateSubmitAction,
+  canReclaimRemoteName,
+  duplicateBlockReason,
 };
