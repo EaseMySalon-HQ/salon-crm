@@ -38,6 +38,86 @@ function formHeaders(token) {
   return appAuthHeaders(token, 'application/x-www-form-urlencoded');
 }
 
+// --- Transient-failure retry (5xx / timeout / 429 only) -------------------
+// 4xx (other than 429) are our bug — a bad payload or template — and must NOT be
+// retried, or we just hammer Gupshup with the same broken request.
+const SEND_RETRY_MAX_ATTEMPTS = parseInt(process.env.GUPSHUP_SEND_RETRIES, 10) || 3;
+const SEND_RETRY_BASE_MS = 500;
+const SEND_RETRY_FACTOR = 3; // 500ms -> 1500ms -> 4500ms
+
+function isRetryableSendError(err) {
+  if (err?.code === 'ECONNABORTED') return true;
+  if (/timeout/i.test(err?.message || '')) return true;
+  const status = err?.response?.status;
+  if (typeof status !== 'number') return false;
+  return status === 408 || status === 429 || status >= 500;
+}
+
+/** Backoff for the delay AFTER attempt N (1-based): base*factor^(n-1) ± 20% jitter. */
+function sendRetryDelayMs(attempt) {
+  const base = SEND_RETRY_BASE_MS * SEND_RETRY_FACTOR ** (attempt - 1);
+  const jitter = base * 0.2 * (Math.random() * 2 - 1);
+  return Math.max(0, Math.round(base + jitter));
+}
+
+/** POST with exponential backoff for transient upstream failures only. */
+async function axiosPostWithRetry(url, payload, config, op = 'send') {
+  let lastErr;
+  for (let attempt = 1; attempt <= SEND_RETRY_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await axios.post(url, payload, config);
+    } catch (err) {
+      lastErr = err;
+      if (attempt >= SEND_RETRY_MAX_ATTEMPTS || !isRetryableSendError(err)) throw err;
+      const delayMs = sendRetryDelayMs(attempt);
+      logger.warn('[gupshup] transient failure; retrying', {
+        op,
+        attempt,
+        nextDelayMs: delayMs,
+        status: err?.response?.status ?? null,
+        code: err?.code ?? null,
+      });
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  throw lastErr;
+}
+
+/** Mask secret-shaped fields in an outgoing payload (object or urlencoded string). */
+function maskGupshupPayload(payload) {
+  if (payload == null) return null;
+  const SENSITIVE = new Set([
+    'authorization',
+    'token',
+    'src.name',
+    'apikey',
+    'api_key',
+    'password',
+    'secret',
+  ]);
+  if (typeof payload === 'string') {
+    try {
+      const params = new URLSearchParams(payload);
+      for (const key of [...params.keys()]) {
+        if (SENSITIVE.has(key.toLowerCase())) params.set(key, '[REDACTED]');
+      }
+      return params.toString();
+    } catch {
+      return '[unparseable-payload]';
+    }
+  }
+  if (typeof payload === 'object') {
+    const out = Array.isArray(payload) ? [] : {};
+    for (const [k, v] of Object.entries(payload)) {
+      if (SENSITIVE.has(k.toLowerCase())) out[k] = '[REDACTED]';
+      else if (v && typeof v === 'object') out[k] = maskGupshupPayload(v);
+      else out[k] = v;
+    }
+    return out;
+  }
+  return payload;
+}
+
 /** Extract a provider message id from any Gupshup send response shape. */
 function extractMessageId(data) {
   return (
@@ -64,7 +144,12 @@ async function postWithAppToken(sender, body, { json = false, timeout = 15000 } 
       await gupshupConfig.persistPlatformAppToken(sender.appId, token);
     }
     const headers = json ? jsonHeaders(token) : formHeaders(token);
-    const { data } = await axios.post(body.url, body.payload, { headers, timeout });
+    const { data } = await axiosPostWithRetry(
+      body.url,
+      body.payload,
+      { headers, timeout },
+      body.op || 'postWithAppToken'
+    );
     return data;
   });
 }
@@ -95,10 +180,10 @@ async function sendText({ businessId, to, body, previewUrl = false, requireBusin
     text: { body: body || '', preview_url: Boolean(previewUrl) },
   };
   try {
-    const data = await postWithAppToken(sender, { url, payload }, { json: true });
+    const data = await postWithAppToken(sender, { url, payload, op: 'sendText' }, { json: true });
     return { success: true, data, messageId: extractMessageId(data) };
   } catch (err) {
-    return failure('sendText', err);
+    return failure('sendText', err, { appId: sender.appId, payload });
   }
 }
 
@@ -176,8 +261,9 @@ async function sendTemplate({
     return form.toString();
   };
 
+  const formBody = buildForm();
   try {
-    let data = await postWithAppToken(sender, { url, payload: buildForm() });
+    let data = await postWithAppToken(sender, { url, payload: formBody, op: 'sendTemplate' });
     // Stale persisted tokens can produce opaque 400 — retry once with a forced refresh.
     if (data?.status === 'error') {
       const msg = String(data?.message || '').toLowerCase();
@@ -187,20 +273,28 @@ async function sendTemplate({
           if (sender.scope === 'platform') {
             await gupshupConfig.persistPlatformAppToken(sender.appId, token);
           }
-          const { data: retryData } = await axios.post(url, buildForm(), {
-            headers: formHeaders(token),
-            timeout: 15000,
-          });
+          const { data: retryData } = await axiosPostWithRetry(
+            url,
+            formBody,
+            { headers: formHeaders(token), timeout: 15000 },
+            'sendTemplate:token-refresh'
+          );
           return retryData;
         });
       }
     }
     if (data?.status === 'error') {
+      logger.error('[gupshup] sendTemplate rejected', {
+        appId: sender.appId,
+        gupshupMessage: data?.message ?? null,
+        gupshupCode: data?.code ?? null,
+        payload: maskGupshupPayload(formBody),
+      });
       return { success: false, error: data, code: 'GUPSHUP_SEND_ERROR' };
     }
     return { success: true, data, messageId: extractMessageId(data) };
   } catch (err) {
-    return failure('sendTemplate', err);
+    return failure('sendTemplate', err, { appId: sender.appId, payload: formBody });
   }
 }
 
@@ -266,7 +360,7 @@ async function applyTemplate({ appId, fields }) {
     if (data?.status === 'error') return { success: false, error: data };
     return { success: true, data };
   } catch (err) {
-    return failure('applyTemplate', err);
+    return failure('applyTemplate', err, { appId, payload: fields });
   }
 }
 
@@ -341,10 +435,10 @@ async function setSubscription({ appId, url, modes = 'ALL', tag, secret }) {
         if (data?.status === 'error') return { success: false, error: data, status: 429 };
         return { success: true, data };
       } catch (retryErr) {
-        return failure('setSubscription', retryErr);
+        return failure('setSubscription', retryErr, { appId, payload: { modes, tag, url } });
       }
     }
-    return failure('setSubscription', err);
+    return failure('setSubscription', err, { appId, payload: { modes, tag, url } });
   }
 }
 
@@ -525,11 +619,21 @@ async function getWalletBalance({ appId }) {
   }
 }
 
-function failure(op, err) {
-  const status = err?.response?.status;
-  const errData = err?.response?.data || err?.message;
-  logger.error(`[gupshup] ${op} failed (status=${status || 'n/a'}):`, errData);
-  return { success: false, error: errData, status };
+function failure(op, err, ctx = {}) {
+  const status = err?.response?.status ?? null;
+  const statusText = err?.response?.statusText ?? null;
+  const gupshupBody = err?.response?.data ?? null;
+  const isTimeout = err?.code === 'ECONNABORTED' || /timeout/i.test(err?.message || '');
+  logger.error(`[gupshup] ${op} failed`, {
+    status,
+    statusText,
+    gupshupMessage: gupshupBody?.message ?? null,
+    gupshupCode: gupshupBody?.code ?? null,
+    isTimeout,
+    ...(ctx.payload !== undefined ? { payload: maskGupshupPayload(ctx.payload) } : {}),
+    appId: ctx.appId ?? null,
+  });
+  return { success: false, error: gupshupBody || err?.message, status, isTimeout };
 }
 
 function normalizeSubscriptionUrl(url) {

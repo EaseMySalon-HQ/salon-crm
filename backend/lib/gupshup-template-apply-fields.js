@@ -14,8 +14,13 @@ function buildUrlButtonPayload(b) {
     suffix: '',
   };
   if (hasDynamicUrlPlaceholders(url)) {
-    const exampleUrl = String(b.urlExample || b.example?.[0] || '').trim();
-    if (exampleUrl) payload.example = [exampleUrl];
+    const provided = String(b.urlExample || b.example?.[0] || '').trim();
+    // Meta/Gupshup reject a dynamic URL button submitted without an example
+    // ("component of type BUTTONS is missing expected field(s) (example)"),
+    // which lands the whole template in FAILED and it never reaches Meta. When
+    // the template did not carry an explicit example, synthesize a URL-safe one
+    // by substituting each {{n}} placeholder with a sample token.
+    payload.example = [provided || url.replace(/\{\{\d+\}\}/g, 'sample')];
   }
   return payload;
 }

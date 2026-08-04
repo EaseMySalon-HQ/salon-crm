@@ -542,6 +542,10 @@ const whatsappTemplateSubmitBodySchema = z
   .object({
     /** Optional rename before submit (Meta rejects duplicate elementName on resubmit). */
     name: whatsappTemplateNameSchema.optional(),
+    /** Button index (string) → full sample URL for dynamic URL buttons. */
+    urlExamples: z
+      .record(z.string().regex(/^\d+$/), z.string().trim().url().max(2000))
+      .optional(),
   })
   .strict();
 
@@ -550,6 +554,13 @@ const whatsappTemplateImportBatchBodySchema = z
     platformTemplateIds: z.array(z.string().trim().min(1)).min(1),
     /** Optional per-template rename, keyed by platform template id. */
     names: z.record(z.string(), whatsappTemplateNameSchema).optional(),
+    /** platformTemplateId → { "0": "https://...", ... } sample URLs for dynamic buttons. */
+    urlExamples: z
+      .record(
+        z.string(),
+        z.record(z.string().regex(/^\d+$/), z.string().trim().url().max(2000))
+      )
+      .optional(),
   })
   .strict();
 

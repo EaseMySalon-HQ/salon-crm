@@ -56,7 +56,8 @@ pointsLedgerSchema.index(
   { branchId: 1, saleId: 1 },
   {
     unique: true,
-    partialFilterExpression: { type: 'earn', saleId: { $exists: true, $ne: null } },
+    // Partial indexes cannot use $ne — $type objectId implies the field is set.
+    partialFilterExpression: { type: 'earn', saleId: { $type: 'objectId' } },
   }
 );
 

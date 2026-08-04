@@ -17,23 +17,35 @@ class DatabaseManager {
       void this._evictStaleConnections();
     }, sweepMs);
     if (typeof this._sweepTimer.unref === 'function') this._sweepTimer.unref();
+    // Pool sizing is bounded by the Atlas connection ceiling shared across every
+    // Railway replica. On M10 (1500 conns) with up to 3 replicas the worst case is
+    // 3 * (mainMax + maxCachedTenants * tenantMax). With the defaults below:
+    // 3 * (40 + 50 * 8) = 1320, ~12% headroom under 1500. Raise per-connection pool
+    // sizes only after re-checking that product against the current tier and replica count.
     this.tenantPoolOptions = {
-      maxPoolSize: parseInt(process.env.MONGO_TENANT_POOL_SIZE, 10) || 10,
+      maxPoolSize: parseInt(process.env.MONGO_TENANT_POOL_SIZE, 10) || 8,
       minPoolSize: parseInt(process.env.MONGO_TENANT_MIN_POOL, 10) || 1,
-      socketTimeoutMS: parseInt(process.env.MONGO_SOCKET_TIMEOUT_MS, 10) || 45000,
+      socketTimeoutMS: parseInt(process.env.MONGO_SOCKET_TIMEOUT_MS, 10) || 60000,
+      connectTimeoutMS: parseInt(process.env.MONGO_CONNECT_TIMEOUT_MS, 10) || 15000,
       serverSelectionTimeoutMS: parseInt(process.env.MONGO_SERVER_SELECTION_MS, 10) || 10000,
-      // Railway closes idle sockets; keep pool sockets alive longer to avoid MongoNotConnectedError churn.
-      maxIdleTimeMS: parseInt(process.env.MONGO_MAX_IDLE_MS, 10) || 120000,
+      // Release idle sockets back to Atlas after 60s so cached-but-quiet tenants
+      // do not hold pool slots other replicas may need.
+      maxIdleTimeMS: parseInt(process.env.MONGO_MAX_IDLE_MS, 10) || 60000,
       heartbeatFrequencyMS: parseInt(process.env.MONGO_HEARTBEAT_MS, 10) || 10000,
+      retryWrites: true,
+      retryReads: true,
       monitorCommands: true,
     };
     this.mainPoolOptions = {
-      maxPoolSize: parseInt(process.env.MONGO_MAIN_POOL_SIZE, 10) || 50,
+      maxPoolSize: parseInt(process.env.MONGO_MAIN_POOL_SIZE, 10) || 40,
       minPoolSize: parseInt(process.env.MONGO_MAIN_MIN_POOL, 10) || 5,
-      socketTimeoutMS: parseInt(process.env.MONGO_SOCKET_TIMEOUT_MS, 10) || 45000,
+      socketTimeoutMS: parseInt(process.env.MONGO_SOCKET_TIMEOUT_MS, 10) || 60000,
+      connectTimeoutMS: parseInt(process.env.MONGO_CONNECT_TIMEOUT_MS, 10) || 15000,
       serverSelectionTimeoutMS: parseInt(process.env.MONGO_SERVER_SELECTION_MS, 10) || 10000,
-      maxIdleTimeMS: parseInt(process.env.MONGO_MAX_IDLE_MS, 10) || 120000,
+      maxIdleTimeMS: parseInt(process.env.MONGO_MAX_IDLE_MS, 10) || 60000,
       heartbeatFrequencyMS: parseInt(process.env.MONGO_HEARTBEAT_MS, 10) || 10000,
+      retryWrites: true,
+      retryReads: true,
       monitorCommands: true,
     };
     this.healthPingIntervalMs =
@@ -450,6 +462,14 @@ class DatabaseManager {
    */
   getActiveConnections() {
     return Array.from(this.connections.keys());
+  }
+
+  /**
+   * Live [dbName, connection] pairs for pool monitoring.
+   * @returns {Array<[string, mongoose.Connection]>}
+   */
+  getConnectionEntries() {
+    return Array.from(this.connections.entries());
   }
 }
 
