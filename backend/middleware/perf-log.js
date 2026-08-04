@@ -25,6 +25,14 @@ function isEnabled() {
   return process.env.NODE_ENV !== 'production';
 }
 
+const SLOW_REQUEST_THRESHOLD_MS = parseInt(process.env.SLOW_REQUEST_MS, 10) || 1000;
+
+/** In production we always want a lightweight warning on slow requests, even when
+ *  the verbose per-request perf log is off. */
+function isSlowRequestLoggingEnabled() {
+  return process.env.NODE_ENV === 'production';
+}
+
 function approximateBodyBytes(chunk) {
   if (chunk == null) return 0;
   if (Buffer.isBuffer(chunk)) return chunk.length;
@@ -68,34 +76,50 @@ function tenantContextFromUser(user) {
 }
 
 function perfLogMiddleware(req, res, next) {
-  if (!isEnabled()) return next();
+  const perfEnabled = isEnabled();
+  const slowEnabled = isSlowRequestLoggingEnabled();
+  if (!perfEnabled && !slowEnabled) return next();
 
   // Only the canonical mount path — skip noisy health/probe routes.
   const routePath = req.path || req.originalUrl?.split('?')[0] || '';
   if (shouldSkipPerfLog(routePath)) return next();
 
   const start = process.hrtime.bigint();
-  const getBodyBytes = instrumentResponse(res);
+  // Body-byte accounting is only needed for the verbose perf log; skip the
+  // res.write/res.end patching when we are only watching for slow requests.
+  const getBodyBytes = perfEnabled ? instrumentResponse(res) : null;
 
   res.on('finish', () => {
     try {
       const durationNs = process.hrtime.bigint() - start;
       const durationMs = Number(durationNs / 1000000n);
-      const wireHeader = res.getHeader('Content-Length');
-      const wireBytes = wireHeader != null ? Number(wireHeader) : null;
-      const payload = {
-        method: req.method,
-        path: routePath,
-        status: res.statusCode,
-        durationMs,
-        bodyBytes: getBodyBytes(),
-      };
-      if (Number.isFinite(wireBytes)) payload.wireBytes = wireBytes;
-      const tenant = tenantContextFromUser(req.user);
-      if (tenant) Object.assign(payload, tenant);
-      const cacheState = res.locals && res.locals.perfCache;
-      if (cacheState) payload.cache = String(cacheState);
-      logger.info('perf', payload);
+
+      if (perfEnabled) {
+        const wireHeader = res.getHeader('Content-Length');
+        const wireBytes = wireHeader != null ? Number(wireHeader) : null;
+        const payload = {
+          method: req.method,
+          path: routePath,
+          status: res.statusCode,
+          durationMs,
+          bodyBytes: getBodyBytes ? getBodyBytes() : 0,
+        };
+        if (Number.isFinite(wireBytes)) payload.wireBytes = wireBytes;
+        const tenant = tenantContextFromUser(req.user);
+        if (tenant) Object.assign(payload, tenant);
+        const cacheState = res.locals && res.locals.perfCache;
+        if (cacheState) payload.cache = String(cacheState);
+        logger.info('perf', payload);
+      }
+
+      if (slowEnabled && durationMs > SLOW_REQUEST_THRESHOLD_MS) {
+        logger.warn('[slow-request]', {
+          method: req.method,
+          path: req.route?.path || routePath,
+          status: res.statusCode,
+          durationMs,
+        });
+      }
     } catch {
       /* never let perf logging affect responses */
     }

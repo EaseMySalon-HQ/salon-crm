@@ -72,8 +72,9 @@ purchaseInvoiceSchema.index(
     unique: true,
     partialFilterExpression: {
       status: { $in: ['draft', 'posted'] },
-      supplierInvoiceNumber: { $type: 'string', $ne: '' }
-    }
+      // Partial indexes cannot use $ne; $gt '' matches non-empty supplier invoice refs.
+      supplierInvoiceNumber: { $gt: '' },
+    },
   }
 );
 

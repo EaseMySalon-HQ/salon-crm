@@ -17,6 +17,8 @@ const buttonSchema = new mongoose.Schema(
     text: { type: String, required: true },
     url: { type: String, default: null },
     phone: { type: String, default: null },
+    /** Full example URL required by Gupshup when `url` contains {{N}} placeholders. */
+    urlExample: { type: String, default: null },
   },
   { _id: false }
 );

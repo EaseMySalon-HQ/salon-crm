@@ -25,6 +25,17 @@ describe('gupshup-template-apply-fields', () => {
     ]);
   });
 
+  it('synthesizes a URL-safe example when a dynamic URL button has none', () => {
+    const payload = buildUrlButtonPayload({
+      type: 'URL',
+      text: 'View Bill',
+      url: 'https://www.easemysalon.in/receipt/public/{{1}}',
+    });
+    expect(payload.example).toEqual([
+      'https://www.easemysalon.in/receipt/public/sample',
+    ]);
+  });
+
   it('buildGupshupApplyFields serializes button examples in buttons JSON', () => {
     const fields = buildGupshupApplyFields({
       name: 'ems_receipt',

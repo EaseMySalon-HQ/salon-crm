@@ -193,6 +193,45 @@ function buildComponentsFromTemplate({ template, recipient, variableMapping }) {
 
 async function runCampaign({ campaign, template, recipients, actorId }) {
   const { Campaign } = await getMainModels();
+
+  // Defensive re-check: templates seeded by an older API version (or edited after
+  // approval) can drift from the remote shape. Bail the whole run once rather than
+  // firing a doomed send at every recipient. Best-effort — never block on infra errors.
+  try {
+    if (template?.gupshupTemplateId) {
+      const { resolveSender } = require('./gupshup-config');
+      const { validateTemplate, countLocalTemplateVariables } = require('./gupshup-template-validate');
+      let appId = null;
+      try {
+        appId = (await resolveSender(campaign.businessId))?.appId || null;
+      } catch {
+        appId = null;
+      }
+      if (appId) {
+        const validation = await validateTemplate(
+          template.gupshupTemplateId,
+          countLocalTemplateVariables(template),
+          { appId }
+        );
+        if (!validation.valid) {
+          await Campaign.updateOne(
+            { _id: campaign._id },
+            {
+              $set: {
+                status: 'failed',
+                completedAt: new Date(),
+                failureReason: `Template variable mismatch: ${validation.reason}`,
+              },
+            }
+          );
+          return;
+        }
+      }
+    }
+  } catch (err) {
+    logger.warn('[whatsapp-campaigns] template validation skipped:', err?.message || err);
+  }
+
   const variableMapping = campaign.variableMapping || {};
   let queued = 0;
   let sent = 0;

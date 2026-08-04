@@ -17,6 +17,10 @@ const {
   buildCampaignsSummaryReport,
   aggregateMessageCountsForCampaigns,
 } = require('../lib/platform-whatsapp-campaign-report');
+const {
+  validateTemplate,
+  countLocalTemplateVariables,
+} = require('../lib/gupshup-template-validate');
 
 router.get('/', checkAdminPermission('settings', 'view'), async (req, res) => {
   try {
@@ -201,9 +205,29 @@ router.post('/:id/send', checkAdminPermission('settings', 'update'), async (req,
       });
     }
 
-    const { Campaign } = await getCampaignModels();
+    const { Campaign, Template } = await getCampaignModels();
     const campaign = await Campaign.findById(req.params.id);
     if (!campaign) return res.status(404).json({ success: false, error: 'Campaign not found' });
+
+    // Fail fast on template variable drift before spawning the async runner.
+    const platform = await gupshupConfig.loadPlatformConfig();
+    const template = await Template.findById(campaign.templateId).lean();
+    if (template?.gupshupTemplateId && platform?.appId) {
+      const validation = await validateTemplate(
+        template.gupshupTemplateId,
+        countLocalTemplateVariables(template),
+        { appId: platform.appId }
+      );
+      if (!validation.valid) {
+        return res.status(400).json({
+          success: false,
+          code: 'TEMPLATE_VARIABLE_MISMATCH',
+          error: validation.reason,
+          expected: validation.expected,
+          got: validation.got,
+        });
+      }
+    }
 
     setImmediate(async () => {
       try {

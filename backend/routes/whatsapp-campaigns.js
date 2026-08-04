@@ -30,6 +30,10 @@ const { getAddonStatus } = require('../lib/entitlements');
 const gupshupConfig = require('../lib/gupshup-config');
 const gupshupWhatsApp = require('../services/gupshup-whatsapp-service');
 const {
+  validateTemplate,
+  countLocalTemplateVariables,
+} = require('../lib/gupshup-template-validate');
+const {
   getMainModels,
   resolveAudience,
   countMetaOptedOut,
@@ -290,6 +294,25 @@ router.post(
       }
 
       const sendMode = salonConnected ? account.mode || 'live' : 'live';
+
+      // Fail fast if the local template drifted from the approved remote shape,
+      // instead of letting every recipient hit an opaque Gupshup 400.
+      if (template.gupshupTemplateId) {
+        const validation = await validateTemplate(
+          template.gupshupTemplateId,
+          countLocalTemplateVariables(template),
+          { appId: senderAppId }
+        );
+        if (!validation.valid) {
+          return res.status(400).json({
+            success: false,
+            code: 'TEMPLATE_VARIABLE_MISMATCH',
+            error: validation.reason,
+            expected: validation.expected,
+            got: validation.got,
+          });
+        }
+      }
 
       const recipients = await resolveAudience({ campaign, businessModels: req.businessModels });
       if (recipients.length === 0) {
