@@ -2,6 +2,12 @@
 
 const { billChangeCreditedToWalletCashAddition } = require('../utils/bill-change-wallet-cash');
 const {
+  saleGrossRevenue,
+  saleNetRevenue,
+  sumGrossRevenueFromSales,
+  sumNetRevenueFromSales,
+} = require('./sale-revenue-metrics');
+const {
   getStartOfDayIST,
   getEndOfDayIST,
   toDateStringIST,
@@ -38,7 +44,7 @@ function sumSalePaymentsByMode(salesInRange) {
       });
       isAllCash = cashAmt > 0 && !hasNonCash;
     } else {
-      const amt = s.grossTotal || s.netTotal || 0;
+      const amt = saleNetRevenue(s);
       const pm = String(s.paymentMode || '').toLowerCase();
       if (pm === 'cash') {
         cash += amt;
@@ -94,15 +100,11 @@ function sumDuesCollected(sales, dateFrom, dateTo) {
 }
 
 function netRevenueFromSales(salesInRange) {
-  return round2(
-    salesInRange.reduce((sum, s) => sum + (s.netTotal ?? s.grossTotal ?? s.totalAmount ?? 0), 0)
-  );
+  return round2(sumNetRevenueFromSales(salesInRange));
 }
 
 function grossRevenueFromSales(salesInRange) {
-  return round2(
-    salesInRange.reduce((sum, s) => sum + (s.grossTotal ?? s.totalAmount ?? s.netTotal ?? 0), 0)
-  );
+  return round2(sumGrossRevenueFromSales(salesInRange));
 }
 
 function filterSalesInInvoiceRange(sales, dateFrom, dateTo) {

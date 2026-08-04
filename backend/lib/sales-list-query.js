@@ -4,6 +4,8 @@
 
 const { getStartOfDayIST, getEndOfDayIST } = require('../utils/date-utils');
 const { billChangeCreditedToWalletCashAddition } = require('../utils/bill-change-wallet-cash');
+const { saleGrossRevenue, saleNetRevenue } = require('./sale-revenue-metrics');
+const { allocateTipByPaymentModes } = require('./tip-payment-allocation');
 
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 10000;
@@ -408,14 +410,21 @@ function getSalePaidAmount(sale) {
   return 0;
 }
 
-/**
- * Aggregate totals from lean sale docs (same rules as sales-report frontend).
- * @param {object} sale
- * @param {object} acc - mutable accumulator
- */
+/** @see sale-revenue-metrics.js */
 function accumulateSaleSummary(sale, acc) {
-  acc.totalRevenue += sale.grossTotal || 0;
-  acc.tips += sale.tip || 0;
+  const gross = saleGrossRevenue(sale);
+  const net = saleNetRevenue(sale);
+  acc.grossRevenue += gross;
+  acc.netRevenue += net;
+  acc.totalRevenue += net;
+  const tip = sale.tip || 0;
+  acc.tips += tip;
+  if (tip > 0.005) {
+    const split = allocateTipByPaymentModes(sale, tip);
+    acc.tipsCash += split.cash;
+    acc.tipsCard += split.card;
+    acc.tipsOnline += split.online;
+  }
 
   const st = String(sale.status || '').toLowerCase();
   if (st === 'completed') acc.completedSales += 1;
@@ -450,7 +459,6 @@ function accumulateSaleSummary(sale, acc) {
   }
   const walletCashAdd = billChangeCreditedToWalletCashAddition(sale);
   cashAmt += walletCashAdd;
-  const tip = sale.tip || 0;
   const tipDeduction = isAllCash ? tip : 0;
   acc.cashCollected += cashAmt - tipDeduction;
   acc.walletCashCollected += walletCashAdd;
@@ -485,15 +493,20 @@ function accumulateSaleSummary(sale, acc) {
 async function computeSalesSummaryTotals(Sale, match) {
   const projection = {
     grossTotal: 1,
+    loyaltyDiscountAmount: 1,
+    receiptTotalsBreakdown: 1,
     payments: 1,
     paymentMode: 1,
     tip: 1,
+    tipPaymentMode: 1,
+    paymentHistory: 1,
     status: 1,
     paymentStatus: 1,
-    netTotal: 1,
     billChangeCreditedToWallet: 1,
   };
   const acc = {
+    grossRevenue: 0,
+    netRevenue: 0,
     totalRevenue: 0,
     cashCollected: 0,
     serviceCashCollected: 0,
@@ -503,6 +516,9 @@ async function computeSalesSummaryTotals(Sale, match) {
     onlinePayCollected: 0,
     unpaidValue: 0,
     tips: 0,
+    tipsCash: 0,
+    tipsCard: 0,
+    tipsOnline: 0,
     completedSales: 0,
     partialSales: 0,
     unpaidSales: 0,
@@ -520,15 +536,20 @@ async function computeSalesSummaryTotals(Sale, match) {
 async function computeSalesSummaryTotalsSplit(Sale, matchInvoice, matchPaymentOnly) {
   const projection = {
     grossTotal: 1,
+    loyaltyDiscountAmount: 1,
+    receiptTotalsBreakdown: 1,
     payments: 1,
     paymentMode: 1,
     tip: 1,
+    tipPaymentMode: 1,
+    paymentHistory: 1,
     status: 1,
     paymentStatus: 1,
-    netTotal: 1,
     billChangeCreditedToWallet: 1,
   };
   const acc = {
+    grossRevenue: 0,
+    netRevenue: 0,
     totalRevenue: 0,
     cashCollected: 0,
     serviceCashCollected: 0,
@@ -538,6 +559,9 @@ async function computeSalesSummaryTotalsSplit(Sale, matchInvoice, matchPaymentOn
     onlinePayCollected: 0,
     unpaidValue: 0,
     tips: 0,
+    tipsCash: 0,
+    tipsCard: 0,
+    tipsOnline: 0,
     completedSales: 0,
     partialSales: 0,
     unpaidSales: 0,

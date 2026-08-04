@@ -66,6 +66,10 @@ const {
   isGupshupTemplateDuplicateError,
 } = require('../lib/gupshup-template-submit');
 const { canTenantSubmitTemplate } = require('../lib/whatsapp-template-submit-eligibility');
+const {
+  canDeleteTenantTemplateWithoutForce,
+  isReplaceableTenantTemplateStatus,
+} = require('../lib/whatsapp-template-library-lifecycle');
 
 /**
  * Zod v4 exposes `.issues` (v3 was `.errors`). Support both so bumping the
@@ -493,7 +497,25 @@ async function importPlatformTemplateToBusiness(businessId, platformTpl, created
     name: platformTpl.name,
     language: platformTpl.language,
   });
-  if (exists) return { imported: false, reason: 'already_exists', template: exists };
+  if (exists) {
+    if (isReplaceableTenantTemplateStatus(exists.status)) {
+      await exists.deleteOne();
+    } else {
+      return { imported: false, reason: 'already_exists', template: exists };
+    }
+  }
+
+  const bySource = await Template.findOne({
+    businessId,
+    sourcePlatformTemplateId: String(platformTpl._id),
+  });
+  if (bySource) {
+    if (isReplaceableTenantTemplateStatus(bySource.status)) {
+      await bySource.deleteOne();
+    } else {
+      return { imported: false, reason: 'already_exists', template: bySource };
+    }
+  }
 
   const doc = await Template.create({
     businessId,
@@ -745,6 +767,7 @@ router.get('/library/available', authenticateToken, setupMainDatabase, requireWa
     const added = await Template.find({
       businessId,
       sourcePlatformTemplateId: { $ne: null },
+      status: { $nin: ['pending', 'rejected'] },
     })
       .select('sourcePlatformTemplateId')
       .lean();
@@ -1175,13 +1198,12 @@ router.delete('/:id', authenticateToken, requireManager, setupMainDatabase, requ
     const tpl = await Template.findOne({ _id: req.params.id, businessId });
     if (!tpl) return res.status(404).json({ success: false, error: 'Template not found' });
 
-    if (tpl.gupshupTemplateId || tpl.metaTemplateId || tpl.status !== 'draft') {
-      if (req.query.force !== '1') {
-        return res.status(400).json({
-          success: false,
-          error: 'Approved or submitted templates cannot be deleted locally. Pause them in Gupshup, or pass ?force=1 to delete the local row only.',
-        });
-      }
+    if (!canDeleteTenantTemplateWithoutForce(tpl) && req.query.force !== '1') {
+      return res.status(400).json({
+        success: false,
+        error:
+          'Approved or active templates cannot be deleted locally. Pause them in Gupshup, or pass ?force=1 to delete the local row only.',
+      });
     }
 
     await tpl.deleteOne();

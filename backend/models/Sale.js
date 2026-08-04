@@ -119,6 +119,8 @@ const saleSchema = new mongoose.Schema({
   tipStaffName: { type: String, default: '' },
   /** Split tips: receipt + staff-tip report use each row; tip / tipStaffId remain totals + first recipient for legacy. */
   tipLines: { type: [saleTipLineSchema], default: [] },
+  /** Checkout choice when bill uses 2+ of cash/card/online and includes a tip. */
+  tipPaymentMode: { type: String, enum: ['cash', 'card', 'online', ''], default: null },
 
   staffName: { type: String, required: true },
   items: [itemSchema],

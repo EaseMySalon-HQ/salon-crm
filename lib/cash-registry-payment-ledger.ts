@@ -65,7 +65,7 @@ export function checkoutCardOnlineAmount(sale: SaleLike): number {
     const paid =
       typeof sale.paymentStatus?.paidAmount === "number"
         ? Math.max(0, sale.paymentStatus.paidAmount)
-        : Number(sale.netTotal || sale.grossTotal || 0) || 0
+        : Number(sale.grossTotal || 0) || 0
     const historyDup = sumPaymentHistoryByMethod(sale, { cardOnline: true })
     return Math.max(0, paid - historyDup)
   }
@@ -84,7 +84,7 @@ export function checkoutCashAmount(sale: SaleLike): number {
     const paid =
       typeof sale.paymentStatus?.paidAmount === "number"
         ? Math.max(0, sale.paymentStatus.paidAmount)
-        : Number(sale.netTotal || sale.grossTotal || 0) || 0
+        : Number(sale.grossTotal || 0) || 0
     const historyDup = sumPaymentHistoryByMethod(sale, { cash: true })
     return Math.max(0, paid - historyDup)
   }
@@ -183,7 +183,7 @@ export function checkoutCardOnlineBreakdown(sale: SaleLike) {
   const paid =
     typeof sale.paymentStatus?.paidAmount === "number"
       ? Math.max(0, sale.paymentStatus.paidAmount)
-      : Number(sale.netTotal || sale.grossTotal || 0) || 0
+      : Number(sale.grossTotal || 0) || 0
   const historyDup = sumPaymentHistoryCardOnlineBreakdown(sale)
   if (pm.includes("card")) {
     return { card: Math.max(0, paid - historyDup.card - historyDup.online), online: 0 }

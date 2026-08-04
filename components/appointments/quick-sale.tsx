@@ -115,6 +115,7 @@ import { ClientGenderRadioField, isClientGenderSelected } from "@/components/cli
 import { customerDropdownList, findWalkInClient, formatClientPhoneForDisplay, isWalkInClient, WALK_IN_SYSTEM_PHONE, WALK_IN_UI_BADGE } from "@/lib/walk-in-client"
 import { CardSkeletonGrid, FormSkeleton, LoadingButton } from "@/components/loading"
 import { MultiStaffSelector, type StaffContribution } from "@/components/ui/multi-staff-selector"
+import { StaffSearchCombobox } from "@/components/ui/staff-search-combobox"
 import { getLinePreTaxTotal } from "@/lib/staff-line-revenue"
 import { TaxCalculator, createTaxCalculator, type TaxSettings, type BillItem } from "@/lib/tax-calculator"
 import { computeMembershipPlanLineTotal } from "@/lib/membership-tax"
@@ -144,6 +145,9 @@ import {
 import { expandBundleToLines, isBundleService } from "@/lib/bundle-service"
 import type { ClientWalletLedgerRow } from "@/lib/client-wallet-ledger"
 import { flattenClientWalletLedger, walletActivityStatusDisplay } from "@/lib/client-wallet-ledger"
+import { TipPaymentModeDialog } from "@/components/checkout/tip-payment-mode-dialog"
+import { useTipPaymentModePrompt } from "@/lib/use-tip-payment-mode-prompt"
+import { normalizeStoredTipPaymentMode } from "@/lib/tip-payment-mode-prompt"
 
 function cloneCheckoutTipLines(lines: CheckoutTipLine[]): CheckoutTipLine[] {
   return lines.map((l) => ({ ...l }))
@@ -567,6 +571,19 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
   const [cashAmount, setCashAmount] = useState(0)
   const [cardAmount, setCardAmount] = useState(0)
   const [onlineAmount, setOnlineAmount] = useState(0)
+  const {
+    tipPaymentMode,
+    setTipPaymentMode,
+    getResolvedTipPaymentMode,
+    getBlockReason: getTipPaymentModeBlockReason,
+    showTipPaymentModeDialog,
+    setShowTipPaymentModeDialog,
+    dialogSelection: tipPaymentModeDialogSelection,
+    setDialogSelection: setTipPaymentModeDialogSelection,
+    requireTipPaymentModeOrPrompt,
+    confirmTipPaymentModeDialog,
+    cancelTipPaymentModeDialog,
+  } = useTipPaymentModePrompt(tip, cashAmount, cardAmount, onlineAmount)
   /** Client prepaid wallet (salon service credit) applied toward this bill */
   const [walletPayAmount, setWalletPayAmount] = useState(0)
   const [selectedWalletId, setSelectedWalletId] = useState<string>("")
@@ -1376,6 +1393,11 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
         setCashAmount(cash)
         setCardAmount(card)
         setOnlineAmount(online)
+      }
+
+      const storedTipMode = normalizeStoredTipPaymentMode(initialSale.tipPaymentMode)
+      if (storedTipMode) {
+        setTipPaymentMode(storedTipMode)
       }
 
       // Set tip amount and tip staff (if any)
@@ -4732,7 +4754,23 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
       console.log('✅ All products have sufficient stock')
     }
 
+    const tipModeBlockReason = getTipPaymentModeBlockReason()
+    if (tipModeBlockReason) {
+      toast({
+        title: "Tip payment mode",
+        description: tipModeBlockReason,
+        variant: "destructive",
+      })
+      return
+    }
 
+    if (
+      !requireTipPaymentModeOrPrompt(() => {
+        void handleCheckout(reasonOverride, options)
+      })
+    ) {
+      return
+    }
 
     setIsProcessing(true)
 
@@ -5135,6 +5173,7 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
                   }
                 })
             : []
+        const resolvedTipPaymentMode = getResolvedTipPaymentMode()
         const saleDueTotal = calculatedTotal + tip
         const { payments, changeToCredit, recordedPaidTotal } = buildRecordedPaymentsForCheckout({
           cashAmount,
@@ -5323,6 +5362,9 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           tipStaffId: tipStaffId || undefined,
           tipStaffName: tipStaff?.name || undefined,
           ...(tipLinesForApi.length > 0 ? { tipLines: tipLinesForApi } : {}),
+          ...(resolvedTipPaymentMode && tip > 0.005
+            ? { tipPaymentMode: resolvedTipPaymentMode }
+            : {}),
           discount: isValueDiscountActive ? discountValue : (isGlobalDiscountActive ? discountPercentage : 0),
           discountType: isValueDiscountActive ? 'fixed' : 'percentage',
           // Payment status tracking
@@ -8789,30 +8831,19 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
               <div key={row.id} className="flex flex-wrap items-end gap-2">
                 <div className="min-w-0 flex-1 space-y-1.5">
                   <Label className="text-xs text-muted-foreground">Staff</Label>
-                  <Select
-                    value={row.staffId || undefined}
+                  <StaffSearchCombobox
+                    value={row.staffId}
                     onValueChange={(v) =>
                       setTipDraftLines((prev) =>
                         prev.map((r) => (r.id === row.id ? { ...r, staffId: v } : r))
                       )
                     }
+                    staff={quickSaleStaffOptions}
                     disabled={quickSaleStaffOptions.length === 0}
-                  >
-                    <SelectTrigger className="h-9 rounded-lg">
-                      <SelectValue placeholder="Select staff" />
-                    </SelectTrigger>
-                    <SelectContent
-                      position="popper"
-                      className={cn(quickSaleTipModalSelectContentClass, "max-h-[min(24rem,70vh)]")}
-                      style={{ zIndex: 9999 }}
-                    >
-                      {quickSaleStaffOptions.map((s) => (
-                        <SelectItem key={s.id} value={s.id}>
-                          {s.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    placeholder="Select staff"
+                    contentClassName={quickSaleTipModalSelectContentClass}
+                    triggerClassName="h-9 rounded-lg text-sm"
+                  />
                 </div>
                 <div className="w-[7.5rem] space-y-1.5">
                   <Label className="text-xs text-muted-foreground">Amount (₹)</Label>
@@ -8879,6 +8910,25 @@ export function QuickSale({ mode = "create", initialSale, billLoading = false }:
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <TipPaymentModeDialog
+        open={showTipPaymentModeDialog}
+        onOpenChange={(open) => {
+          if (!isProcessing) {
+            if (!open) cancelTipPaymentModeDialog()
+            else setShowTipPaymentModeDialog(true)
+          }
+        }}
+        tipAmount={tip}
+        cash={cashAmount}
+        card={cardAmount}
+        online={onlineAmount}
+        selection={tipPaymentModeDialogSelection}
+        onSelectionChange={setTipPaymentModeDialogSelection}
+        onConfirm={confirmTipPaymentModeDialog}
+        confirmDisabled={isProcessing}
+        confirmLabel="Complete billing"
+      />
 
       <Dialog
         open={showCreditChangeConfirm}

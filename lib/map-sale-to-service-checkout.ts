@@ -7,6 +7,7 @@ import type {
   ServiceCheckoutPrepaidLine,
   ServiceCheckoutProductLine,
 } from "@/components/appointments/service-checkout-dialog"
+import { normalizeStoredTipPaymentMode } from "@/lib/tip-payment-mode-prompt"
 
 export type BillEditCheckoutInitialState = {
   lines: ServiceCheckoutLine[]
@@ -28,6 +29,7 @@ export type BillEditCheckoutInitialState = {
   }
   /** Amount already collected on this bill (from paymentStatus or payment lines). */
   recordedPaidAmount: number
+  tipPaymentMode?: "cash" | "card" | "online" | null
   appointmentDate: Date
   appointmentTime: string
   notes: string
@@ -253,6 +255,7 @@ export function mapSaleToServiceCheckoutInitialState(sale: Record<string, unknow
     checkoutSaleNote: String(sale.notes || ""),
     initialTender,
     recordedPaidAmount,
+    tipPaymentMode: normalizeStoredTipPaymentMode(sale.tipPaymentMode),
     appointmentDate: Number.isNaN(saleDate.getTime()) ? new Date() : saleDate,
     appointmentTime: String(sale.time || ""),
     notes: String(sale.notes || ""),
