@@ -24,10 +24,14 @@ describe('gupshup-template-tenant-submit-prep', () => {
     expect(duplicateSubmitAction({ status: 'REJECTED' })).toBe('reclaim_name');
   });
 
-  test('duplicateSubmitAction links remotes that are live on Meta', () => {
-    expect(duplicateSubmitAction({ status: 'PENDING' })).toBe('link_existing');
+  test('duplicateSubmitAction links remotes Meta has already accepted', () => {
     expect(duplicateSubmitAction({ status: 'APPROVED' })).toBe('link_existing');
     expect(duplicateSubmitAction({ status: 'PAUSED' })).toBe('link_existing');
+    expect(duplicateSubmitAction({ status: 'IN_APPEAL' })).toBe('link_existing');
+  });
+
+  test('duplicateSubmitAction reclaims pending remotes that may never have reached Meta', () => {
+    expect(duplicateSubmitAction({ status: 'PENDING' })).toBe('reclaim_name');
   });
 
   test('duplicateSubmitAction reclaims names from remotes Meta never accepted', () => {
@@ -44,15 +48,15 @@ describe('gupshup-template-tenant-submit-prep', () => {
     expect(remoteApprovalStatus({ status: 'SOMETHING_NEW' })).toBe(null);
   });
 
-  test('canReclaimRemoteName refuses to delete templates that are live on Meta', () => {
+  test('canReclaimRemoteName refuses to delete templates Meta has accepted', () => {
     expect(canReclaimRemoteName({ status: 'APPROVED' })).toBe(false);
-    expect(canReclaimRemoteName({ status: 'PENDING' })).toBe(false);
     expect(canReclaimRemoteName({ status: 'PAUSED' })).toBe(false);
     expect(canReclaimRemoteName({ status: 'IN_APPEAL' })).toBe(false);
     expect(canReclaimRemoteName(null)).toBe(false);
   });
 
-  test('canReclaimRemoteName allows freeing names Meta never accepted', () => {
+  test('canReclaimRemoteName allows freeing pending and failed names on submit', () => {
+    expect(canReclaimRemoteName({ status: 'PENDING' })).toBe(true);
     expect(canReclaimRemoteName({ status: 'FAILED' })).toBe(true);
     expect(canReclaimRemoteName({ status: 'REJECTED' })).toBe(true);
     expect(canReclaimRemoteName({ status: 'SOMETHING_NEW' })).toBe(true);

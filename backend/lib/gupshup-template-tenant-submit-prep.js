@@ -86,14 +86,17 @@ function clearStaleTenantTemplateIds(tpl, { remote, platformGupshupId }) {
   return false;
 }
 
-/** Only these remote states are live on Meta, so only these are worth linking to. */
-const LINKABLE_REMOTE_STATUSES = new Set(['approved', 'pending', 'paused', 'in_appeal']);
+/**
+ * Only link on duplicate when Meta has already accepted the template. Gupshup can
+ * hold a PENDING row that never reached Meta (no activity-log entry); linking to
+ * that zombie blocks a real submit and leaves the UI stuck on Pending forever.
+ */
+const LINKABLE_REMOTE_STATUSES = new Set(['approved', 'paused', 'in_appeal']);
 
 /**
- * A remote in any other state (rejected, failed, deleted, or a status we cannot
- * map) is not live on Meta but still holds the elementName. Linking to it would
- * silently leave the local row a draft Meta never sees, so the name has to be
- * deleted and re-applied for instead.
+ * A remote in any other state (pending, rejected, failed, deleted, or unmappable)
+ * still holds the elementName. On Submit we delete and re-apply so Meta actually
+ * receives the template.
  */
 function duplicateSubmitAction(remote) {
   if (!remote) return 'submit';
@@ -112,10 +115,12 @@ function duplicateBlockReason(remote) {
   switch (remoteApprovalStatus(remote)) {
     case 'rejected':
       return 'Meta rejected this template name on your WhatsApp account. Choose a new name and submit again.';
+    case 'pending':
+      return 'An earlier submission for this name never reached Meta. Remove the stale record and submit again, or choose a new name.';
     case 'failed':
     case 'deleted':
     case 'disabled':
-      return 'An earlier attempt is holding this name on your WhatsApp account but Meta never accepted it, so it cannot be reused. Choose a new name and submit again.';
+      return 'An earlier attempt is holding this name on your WhatsApp account but Meta never accepted it. Choose a new name and submit again.';
     default:
       return 'This template name is already registered on your WhatsApp account. Choose a new name and submit again.';
   }

@@ -34,6 +34,7 @@ const {
   whatsappTemplateBodySchema,
   whatsappTemplateUpdateBodySchema,
   whatsappTemplateSubmitBodySchema,
+  whatsappTemplateImportBatchBodySchema,
   whatsappTemplateListQuerySchema,
   whatsappTemplateLibraryQuerySchema,
   whatsappTemplateHeaderMediaUploadSchema,
@@ -194,8 +195,20 @@ function scopeCategoryFilter(scope) {
   return null;
 }
 
+/** Two selected templates renamed to the same thing would collide on Meta. */
+function firstDuplicateRequestedName(ids, requestedNames) {
+  const seen = new Set();
+  for (const id of ids) {
+    const name = requestedNames[id];
+    if (!name) continue;
+    if (seen.has(name)) return name;
+    seen.add(name);
+  }
+  return null;
+}
+
 /** Platform catalog rows the tenant has explicitly added to their library. */
-async function listTenantSelectedLibraryEntries(businessId, scope, { byName } = {}) {
+async function listTenantSelectedLibraryEntries(businessId, scope) {
   const PlatformTemplate = await getPlatformTemplateModel();
   const Template = await getModel();
   const category = scopeCategoryFilter(scope);
@@ -218,15 +231,15 @@ async function listTenantSelectedLibraryEntries(businessId, scope, { byName } = 
   }).lean();
   const platformById = new Map(platformRows.map((p) => [String(p._id), p]));
 
-  const nameMap =
-    byName ||
-    new Map(locals.map((t) => [`${t.name}:${t.language}`, t]));
+  const localBySource = new Map(
+    locals.map((t) => [String(t.sourcePlatformTemplateId), t])
+  );
 
   const items = [];
   for (const local of locals) {
     const platformTpl = platformById.get(String(local.sourcePlatformTemplateId));
     if (!platformTpl) continue;
-    items.push(platformLibraryItem(platformTpl, nameMap));
+    items.push(platformLibraryItem(platformTpl, localBySource));
   }
 
   items.sort((a, b) => {
@@ -355,15 +368,15 @@ async function resolveTenantTemplateRemote({ appId, templateId, elementName, lan
 }
 
 function statusAfterGupshupApply(submissionData) {
-  const mapped = mapGupshupStatus(
-    submissionData?.status ||
-      submissionData?.template?.status ||
-      submissionData?.template?.state ||
-      submissionData?.state
-  );
+  const normalized = normalizeGupshupTemplateRecord(submissionData);
+  const mapped = mapGupshupStatus(normalized.status);
   if (mapped === 'approved') return 'approved';
   if (mapped === 'rejected') return 'rejected';
-  return 'pending';
+  if (mapped === 'pending') return 'pending';
+  // Envelope { status: "success", template: { id } } with no template.status —
+  // only treat as pending when Gupshup returned a concrete template id.
+  if (normalized.id) return 'pending';
+  return 'draft';
 }
 
 /**
@@ -503,11 +516,14 @@ function componentsForElementName(elementName, localTemplates, platformTemplates
   return catalogEntryToApplyPayload(catalogEntry).components;
 }
 
-async function importPlatformTemplateToBusiness(businessId, platformTpl, createdBy) {
+async function importPlatformTemplateToBusiness(businessId, platformTpl, createdBy, { name } = {}) {
   const Template = await getModel();
+  // Tenants may rename on import; Meta refuses an elementName already used on
+  // their WABA, so the local copy is not tied to the platform catalog name.
+  const templateName = name || platformTpl.name;
   const exists = await Template.findOne({
     businessId,
-    name: platformTpl.name,
+    name: templateName,
     language: platformTpl.language,
   });
   if (exists) {
@@ -532,7 +548,7 @@ async function importPlatformTemplateToBusiness(businessId, platformTpl, created
 
   const doc = await Template.create({
     businessId,
-    name: platformTpl.name,
+    name: templateName,
     language: platformTpl.language,
     category: platformTpl.category,
     slotKey: platformTpl.slotKey || null,
@@ -605,13 +621,12 @@ async function reconcileTenantLibraryTemplates(businessId, approvedPlatform, rem
   });
   if (!locals.length) return 0;
 
-  const platformByKey = new Map(
-    approvedPlatform.map((p) => [`${p.name}:${p.language}`, p])
-  );
+  const platformById = new Map(approvedPlatform.map((p) => [String(p._id), p]));
   let fixed = 0;
 
   for (const tpl of locals) {
-    const platformTpl = platformByKey.get(`${tpl.name}:${tpl.language}`);
+    // By source id, not name — the tenant copy may have been renamed.
+    const platformTpl = platformById.get(String(tpl.sourcePlatformTemplateId));
     const platformId = platformTpl?.gupshupTemplateId
       ? String(platformTpl.gupshupTemplateId)
       : null;
@@ -646,6 +661,16 @@ async function reconcileTenantLibraryTemplates(businessId, approvedPlatform, rem
         tpl.gupshupTemplateId = null;
         tpl.metaTemplateId = null;
       }
+      dirty = true;
+    } else if (tpl.status === 'pending' && tpl.submittedAt && !remote) {
+      // Local pending but name absent from tenant WABA — typical when Gupshup
+      // accepted a create that Meta never recorded in the activity log.
+      tpl.status = 'draft';
+      tpl.submittedAt = null;
+      tpl.gupshupTemplateId = null;
+      tpl.metaTemplateId = null;
+      tpl.rejectionReason =
+        'Template not found on your WhatsApp account. Click Submit again to send it to Meta.';
       dirty = true;
     } else if (remote && tpl.submittedAt) {
       applyRemoteToLocal(tpl, remote);
@@ -812,9 +837,10 @@ function isLibraryLinkedLocal(platformTpl, local) {
   return String(local.sourcePlatformTemplateId) === String(platformTpl._id);
 }
 
-function platformLibraryItem(platformTpl, localByName) {
-  const key = `${platformTpl.name}:${platformTpl.language}`;
-  const local = localByName.get(key);
+// Keyed by source platform id, not name: tenants may rename their copy, and a
+// name lookup would silently unlink the row and hide its Submit action.
+function platformLibraryItem(platformTpl, localBySource) {
+  const local = localBySource.get(String(platformTpl._id));
   const linked = isLibraryLinkedLocal(platformTpl, local);
   return {
     platformTemplateId: String(platformTpl._id),
@@ -882,7 +908,6 @@ router.get('/library', authenticateToken, setupMainDatabase, requireWabaAddon, a
     const { scope } = parsed.data;
     const businessId = await tenantBusinessObjectId(req, res);
     if (!businessId) return;
-    const Template = await getModel();
     const approvedPlatform = await listApprovedPlatformLibraryTemplates(scope);
 
     const appCtx = await requireTenantGupshupAppId(businessId);
@@ -895,14 +920,7 @@ router.get('/library', authenticateToken, setupMainDatabase, requireWabaAddon, a
       }
     }
 
-    const existing = await Template.find({ businessId })
-      .select(
-        'name language status slotKey gupshupTemplateId category submittedAt sourcePlatformTemplateId rejectionReason'
-      )
-      .lean();
-    const byName = new Map(existing.map((t) => [`${t.name}:${t.language}`, t]));
-
-    const items = await listTenantSelectedLibraryEntries(businessId, scope, { byName });
+    const items = await listTenantSelectedLibraryEntries(businessId, scope);
     res.json({ success: true, data: items, scope });
   } catch (err) {
     logger.error('[whatsapp-templates] library failed:', err);
@@ -945,13 +963,28 @@ router.get('/library/available', authenticateToken, setupMainDatabase, requireWa
 
 router.post('/library/import-batch', authenticateToken, requireManager, setupMainDatabase, requireWabaAddon, async (req, res) => {
   try {
+    const parsed = whatsappTemplateImportBatchBodySchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        success: false,
+        error: firstZodMessage(parsed.error, 'platformTemplateIds array is required'),
+      });
+    }
     const businessId = await tenantBusinessObjectId(req, res);
     if (!businessId) return;
-    const ids = Array.isArray(req.body?.platformTemplateIds)
-      ? req.body.platformTemplateIds.map((id) => String(id).trim()).filter(Boolean)
-      : [];
+    const ids = [...new Set(parsed.data.platformTemplateIds.map((id) => String(id).trim()).filter(Boolean))];
     if (!ids.length) {
       return res.status(400).json({ success: false, error: 'platformTemplateIds array is required' });
+    }
+    const requestedNames = parsed.data.names || {};
+
+    const duplicateName = firstDuplicateRequestedName(ids, requestedNames);
+    if (duplicateName) {
+      return res.status(409).json({
+        success: false,
+        error: `Template name "${duplicateName}" is used more than once in this selection. Names must be unique.`,
+        code: 'TEMPLATE_NAME_CONFLICT',
+      });
     }
 
     const PlatformTemplate = await getPlatformTemplateModel();
@@ -970,15 +1003,21 @@ router.post('/library/import-batch', authenticateToken, requireManager, setupMai
         skipped.push({ id, reason: 'not_found_or_unpublished' });
         continue;
       }
+      const name = requestedNames[id];
       const result = await importPlatformTemplateToBusiness(
         businessId,
         platformTpl,
-        req.user._id || req.user.id
+        req.user._id || req.user.id,
+        { name }
       );
       if (result.imported) {
         imported.push(String(result.template._id));
       } else {
-        skipped.push({ id, reason: result.reason || 'already_exists', name: platformTpl.name });
+        skipped.push({
+          id,
+          reason: result.reason || 'already_exists',
+          name: name || platformTpl.name,
+        });
       }
     }
 
