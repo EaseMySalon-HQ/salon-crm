@@ -77,6 +77,8 @@ const {
   findRemoteByNameLang,
   clearStaleTenantTemplateIds,
   duplicateSubmitAction,
+  canReclaimRemoteName,
+  duplicateBlockReason,
   remoteApprovalStatus,
 } = require('../lib/gupshup-template-tenant-submit-prep');
 
@@ -693,6 +695,10 @@ async function applySubmitRenameIfRequested(Template, tpl, businessId, requested
 }
 
 async function linkExistingTenantRemoteTemplate({ tpl, businessId, actorId, remote, appId }) {
+  // A remote whose status we cannot map leaves the row a draft; reporting that as
+  // a successful link is how these templates silently never reached Meta.
+  if (!remoteApprovalStatus(remote)) return null;
+
   applyRemoteToLocal(tpl, remote);
   tpl.submittedAt = tpl.submittedAt || new Date();
   tpl.rejectionReason = null;
@@ -730,12 +736,63 @@ async function linkExistingTenantRemoteTemplate({ tpl, businessId, actorId, remo
   };
 }
 
+/**
+ * Free an elementName held on the tenant WABA by a template Meta never accepted,
+ * so the same name can be applied for again. Refuses to touch a live template.
+ */
+async function reclaimTenantTemplateName({ tpl, remote, appId, businessId, actorId }) {
+  if (!canReclaimRemoteName(remote)) return false;
+
+  const remoteStatus = normalizeGupshupTemplateRecord(remote).status || null;
+  const deleted = await gupshupWhatsApp.deleteTemplate({ appId, elementName: tpl.name });
+  if (!deleted.success) {
+    logger.warn(
+      '[whatsapp-templates] could not free elementName template=%s/%s remoteStatus=%s error=%j',
+      tpl.name,
+      tpl.language,
+      remoteStatus || '(none)',
+      deleted.error
+    );
+    return false;
+  }
+
+  tpl.gupshupTemplateId = null;
+  tpl.metaTemplateId = null;
+
+  logger.info(
+    '[whatsapp-templates] freed elementName held by %s template on WABA template=%s/%s appId=%s',
+    remoteStatus || 'unknown-status',
+    tpl.name,
+    tpl.language,
+    appId
+  );
+  await logEvent({
+    businessId,
+    actorType: 'user',
+    actorId,
+    event: 'template_submit',
+    summary: `Removed stale ${remoteStatus || 'unknown'} template ${tpl.name}/${tpl.language} to reuse the name`,
+    metadata: { templateId: String(tpl._id), remoteStatus, reclaimedName: true },
+  });
+  return true;
+}
+
 async function duplicateNeedsRenameResponse(tpl, remote) {
   const suggestedName = suggestAlternateTemplateName(tpl.name);
-  const reason =
-    remoteApprovalStatus(remote) === 'rejected'
-      ? 'Meta rejected this template name on your WhatsApp account. Choose a new name and submit again.'
-      : 'This template name is already registered on your WhatsApp account. Choose a new name and submit again.';
+  const reason = duplicateBlockReason(remote);
+  const remoteStatus = normalizeGupshupTemplateRecord(remote || {}).status || null;
+
+  logger.warn(
+    '[whatsapp-templates] duplicate elementName blocks submit template=%s/%s remoteStatus=%s suggested=%s',
+    tpl.name,
+    tpl.language,
+    remoteStatus || '(none)',
+    suggestedName
+  );
+
+  tpl.rejectionReason = reason;
+  tpl.lastSyncedAt = new Date();
+  await tpl.save();
 
   return {
     status: 409,
@@ -744,6 +801,7 @@ async function duplicateNeedsRenameResponse(tpl, remote) {
       error: reason,
       code: 'GUPSHUP_TEMPLATE_DUPLICATE_NEEDS_RENAME',
       suggestedName,
+      remoteStatus,
       data: tpl,
     },
   };
@@ -1416,9 +1474,18 @@ router.post('/:id/submit', authenticateToken, requireManager, setupMainDatabase,
         clearStaleTenantTemplateIds(tpl, { remote: existingRemote, platformGupshupId });
 
         const preSubmitAction = duplicateSubmitAction(existingRemote);
-        if (preSubmitAction === 'needs_rename') {
-          const resp = await duplicateNeedsRenameResponse(tpl, existingRemote);
-          return res.status(resp.status).json(resp.body);
+        if (preSubmitAction === 'reclaim_name') {
+          const reclaimed = await reclaimTenantTemplateName({
+            tpl,
+            remote: existingRemote,
+            appId: tenantApp.appId,
+            businessId,
+            actorId: req.user._id,
+          });
+          if (!reclaimed) {
+            const resp = await duplicateNeedsRenameResponse(tpl, existingRemote);
+            return res.status(resp.status).json(resp.body);
+          }
         }
         if (preSubmitAction === 'link_existing' && existingRemote) {
           const linked = await linkExistingTenantRemoteTemplate({
@@ -1428,6 +1495,10 @@ router.post('/:id/submit', authenticateToken, requireManager, setupMainDatabase,
             remote: existingRemote,
             appId: tenantApp.appId,
           });
+          if (!linked) {
+            const resp = await duplicateNeedsRenameResponse(tpl, existingRemote);
+            return res.status(resp.status).json(resp.body);
+          }
           return res.json({
             ...linked,
             gupshup: {
@@ -1450,15 +1521,13 @@ router.post('/:id/submit', authenticateToken, requireManager, setupMainDatabase,
       }
     }
 
-    const {
-      partnerApiPath,
-      submission,
-      remoteId,
-      errorMessage: submitErrMsg,
-    } = await submitTemplateForGupshupApproval({ appId: tenantApp.appId, templateDoc: tpl });
+    let attempt = await submitTemplateForGupshupApproval({
+      appId: tenantApp.appId,
+      templateDoc: tpl,
+    });
     logger.info(
       '[whatsapp-templates] Gupshup submit POST %s appId=%s sourceNumber=%s template=%s/%s',
-      partnerApiPath,
+      attempt.partnerApiPath,
       tenantApp.appId,
       tenantApp.sourceNumber || '(unknown)',
       tpl.name,
@@ -1468,8 +1537,68 @@ router.post('/:id/submit', authenticateToken, requireManager, setupMainDatabase,
       appId: tenantApp.appId,
       sourceNumber: tenantApp.sourceNumber,
       appName: tenantApp.appName,
-      partnerApi: `POST ${partnerApiPath}`,
+      partnerApi: `POST ${attempt.partnerApiPath}`,
     };
+
+    const isDuplicateName = (result) =>
+      !result.submission.success &&
+      !isGupshupTransientSubmitFailure(result.submission) &&
+      isGupshupTemplateDuplicateError(
+        result.errorMessage || gupshupSubmissionErrorMessage(result.submission)
+      );
+
+    if (isDuplicateName(attempt)) {
+      const existing = await resolveTenantTemplateRemote({
+        appId: tenantApp.appId,
+        templateId: null,
+        elementName: tpl.name,
+        language: tpl.language,
+      });
+      if (!existing.success) {
+        const resp = await duplicateNeedsRenameResponse(tpl, null);
+        return res.status(resp.status).json(resp.body);
+      }
+
+      if (duplicateSubmitAction(existing.data) === 'link_existing') {
+        const linked = await linkExistingTenantRemoteTemplate({
+          tpl,
+          businessId,
+          actorId: req.user._id,
+          remote: existing.data,
+          appId: tenantApp.appId,
+        });
+        if (!linked) {
+          const resp = await duplicateNeedsRenameResponse(tpl, existing.data);
+          return res.status(resp.status).json(resp.body);
+        }
+        return res.json({ ...linked, gupshup: gupshupMeta });
+      }
+
+      const reclaimed = await reclaimTenantTemplateName({
+        tpl,
+        remote: existing.data,
+        appId: tenantApp.appId,
+        businessId,
+        actorId: req.user._id,
+      });
+      if (!reclaimed) {
+        const resp = await duplicateNeedsRenameResponse(tpl, existing.data);
+        return res.status(resp.status).json(resp.body);
+      }
+
+      attempt = await submitTemplateForGupshupApproval({
+        appId: tenantApp.appId,
+        templateDoc: tpl,
+      });
+      if (isDuplicateName(attempt)) {
+        // Meta reserves the names of previously approved templates for 30 days,
+        // so freeing it on Gupshup is not always enough.
+        const resp = await duplicateNeedsRenameResponse(tpl, existing.data);
+        return res.status(resp.status).json(resp.body);
+      }
+    }
+
+    const { submission, remoteId, errorMessage: submitErrMsg } = attempt;
     if (!submission.success) {
       const errMsg = submitErrMsg || gupshupSubmissionErrorMessage(submission);
       logger.error(
@@ -1492,32 +1621,6 @@ router.post('/:id/submit', authenticateToken, requireManager, setupMainDatabase,
           data: tpl,
           gupshup: gupshupMeta,
         });
-      }
-
-      if (isGupshupTemplateDuplicateError(errMsg)) {
-        const existing = await resolveTenantTemplateRemote({
-          appId: tenantApp.appId,
-          templateId: null,
-          elementName: tpl.name,
-          language: tpl.language,
-        });
-        if (existing.success) {
-          const action = duplicateSubmitAction(existing.data);
-          if (action === 'needs_rename') {
-            const resp = await duplicateNeedsRenameResponse(tpl, existing.data);
-            return res.status(resp.status).json(resp.body);
-          }
-          const linked = await linkExistingTenantRemoteTemplate({
-            tpl,
-            businessId,
-            actorId: req.user._id,
-            remote: existing.data,
-            appId: tenantApp.appId,
-          });
-          return res.json({ ...linked, gupshup: gupshupMeta });
-        }
-        const resp = await duplicateNeedsRenameResponse(tpl, null);
-        return res.status(resp.status).json(resp.body);
       }
 
       tpl.status = 'rejected';

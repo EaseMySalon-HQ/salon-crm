@@ -153,6 +153,8 @@ Templates are created exclusively via API:
 | Apply / create | `POST /partner/app/{appId}/templates` (form-urlencoded: `elementName`, `category`, `content`, `example`, `vertical`, …) |
 | List | `GET /partner/app/{appId}/templates` |
 | Read one | `GET /partner/app/{appId}/templates/{templateId}` |
+| Edit | `PUT /partner/app/{appId}/templates/{templateId}` |
+| Delete | `DELETE /partner/app/{appId}/template/{elementName}` (frees the name for re-apply) |
 | Send | `POST /partner/app/{appId}/template/msg` with approved `template.id` |
 
 **Shared platform number (multi-tenant):**
@@ -168,7 +170,8 @@ Salons with **their own connected app** use **WhatsApp → Templates** in the te
 - Provide `example`/`exampleHeader` and `enableSample=true` (required for variable templates).
 - Optional: Meta Library templates (`gettemplatesfromlibrary` → `createtemplatefromlibrary`) for pre-approved utility flows.
 - Approval is async: status starts `PENDING`. Poll/sync with `GET .../templates`.
-- Client: `backend/services/gupshup-whatsapp-service.js` (`applyTemplate`, `listTemplates`).
+- **`elementName` collisions:** Gupshup keeps its template row after Meta refuses or drops a template (`FAILED`/`DELETED`/`DISABLED`), so the name stays taken while the template is invisible in WhatsApp Manager. Re-applying returns "elementName already exists". Never link a local row to such a remote — its status does not map, so the row silently stays `draft` and never reaches Meta. Delete the name and apply again; fall back to a rename when Meta's 30-day reservation on previously approved names blocks reuse.
+- Client: `backend/services/gupshup-whatsapp-service.js` (`applyTemplate`, `listTemplates`, `deleteTemplate`).
 - Catalog: `backend/lib/gupshup-platform-template-catalog.js`.
 
 ## 10. Media management (partner responsibility)
